@@ -31,7 +31,7 @@ No hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js
 
 ## Nombre del archivo Excel
 
-Después de cargar un PDF, edita **Nombre del archivo Excel** antes de descargar. La descarga usa ese nombre y añade `.xlsx` automáticamente. Si dejas el campo vacío, se utiliza el nombre sugerido a partir del PDF.
+Después de cargar un PDF, revisa el campo **Salida**. La aplicación toma el número del documento como valor inicial y permite corregirlo. Ingresa solo el número: por ejemplo, `1234` descarga el archivo **Salida 1234.xlsx**. El nombre completo se muestra automáticamente; no hace falta escribir la palabra Salida ni la extensión. Debes ingresar un número para descargar.
 
 ## Productos gravados y exentos
 

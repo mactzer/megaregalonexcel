@@ -393,10 +393,14 @@
             <p id="totals-warning" style="color:#a52818"></p>
           </div>
           <div class="rename-row" style="margin-top:20px">
-            <label for="excel-file-name">Nombre del archivo Excel</label>
-            <input id="excel-file-name" type="text" maxlength="120" placeholder="Ejemplo: Salidas octubre" aria-describedby="excel-file-name-help">
+            <label for="salida-number">Salida</label>
+            <input id="salida-number" type="text" inputmode="numeric" pattern="[0-9]+" maxlength="60" placeholder="Ejemplo: 1234" aria-describedby="excel-file-name-help">
           </div>
-          <p class="panel-subtitle" id="excel-file-name-help">Escribe el nombre que quieres usar al descargar. La extensión .xlsx se añade automáticamente.</p>
+          <div class="rename-row">
+            <label for="excel-file-name">Nombre del archivo Excel</label>
+            <input id="excel-file-name" type="text" readonly aria-describedby="excel-file-name-help">
+          </div>
+          <p class="panel-subtitle" id="excel-file-name-help">Ingresa solo el número. El archivo se descargará como Salida 1234.xlsx. Puedes corregir el número detectado en el PDF.</p>
           <div class="export-bar">
             <div class="export-hint" id="export-hint">Selecciona por lo menos una columna para exportar.</div>
             <div class="export-actions">
@@ -442,7 +446,8 @@
       selected: new Set(COLUMN_DEFS.filter(c => c.default).map(c => c.key)),
       names: Object.fromEntries(COLUMN_DEFS.map(c => [c.key, c.label])),
       available: new Set(),
-      originalName: "documento.pdf"
+      originalName: "documento.pdf",
+      salidaNumero: ""
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -889,12 +894,17 @@
     }
 
     function defaultExcelName() {
-      return `${state.originalName.replace(/\.pdf$/i, "")}_seleccion`;
+      return `Salida${state.salidaNumero ? " " + state.salidaNumero : ""}`;
     }
 
     function exportExcel() {
       const defs = selectedDefs();
       if (!defs.length || !state.rows.length) return;
+      if (!/^\d+$/.test(state.salidaNumero)) {
+        showMessage("Ingresa el número de salida usando solo dígitos antes de descargar el Excel.", "error");
+        $("#salida-number").focus();
+        return;
+      }
       const headers = [];
       const usedHeaders = new Set();
       for (const def of defs) {
@@ -1028,8 +1038,8 @@
       backupWorksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
       backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
-      const fileName = safeFileName($("#excel-file-name").value.trim() || defaultExcelName());
-      $("#excel-file-name").value = fileName.replace(/\.xlsx$/i, "");
+      const fileName = safeFileName(defaultExcelName());
+      $("#excel-file-name").value = fileName;
       XLSX.writeFile(workbook, fileName, { bookType: "xlsx" });
       updateStep(4);
     }
@@ -1041,7 +1051,9 @@
       }
       hideMessage();
       state.originalName = file.name;
-      $("#excel-file-name").value = safeFileName(defaultExcelName()).replace(/\.xlsx$/i, "");
+      state.salidaNumero = "";
+      $("#salida-number").value = "";
+      $("#excel-file-name").value = "";
       fileStatus.classList.add("show");
       $("#file-name").textContent = file.name;
       $("#file-detail").textContent = "Leyendo tabla...";
@@ -1053,6 +1065,9 @@
         state.rows = parsed.rows;
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
+        state.salidaNumero = state.documentInfo.numero || "";
+        $("#salida-number").value = state.salidaNumero;
+        $("#excel-file-name").value = safeFileName(defaultExcelName());
         $("#manual-tax").checked = false;
         $("#tax-amount").value = "";
         state.available = new Set(COLUMN_DEFS.filter(def => state.rows.some(row => hasValue(row, def.key))).map(def => def.key));
@@ -1083,6 +1098,8 @@
       state.rawLines = [];
       state.documentInfo = {};
       state.originalName = "documento.pdf";
+      state.salidaNumero = "";
+      $("#salida-number").value = "";
       $("#excel-file-name").value = "";
       $("#manual-tax").checked = false;
       $("#tax-amount").value = "";
@@ -1103,6 +1120,11 @@
     ["dragleave", "drop"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove("dragover"); }));
     dropZone.addEventListener("drop", event => handleFile(event.dataTransfer.files[0]));
     $("#export-button").addEventListener("click", exportExcel);
+    $("#salida-number").addEventListener("input", event => {
+      state.salidaNumero = event.target.value.trim();
+      $("#excel-file-name").value = safeFileName(defaultExcelName());
+      hideMessage();
+    });
     $("#manual-tax").addEventListener("change", event => {
       const automaticTax = calculateTotals().impuestoCalculado;
       state.documentInfo.impuestoManual = event.target.checked;
