@@ -497,9 +497,10 @@
     function splitTextItem(item) {
       const raw = String(item.str || "").trim();
       if (!raw) return [];
+      const source = { text: raw, x: item.x, width: item.width || 0, y: item.y };
       const parts = raw.split(/\s+/);
       if (parts.length === 1 || !item.width) {
-        return [{ text: raw, x: item.x, width: item.width || 0, y: item.y }];
+        return [{ text: raw, x: item.x, width: item.width || 0, y: item.y, source }];
       }
       const total = Math.max(raw.length, 1);
       let cursor = 0;
@@ -508,7 +509,7 @@
         const x = item.x + (item.width * Math.max(index, 0) / total);
         const width = item.width * part.length / total;
         cursor = Math.max(index, 0) + part.length;
-        return { text: part, x, width, y: item.y };
+        return { text: part, x, width, y: item.y, source };
       });
     }
 
@@ -561,19 +562,28 @@
       };
 
       const fallback = {
-        codigo: 10, descripcion: 64, empaque: 188, estilo: 232, ref: 277,
+        codigo: 10, descripcion: 64, empaque: 188, ref: 277,
         iv: 319, costo: 347, pventa: 384, salidas_unidades: 430,
         salidas_total: 490, entradas_unidades: 519, entradas_total: 573
       };
       Object.keys(starts).forEach(key => {
-        if (starts[key] == null) starts[key] = fallback[key];
+        if (starts[key] == null && key in fallback) starts[key] = fallback[key];
       });
 
-      const ordered = Object.entries(starts).sort((a, b) => a[1] - b[1]);
+      const ordered = Object.entries(starts).filter(([, start]) => start !== null).sort((a, b) => a[1] - b[1]);
       const bounds = {};
       ordered.forEach(([key, start], index) => {
         bounds[key] = { start, end: ordered[index + 1] ? ordered[index + 1][1] : 612 };
       });
+      const refBoundary = starts.estilo === null
+        ? starts.ref - (starts.iv - starts.ref) / 2
+        : (starts.estilo + starts.ref) / 2;
+      bounds.estilo = starts.estilo === null
+        ? { start: 0, end: 0 }
+        : { start: starts.estilo - 5, end: refBoundary };
+      if (starts.estilo === null) bounds.empaque.end = refBoundary;
+      bounds.ref = { start: refBoundary, end: starts.iv - 15 };
+      bounds.iv = { start: starts.iv - 15, end: starts.costo };
       return { starts, bounds };
     }
 
@@ -648,41 +658,37 @@
     }
 
     function parseRow(line, geometry) {
-      const codeItems = line.items.filter(item => item.x >= 0 && item.x < geometry.bounds.descripcion.start - 1);
-      const numericCodes = codeItems
-        .flatMap(item => String(item.text).match(/\d{5,14}/g) || [])
-        .sort((a, b) => b.length - a.length);
-      const codigo = numericCodes[0] || "";
-      if (!codigo) return null;
+      // Las coordenadas de palabras divididas son aproximadas. Para los campos
+      // de texto se conservan los bloques originales, incluidas sus palabras.
+      const originalItems = [...new Set(line.items.map(item => item.source || item))]
+        .sort((a, b) => a.x - b.x);
+      const codePattern = /^(?:(\d{1,4})\s+)?(\d{5,14})(?=\s|$)\s*(.*)$/;
+      const codeItem = originalItems.find(item => item.x < geometry.starts.descripcion && codePattern.test(item.text));
+      if (!codeItem) return null;
+      const codeMatch = codeItem.text.match(codePattern);
+      const prefix = codeMatch[1] || originalItems
+        .filter(item => item.x < codeItem.x && /^\d{1,4}$/.test(item.text))
+        .map(item => item.text).join(" ");
 
       const row = {
-        codigo,
-        codigo_completo: cleanText(codeItems.map(item => item.text).join(" ")),
-        fila_original: cleanText(line.items.map(item => item.text).join(" "))
+        codigo: codeMatch[2],
+        codigo_completo: cleanText([prefix, codeMatch[2]].join(" ")),
+        fila_original: cleanText(originalItems.map(item => item.text).join(" "))
       };
       for (const def of COLUMN_DEFS) {
         if (["codigo", "codigo_completo", "fila_original"].includes(def.key)) continue;
         row[def.key] = def.kind === "number"
           ? numberInRange(line.items, geometry.bounds[def.key])
-          : textInRange(line.items, geometry.bounds[def.key]);
+          : textInRange(originalItems, geometry.bounds[def.key]);
       }
 
-      // El encabezado Ref. está centrado: sus valores pueden comenzar a su
-      // izquierda. Separar por posición conserva la referencia cuando Estilo
-      // está vacío y también las referencias que contienen varias palabras.
-      const styleRefBoundary = (geometry.starts.estilo + geometry.starts.ref) / 2;
-      row.estilo = textInRange(line.items, {
-        start: geometry.starts.estilo - 5,
-        end: styleRefBoundary
-      });
-      row.ref = textInRange(line.items, {
-        start: styleRefBoundary,
-        end: geometry.starts.iv - 15
-      });
-      row.iv = textInRange(line.items, {
-        start: geometry.starts.iv - 15,
-        end: geometry.starts.costo
-      });
+      // La descripción puede ir unida al código o comenzar antes del título
+      // de la columna. Se separa del código por su contenido, no por el título.
+      row.descripcion = cleanText([
+        codeMatch[3],
+        ...originalItems.filter(item => item !== codeItem && item.x > codeItem.x && item.x < geometry.bounds.descripcion.end - 1)
+          .map(item => item.text)
+      ].join(" "));
       return row;
     }
 
