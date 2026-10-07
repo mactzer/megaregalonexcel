@@ -1,0 +1,1022 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF a Excel | Selector de columnas</title>
+  <style>
+    :root {
+      --ink: #191b22;
+      --muted: #6b7280;
+      --line: #e6e8ee;
+      --soft: #f7f8fb;
+      --red: #d71f2b;
+      --red-dark: #a91520;
+      --yellow: #f5c928;
+      --green: #12805c;
+      --shadow: 0 18px 45px rgba(25, 27, 34, .10);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #f2f3f7;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    .app-header {
+      color: white;
+      background:
+        radial-gradient(circle at 87% 15%, rgba(245, 201, 40, .28), transparent 24%),
+        linear-gradient(116deg, #15171d 0%, #20242d 54%, #a91520 150%);
+      border-bottom: 4px solid var(--yellow);
+    }
+
+    .header-inner, .page {
+      width: min(1180px, calc(100% - 34px));
+      margin: 0 auto;
+    }
+
+    .header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 26px 0 24px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      color: var(--ink);
+      background: var(--yellow);
+      border-radius: 13px;
+      font-weight: 900;
+      font-size: 19px;
+      box-shadow: 0 7px 20px rgba(245, 201, 40, .20);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: clamp(20px, 3vw, 28px);
+      letter-spacing: -.03em;
+    }
+
+    .brand p {
+      margin: 3px 0 0;
+      color: rgba(255,255,255,.70);
+      font-size: 13px;
+    }
+
+    .privacy-note {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: rgba(255,255,255,.82);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .privacy-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #61dfaa;
+      box-shadow: 0 0 0 4px rgba(97, 223, 170, .12);
+    }
+
+    .page { padding: 26px 0 54px; }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .step {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 14px;
+      color: var(--muted);
+      background: rgba(255,255,255,.80);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      font-size: 13px;
+    }
+
+    .step strong {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      flex: 0 0 25px;
+      color: white;
+      background: #b5bac5;
+      border-radius: 50%;
+      font-size: 12px;
+    }
+
+    .step.active { color: var(--ink); border-color: rgba(215,31,43,.28); }
+    .step.active strong { background: var(--red); }
+
+    .card {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 19px;
+      box-shadow: var(--shadow);
+    }
+
+    .upload-card { padding: 26px; }
+
+    .drop-zone {
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-height: 252px;
+      padding: 30px;
+      text-align: center;
+      border: 2px dashed #cfd4de;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #fff 0%, #fffaf0 100%);
+      transition: border .18s ease, background .18s ease, transform .18s ease;
+      cursor: pointer;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      border-color: var(--red);
+      background: linear-gradient(135deg, #fff 0%, #fff7e1 100%);
+      transform: translateY(-1px);
+    }
+
+    .drop-icon {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      margin: 0 auto 13px;
+      color: var(--red);
+      background: #fff0f1;
+      border-radius: 17px;
+      font-size: 28px;
+      font-weight: 800;
+    }
+
+    .drop-zone h2 { margin: 0 0 6px; font-size: 22px; letter-spacing: -.02em; }
+    .drop-zone p { max-width: 590px; margin: 0 auto 18px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 17px;
+      border: 0;
+      border-radius: 11px;
+      font-weight: 750;
+      font-size: 13px;
+      cursor: pointer;
+      transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+    }
+
+    .button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 17px rgba(25,27,34,.12); }
+    .button:disabled { opacity: .45; cursor: not-allowed; }
+    .button-primary { color: white; background: var(--red); }
+    .button-primary:hover:not(:disabled) { background: var(--red-dark); }
+    .button-secondary { color: var(--ink); background: #eef0f4; }
+    .button-yellow { color: var(--ink); background: var(--yellow); }
+
+    #file-input { display: none; }
+
+    .file-status {
+      display: none;
+      align-items: center;
+      gap: 11px;
+      margin-top: 18px;
+      padding: 12px 14px;
+      border: 1px solid #dfe3ea;
+      border-radius: 12px;
+      background: #fafbfc;
+    }
+
+    .file-status.show { display: flex; }
+    .file-status strong { display: block; font-size: 13px; }
+    .file-status span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+    .file-badge { display: grid; place-items: center; width: 36px; height: 36px; color: var(--red); background: #fff0f1; border-radius: 10px; font-size: 11px; font-weight: 900; }
+
+    .loading-bar { display: none; height: 4px; margin-top: 16px; overflow: hidden; border-radius: 99px; background: #eceef2; }
+    .loading-bar.show { display: block; }
+    .loading-bar::after { content: ""; display: block; width: 42%; height: 100%; border-radius: inherit; background: var(--red); animation: loading 1.15s ease-in-out infinite; }
+    @keyframes loading { 0% { transform: translateX(-110%); } 100% { transform: translateX(270%); } }
+
+    .message { display: none; margin-top: 15px; padding: 12px 14px; border-radius: 11px; font-size: 13px; line-height: 1.45; }
+    .message.show { display: block; }
+    .message.error { color: #8c1a25; background: #fff0f1; border: 1px solid #f1c5ca; }
+    .message.info { color: #715800; background: #fff9df; border: 1px solid #f1dd87; }
+
+    .results { display: none; margin-top: 20px; }
+    .results.show { display: block; }
+
+    .results-grid {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .panel { padding: 21px; }
+    .panel h2 { margin: 0; font-size: 18px; letter-spacing: -.02em; }
+    .panel-subtitle { margin: 5px 0 18px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+    .column-list { display: grid; gap: 8px; }
+
+    .column-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 45px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      cursor: pointer;
+      transition: border .15s ease, background .15s ease;
+    }
+
+    .column-option:hover { border-color: #c6cbd5; background: #fafbfc; }
+    .column-option.selected { border-color: rgba(215,31,43,.38); background: #fff8f8; }
+    .column-option.disabled { opacity: .48; cursor: not-allowed; background: #fafafa; }
+    .column-option input { width: 17px; height: 17px; accent-color: var(--red); }
+    .column-label { flex: 1; font-size: 13px; font-weight: 680; }
+    .column-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+    .rename-list { margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }
+    .rename-list h3 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .rename-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+    .rename-row label { color: var(--muted); font-size: 11px; align-self: center; }
+    .rename-row input { width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; outline: none; }
+    .rename-row input:focus { border-color: var(--red); box-shadow: 0 0 0 3px rgba(215,31,43,.10); }
+
+    .preview-panel { min-width: 0; overflow: hidden; }
+    .preview-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 15px; }
+    .preview-count { padding: 7px 10px; color: var(--green); background: #eaf8f2; border: 1px solid #ccefe0; border-radius: 99px; font-size: 12px; font-weight: 750; white-space: nowrap; }
+    .table-wrap { max-height: 466px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead { position: sticky; top: 0; z-index: 1; background: #f3f4f7; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid #eef0f3; text-align: left; white-space: nowrap; }
+    th { color: #444955; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    td { color: #30343c; }
+    td.num, th.num { text-align: right; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover td { background: #fffdf5; }
+    .empty-preview { padding: 36px 20px; color: var(--muted); text-align: center; }
+
+    .export-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      margin-top: 20px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .export-hint { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .export-actions { display: flex; gap: 9px; flex-wrap: wrap; }
+
+    .footer-note { margin-top: 17px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.5; }
+
+    @media (max-width: 860px) {
+      .privacy-note { display: none; }
+      .results-grid { grid-template-columns: 1fr; }
+      .panel { padding: 18px; }
+    }
+
+    @media (max-width: 560px) {
+      .header-inner, .page { width: min(100% - 22px, 1180px); }
+      .header-inner { padding: 20px 0 18px; }
+      .steps { grid-template-columns: 1fr; }
+      .step:not(.active) { display: none; }
+      .upload-card { padding: 12px; }
+      .drop-zone { min-height: 220px; padding: 20px 15px; }
+      .drop-zone h2 { font-size: 20px; }
+      .preview-head { display: block; }
+      .preview-count { display: inline-block; margin-top: 10px; }
+      .export-bar { display: block; }
+      .export-actions { margin-top: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-mark">P→X</div>
+        <div>
+          <h1>PDF a Excel</h1>
+          <p>Selecciona solo la información que necesitas</p>
+        </div>
+      </div>
+      <div class="privacy-note"><span class="privacy-dot"></span>Procesamiento local en tu computadora</div>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="steps" aria-label="Pasos">
+      <div class="step active" id="step-upload"><strong>1</strong><span>Cargar PDF</span></div>
+      <div class="step" id="step-select"><strong>2</strong><span>Escoger columnas</span></div>
+      <div class="step" id="step-export"><strong>3</strong><span>Descargar Excel</span></div>
+    </div>
+
+    <section class="card upload-card">
+      <div class="drop-zone" id="drop-zone" tabindex="0" role="button" aria-label="Cargar archivo PDF">
+        <div>
+          <div class="drop-icon">PDF</div>
+          <h2>Arrastra aquí tu PDF</h2>
+          <p>La aplicación buscará la tabla, identificará sus columnas y te permitirá escoger qué datos pasar al Excel.</p>
+          <button class="button button-primary" id="choose-button" type="button">Seleccionar PDF</button>
+          <input id="file-input" type="file" accept="application/pdf,.pdf">
+        </div>
+      </div>
+
+      <div class="file-status" id="file-status">
+        <div class="file-badge">PDF</div>
+        <div><strong id="file-name">-</strong><span id="file-detail">Preparando lectura...</span></div>
+      </div>
+      <div class="loading-bar" id="loading-bar"></div>
+      <div class="message" id="message"></div>
+    </section>
+
+    <section class="results" id="results">
+      <div class="results-grid">
+        <aside class="card panel">
+          <h2>Columnas del Excel</h2>
+          <p class="panel-subtitle">Marca los campos que quieres ver en la hoja principal. En este documento, “Unidad” corresponde a <b>Salidas → Unidades</b>. Las columnas con 0 registros están vacías en el PDF, pero también puedes incluirlas. El Excel incluirá un respaldo del texto original.</p>
+          <div class="column-list" id="column-list"></div>
+          <div class="rename-list">
+            <h3>Nombre en Excel</h3>
+            <div id="rename-list"></div>
+          </div>
+        </aside>
+
+        <section class="card panel preview-panel">
+          <div class="preview-head">
+            <div>
+              <h2>Vista previa</h2>
+              <p class="panel-subtitle">Se muestran las primeras filas. El Excel incluirá todos los registros detectados.</p>
+            </div>
+            <div class="preview-count" id="preview-count">0 filas</div>
+          </div>
+          <div class="table-wrap" id="table-wrap">
+            <div class="empty-preview">Carga un PDF para ver los datos.</div>
+          </div>
+          <div style="margin-top:20px;padding:20px;background:#fff8e0;border:1px solid #eed080;border-radius:14px">
+            <h2>Totales calculados · versión 6</h2>
+            <p id="calculated-totals" aria-live="polite"></p>
+            <label for="tax-amount">Impuesto (importe, no porcentaje): </label>
+            <input id="tax-amount" type="number" min="0" step="0.01" placeholder="Ingrese el impuesto" style="padding:10px;width:180px;border:1px solid #aaa;border-radius:8px">
+            <p id="totals-warning" style="color:#a52818"></p>
+          </div>
+          <div class="export-bar">
+            <div class="export-hint" id="export-hint">Selecciona por lo menos una columna para exportar.</div>
+            <div class="export-actions">
+              <button class="button button-secondary" id="reset-button" type="button">Cargar otro PDF</button>
+              <button class="button button-yellow" id="export-button" type="button" disabled>Descargar Excel</button>
+            </div>
+          </div>
+        </section>
+      </div>
+      <p class="footer-note">Los códigos se guardan como texto para no perder dígitos ni ceros iniciales. Además, el Excel incluye las hojas “Información” y “Respaldo original” para conservar el contenido detectado del PDF.</p>
+    </section>
+  </main>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script>
+    "use strict";
+
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+
+    const COLUMN_DEFS = [
+      { key: "codigo", label: "Código de barras", kind: "text", default: true },
+      { key: "codigo_completo", label: "Código completo", kind: "text" },
+      { key: "fila_original", label: "Fila original", kind: "text" },
+      { key: "descripcion", label: "Descripción", kind: "text" },
+      { key: "empaque", label: "Empaque", kind: "text" },
+      { key: "estilo", label: "Estilo", kind: "text" },
+      { key: "ref", label: "Ref.", kind: "text" },
+      { key: "iv", label: "I.V.", kind: "text" },
+      { key: "costo", label: "Costo", kind: "number", default: true },
+      { key: "pventa", label: "P/Venta", kind: "number" },
+      { key: "salidas_unidades", label: "Salidas - Unidades", kind: "number", default: true },
+      { key: "salidas_total", label: "Salidas - Total", kind: "number", default: true },
+      { key: "entradas_unidades", label: "Entradas - Unidades", kind: "number" },
+      { key: "entradas_total", label: "Entradas - Total", kind: "number" }
+    ];
+
+    const state = {
+      rows: [],
+      rawLines: [],
+      documentInfo: {},
+      selected: new Set(COLUMN_DEFS.filter(c => c.default).map(c => c.key)),
+      names: Object.fromEntries(COLUMN_DEFS.map(c => [c.key, c.label])),
+      available: new Set(),
+      originalName: "documento.pdf"
+    };
+
+    const $ = (selector) => document.querySelector(selector);
+    const dropZone = $("#drop-zone");
+    const fileInput = $("#file-input");
+    const message = $("#message");
+    const loadingBar = $("#loading-bar");
+    const fileStatus = $("#file-status");
+    const results = $("#results");
+
+    function normalize(value) {
+      return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .trim();
+    }
+
+    function cleanText(value) {
+      return String(value || "")
+        .replace(/\s+/g, " ")
+        .replace(/\s+([,.;:])/g, "$1")
+        .trim();
+    }
+
+    function showMessage(text, type) {
+      message.textContent = text;
+      message.className = `message show ${type || "info"}`;
+    }
+
+    function hideMessage() {
+      message.textContent = "";
+      message.className = "message";
+    }
+
+    function setLoading(isLoading) {
+      loadingBar.classList.toggle("show", isLoading);
+    }
+
+    function updateStep(step) {
+      ["step-upload", "step-select", "step-export"].forEach((id, index) => {
+        $("#" + id).classList.toggle("active", index < step);
+      });
+    }
+
+    function splitTextItem(item) {
+      const raw = String(item.str || "").trim();
+      if (!raw) return [];
+      const parts = raw.split(/\s+/);
+      if (parts.length === 1 || !item.width) {
+        return [{ text: raw, x: item.x, width: item.width || 0, y: item.y }];
+      }
+      const total = Math.max(raw.length, 1);
+      let cursor = 0;
+      return parts.map(part => {
+        const index = raw.indexOf(part, cursor);
+        const x = item.x + (item.width * Math.max(index, 0) / total);
+        const width = item.width * part.length / total;
+        cursor = Math.max(index, 0) + part.length;
+        return { text: part, x, width, y: item.y };
+      });
+    }
+
+    function groupLines(items, tolerance = 2.5) {
+      const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x);
+      const lines = [];
+      for (const item of sorted) {
+        let line = lines[lines.length - 1];
+        if (!line || Math.abs(line.y - item.y) > tolerance) {
+          line = { y: item.y, items: [] };
+          lines.push(line);
+        }
+        line.items.push(item);
+        line.y = line.items.reduce((sum, x) => sum + x.y, 0) / line.items.length;
+      }
+      for (const line of lines) {
+        line.items.sort((a, b) => a.x - b.x);
+        line.text = cleanText(line.items.map(x => x.text).join(" "));
+      }
+      return lines;
+    }
+
+    function findHeader(lines) {
+      return lines.findIndex(line => {
+        const text = normalize(line.text);
+        return text.includes("codigo") && text.includes("costo") && text.includes("unidades");
+      });
+    }
+
+    function firstStart(line, aliases, occurrence = 0) {
+      const found = line.items.filter(item => aliases.includes(normalize(item.text)));
+      return found[occurrence] ? found[occurrence].x : null;
+    }
+
+    function buildGeometry(lines, headerIndex) {
+      const header = lines[headerIndex];
+      const starts = {
+        codigo: firstStart(header, ["codigo"]),
+        descripcion: firstStart(header, ["descripcion"]),
+        empaque: firstStart(header, ["empaque"]),
+        estilo: firstStart(header, ["estilo"]),
+        ref: firstStart(header, ["ref"]),
+        iv: firstStart(header, ["i v", "iv"]),
+        costo: firstStart(header, ["costo"]),
+        pventa: firstStart(header, ["p venta", "pventa"]),
+        salidas_unidades: firstStart(header, ["unidades"], 0),
+        salidas_total: firstStart(header, ["total"], 0),
+        entradas_unidades: firstStart(header, ["unidades"], 1),
+        entradas_total: firstStart(header, ["total"], 1)
+      };
+
+      const fallback = {
+        codigo: 10, descripcion: 64, empaque: 188, estilo: 232, ref: 277,
+        iv: 319, costo: 347, pventa: 384, salidas_unidades: 430,
+        salidas_total: 490, entradas_unidades: 519, entradas_total: 573
+      };
+      Object.keys(starts).forEach(key => {
+        if (starts[key] == null) starts[key] = fallback[key];
+      });
+
+      const ordered = Object.entries(starts).sort((a, b) => a[1] - b[1]);
+      const bounds = {};
+      ordered.forEach(([key, start], index) => {
+        bounds[key] = { start, end: ordered[index + 1] ? ordered[index + 1][1] : 612 };
+      });
+      return { starts, bounds };
+    }
+
+    function textInRange(items, bounds) {
+      return cleanText(items.filter(item => item.x >= bounds.start - 1 && item.x < bounds.end - 1).map(item => item.text).join(" "));
+    }
+
+    function numberFrom(value) {
+      const text = String(value || "").replace(/\s/g, "");
+      const match = text.match(/-?\d+(?:[.,]\d+)?/);
+      if (!match) return "";
+      const number = Number(match[0].replace(",", "."));
+      return Number.isFinite(number) ? number : "";
+    }
+
+    function moneyFromText(value) {
+      const match = String(value || "").match(/\d[\d,]*(?:\.\d{2})?/);
+      if (!match) return "";
+      const number = Number(match[0].replace(/,/g, ""));
+      return Number.isFinite(number) ? number : "";
+    }
+
+    function roundMoney(value) {
+      return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+    }
+
+    function formatMoney(value) {
+      if (value === "" || value === null || value === undefined) return "No detectado";
+      return Number(value).toLocaleString("es-PA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function differenceStatus(difference) {
+      if (difference === "" || difference === null || difference === undefined) return "NO DISPONIBLE";
+      const absolute = Math.abs(Number(difference));
+      if (absolute === 0) return "CUADRA";
+      if (absolute <= 0.01) return "CUADRA POR REDONDEO";
+      return "REVISAR";
+    }
+
+    function numberInRange(items, bounds) {
+      const value = textInRange(items, bounds);
+      return numberFrom(value);
+    }
+
+    function extractDocumentInfo(rawLines) {
+      const text = rawLines.map(line => line.texto).join(" | ");
+      const numberMatch = text.match(/N[uú]mero:\s*([^|\s]+)/i);
+      const dateMatch = text.match(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+      const referenceLine = rawLines.find(line => /^Referencia:/i.test(line.texto))?.texto || "";
+      const destinationLine = rawLines.find(line => /Destino:/i.test(line.texto))?.texto || "";
+      const referenceValue = referenceLine
+        .replace(/^Referencia:\s*/i, "")
+        .replace(/^Destino:.*$/i, "")
+        .replace(/\s+Destino:.*$/i, "")
+        .trim();
+      const destinationValue = destinationLine
+        .replace(/^.*?Destino:\s*/i, "")
+        .replace(/\s+Salidas\b.*$/i, "")
+        .trim();
+      const subtotalMatch = text.match(/SubTotal:\s*([\d,]+(?:\.\d{2})?)/i);
+      const taxMatch = text.match(/Impuesto\s+([\d,]+(?:\.\d{2})?)/i);
+      const netTotalMatch = text.match(/Tota(?:l)?\s*Neto\s*:?\s*([\d,]+(?:\.\d{2})?)/i);
+      return {
+        numero: numberMatch ? cleanText(numberMatch[1]) : "",
+        fecha: dateMatch ? dateMatch[1] : "",
+        referencia: cleanText(referenceValue),
+        destino: cleanText(destinationValue),
+        subtotal: subtotalMatch ? moneyFromText(subtotalMatch[1]) : "",
+        impuesto: taxMatch ? moneyFromText(taxMatch[1]) : "",
+        total_neto: netTotalMatch ? moneyFromText(netTotalMatch[1]) : ""
+      };
+    }
+
+    function parseRow(line, geometry) {
+      const codeItems = line.items.filter(item => item.x >= 0 && item.x < geometry.bounds.descripcion.start - 1);
+      const numericCodes = codeItems
+        .flatMap(item => String(item.text).match(/\d{5,14}/g) || [])
+        .sort((a, b) => b.length - a.length);
+      const codigo = numericCodes[0] || "";
+      if (!codigo) return null;
+
+      const row = {
+        codigo,
+        codigo_completo: cleanText(codeItems.map(item => item.text).join(" ")),
+        fila_original: cleanText(line.items.map(item => item.text).join(" "))
+      };
+      for (const def of COLUMN_DEFS) {
+        if (["codigo", "codigo_completo", "fila_original"].includes(def.key)) continue;
+        row[def.key] = def.kind === "number"
+          ? numberInRange(line.items, geometry.bounds[def.key])
+          : textInRange(line.items, geometry.bounds[def.key]);
+      }
+
+      // En algunos reportes el Estilo y la Ref. salen pegados o dentro del mismo
+      // bloque de texto. Se conserva el bloque completo y se intenta separarlo.
+      const styleRefText = textInRange(line.items, {
+        start: geometry.starts.estilo - 5,
+        end: geometry.starts.iv - 15
+      });
+      const styleRefParts = styleRefText.split(/\s+/).filter(Boolean);
+      if (styleRefParts.length > 1) {
+        row.estilo = styleRefParts[0];
+        row.ref = styleRefParts.slice(1).join(" ");
+      } else if (styleRefText) {
+        row.estilo = styleRefText;
+        row.ref = "";
+      }
+      row.iv = textInRange(line.items, {
+        start: geometry.starts.iv - 15,
+        end: geometry.starts.costo
+      });
+      return row;
+    }
+
+    async function getDocument(data) {
+      try {
+        return await pdfjsLib.getDocument({ data }).promise;
+      } catch (workerError) {
+        return await pdfjsLib.getDocument({ data, disableWorker: true }).promise;
+      }
+    }
+
+    async function parsePdf(file) {
+      const data = new Uint8Array(await file.arrayBuffer());
+      const pdf = await getDocument(data);
+      const rows = [];
+      const rawLines = [];
+      let pagesWithTables = 0;
+
+      for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+        const page = await pdf.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 1 });
+        const content = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
+        const items = content.items.flatMap(item => {
+          const transform = item.transform || [1, 0, 0, 1, 0, 0];
+          const raw = { str: item.str, x: transform[4], y: viewport.height - transform[5], width: item.width || 0 };
+          return splitTextItem(raw);
+        }).filter(item => item.text);
+        const lines = groupLines(items);
+        lines.forEach((line, index) => rawLines.push({ pagina: pageNumber, linea: index + 1, texto: line.text }));
+        const headerIndex = findHeader(lines);
+        if (headerIndex < 0) continue;
+        pagesWithTables++;
+        const geometry = buildGeometry(lines, headerIndex);
+        for (const line of lines.slice(headerIndex + 1)) {
+          const row = parseRow(line, geometry);
+          if (row) rows.push(row);
+        }
+      }
+
+      if (!pagesWithTables || !rows.length) {
+        throw new Error("No se encontró una tabla de texto. Si el PDF es una imagen escaneada, necesitará OCR.");
+      }
+      return { rows, rawLines, documentInfo: extractDocumentInfo(rawLines) };
+    }
+
+    function hasValue(row, key) {
+      const value = row[key];
+      return value !== "" && value !== null && value !== undefined;
+    }
+
+    function calculateTotals() {
+      const subtotal = roundMoney(state.rows.reduce((sum, row) => sum + (typeof row.salidas_total === "number" ? row.salidas_total : 0), 0));
+      const impuesto = state.documentInfo.impuesto;
+      const totalNeto = impuesto === "" ? "" : roundMoney(subtotal + impuesto);
+      const subtotalPdf = state.documentInfo.subtotal;
+      const totalNetoPdf = state.documentInfo.total_neto;
+      const diferenciaSubtotal = subtotalPdf === "" ? "" : roundMoney(subtotal - subtotalPdf);
+      const diferenciaTotalNeto = totalNetoPdf === "" || totalNeto === "" ? "" : roundMoney(totalNeto - totalNetoPdf);
+      const lineasConTotal = state.rows.filter(row => typeof row.salidas_total === "number").length;
+      const lineasSinTotal = state.rows.length - lineasConTotal;
+      return {
+        subtotal,
+        impuesto,
+        totalNeto,
+        subtotalPdf,
+        totalNetoPdf,
+        diferenciaSubtotal,
+        diferenciaTotalNeto,
+        lineasConTotal,
+        lineasSinTotal,
+        estadoSubtotalPdf: differenceStatus(diferenciaSubtotal),
+        estadoTotalNetoPdf: differenceStatus(diferenciaTotalNeto)
+      };
+    }
+
+    function renderColumnPicker() {
+      const list = $("#column-list");
+      list.innerHTML = "";
+      for (const def of COLUMN_DEFS) {
+        const count = state.rows.filter(row => hasValue(row, def.key)).length;
+        const available = count > 0;
+        const label = document.createElement("label");
+        label.className = `column-option${state.selected.has(def.key) ? " selected" : ""}${available ? "" : " empty"}`;
+        label.innerHTML = `<input type="checkbox" data-column="${def.key}" ${state.selected.has(def.key) ? "checked" : ""}><span class="column-label">${def.label}</span><span class="column-meta">${available ? `${count}/${state.rows.length}` : `0/${state.rows.length} · vacío`}</span>`;
+        list.appendChild(label);
+      }
+      list.querySelectorAll("input[data-column]").forEach(input => {
+        input.addEventListener("change", () => {
+          const key = input.dataset.column;
+          if (input.checked) state.selected.add(key); else state.selected.delete(key);
+          input.closest(".column-option").classList.toggle("selected", input.checked);
+          renderRenameList();
+          renderPreview();
+        });
+      });
+      renderRenameList();
+    }
+
+    function selectedDefs() {
+      return COLUMN_DEFS.filter(def => state.selected.has(def.key));
+    }
+
+    function renderRenameList() {
+      const container = $("#rename-list");
+      container.innerHTML = "";
+      for (const def of selectedDefs()) {
+        const row = document.createElement("div");
+        row.className = "rename-row";
+        row.innerHTML = `<label for="rename-${def.key}">${def.label}</label><input id="rename-${def.key}" data-rename="${def.key}" value="${escapeHtml(state.names[def.key] || def.label)}" maxlength="40">`;
+        container.appendChild(row);
+      }
+      container.querySelectorAll("input[data-rename]").forEach(input => {
+        input.addEventListener("input", () => {
+          state.names[input.dataset.rename] = input.value.trim() || COLUMN_DEFS.find(x => x.key === input.dataset.rename).label;
+          renderPreview();
+        });
+      });
+    }
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[char]));
+    }
+
+    function displayValue(value, def) {
+      if (value === "" || value === null || value === undefined) return "";
+      if (def.kind === "number") return Number(value).toFixed(2);
+      return String(value);
+    }
+
+    function renderPreview() {
+      const totals = calculateTotals();
+      $("#calculated-totals").textContent = `Subtotal: ${formatMoney(totals.subtotal)} · Impuesto: ${formatMoney(totals.impuesto)} · Total Neto: ${formatMoney(totals.totalNeto)}`;
+      $("#totals-warning").textContent = [totals.impuesto === "" ? "Falta el impuesto: ingrésalo arriba (0 si no aplica)." : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
+      const defs = selectedDefs();
+      const tableWrap = $("#table-wrap");
+      $("#preview-count").textContent = `${state.rows.length} fila${state.rows.length === 1 ? "" : "s"}`;
+      if (!defs.length) {
+        tableWrap.innerHTML = `<div class="empty-preview">Selecciona por lo menos una columna.</div>`;
+        $("#export-button").disabled = true;
+        $("#export-hint").textContent = "Selecciona por lo menos una columna para exportar.";
+        return;
+      }
+
+      const head = defs.map(def => `<th class="${def.kind === "number" ? "num" : ""}">${escapeHtml(state.names[def.key] || def.label)}</th>`).join("");
+      const body = state.rows.slice(0, 100).map(row => {
+        const cells = defs.map(def => `<td class="${def.kind === "number" ? "num" : ""}">${escapeHtml(displayValue(row[def.key], def))}</td>`).join("");
+        return `<tr>${cells}</tr>`;
+      }).join("");
+      tableWrap.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+      $("#export-button").disabled = false;
+      $("#export-hint").textContent = `${defs.length} columna${defs.length === 1 ? "" : "s"} seleccionada${defs.length === 1 ? "" : "s"}. Se exportarán ${state.rows.length} filas.`;
+      updateStep(3);
+    }
+
+    function safeFileName(name) {
+      const base = String(name || "documento").replace(/\.pdf$/i, "").replace(/[^a-z0-9áéíóúüñ _-]/gi, "").trim() || "documento";
+      return `${base}_seleccion.xlsx`;
+    }
+
+    function exportExcel() {
+      const defs = selectedDefs();
+      if (!defs.length || !state.rows.length) return;
+      const headers = [];
+      const usedHeaders = new Set();
+      for (const def of defs) {
+        let header = String(state.names[def.key] || def.label).trim() || def.label;
+        let unique = header;
+        let suffix = 2;
+        while (usedHeaders.has(unique.toLowerCase())) unique = `${header} ${suffix++}`;
+        usedHeaders.add(unique.toLowerCase());
+        headers.push(unique);
+      }
+
+      const matrix = [headers];
+      for (const row of state.rows) {
+        matrix.push(defs.map(def => {
+          const value = row[def.key];
+          if (def.kind === "number") return value === "" ? null : Number(value);
+          return value == null ? "" : String(value);
+        }));
+      }
+      const worksheet = XLSX.utils.aoa_to_sheet(matrix);
+      worksheet["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(headers.length - 1)}${matrix.length}` };
+      worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+      worksheet["!cols"] = defs.map(def => ({ wch: def.key === "descripcion" ? 38 : def.kind === "number" ? 15 : 20 }));
+      for (let rowIndex = 2; rowIndex <= matrix.length; rowIndex++) {
+        defs.forEach((def, colIndex) => {
+          if (def.kind !== "number") return;
+          const address = XLSX.utils.encode_cell({ r: rowIndex - 1, c: colIndex });
+          if (worksheet[address] && typeof worksheet[address].v === "number") worksheet[address].z = "0.00";
+        });
+      }
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Datos");
+      const totals = calculateTotals();
+      const rowSubtotal = totals.subtotal;
+      const pdfSubtotal = totals.subtotalPdf;
+      const pdfTax = totals.impuesto;
+      const pdfNetTotal = totals.totalNetoPdf;
+      const calculatedNetTotal = totals.totalNeto;
+      const subtotalDifference = totals.diferenciaSubtotal;
+      const netTotalDifference = totals.diferenciaTotalNeto;
+      const subtotalStatus = totals.estadoSubtotalPdf;
+      const netTotalStatus = totals.estadoTotalNetoPdf;
+      const overallStatus = pdfTax === "" ? "FALTA IMPUESTO" : totals.lineasSinTotal ? "REVISAR FILAS SIN TOTAL" : "CALCULADO DESDE LAS LÍNEAS";
+      const footerStart = state.rows.length + 3;
+      XLSX.utils.sheet_add_aoa(worksheet, [
+        ["Subtotal", rowSubtotal],
+        ["Impuesto", pdfTax === "" ? "FALTA IMPUESTO" : pdfTax],
+        ["Total Neto", calculatedNetTotal === "" ? "FALTA IMPUESTO" : calculatedNetTotal],
+        ["Estado", overallStatus]
+      ], { origin: `A${footerStart}` });
+      const totalColumn = defs.findIndex(def => def.key === "salidas_total");
+      if (totalColumn >= 0) {
+        const col = XLSX.utils.encode_col(totalColumn);
+        worksheet[`B${footerStart}`].f = `ROUND(SUM(${col}2:${col}${state.rows.length + 1}),2)`;
+      }
+      if (calculatedNetTotal !== "") worksheet[`B${footerStart + 2}`].f = `ROUND(B${footerStart}+B${footerStart + 1},2)`;
+      for (let i = 0; i < 3; i++) worksheet[`B${footerStart + i}`].z = "0.00";
+      const summaryMatrix = [
+        ["Concepto", "Valor calculado", "Fórmula / origen", "PDF impreso (solo referencia)", "Diferencia informativa", "Estado"],
+        ["Subtotal", rowSubtotal, "Suma de Salidas - Total", pdfSubtotal === "" ? null : pdfSubtotal, subtotalDifference === "" ? null : subtotalDifference, pdfSubtotal === "" ? "CALCULADO" : subtotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
+        ["Impuesto", pdfTax === "" ? null : pdfTax, state.documentInfo.impuestoManual ? "Ingresado por el usuario" : "Impuesto del PDF", null, null, pdfTax === "" ? "NO DETECTADO" : "DISPONIBLE"],
+        ["Total Neto", calculatedNetTotal === "" ? null : calculatedNetTotal, "Subtotal + Impuesto", pdfNetTotal === "" ? null : pdfNetTotal, netTotalDifference === "" ? null : netTotalDifference, pdfNetTotal === "" ? "CALCULADO" : netTotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
+        ["Filas de productos", null, state.rows.length, null, null, "DETECTADAS"],
+        ["Líneas con Salidas - Total", null, totals.lineasConTotal, null, null, "DETECTADAS"],
+        ["Líneas sin Salidas - Total", null, totals.lineasSinTotal, null, null, totals.lineasSinTotal ? "VACÍAS EN PDF" : "NINGUNA"],
+        ["Estado general", null, "El cálculo usa las líneas y el impuesto", null, null, overallStatus]
+      ];
+      const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryMatrix);
+      summaryWorksheet["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 30 }, { wch: 26 }, { wch: 20 }, { wch: 28 }];
+      ["B2", "D2", "E2", "B3", "B4", "D4", "E4"].forEach(address => {
+        if (summaryWorksheet[address] && typeof summaryWorksheet[address].v === "number") summaryWorksheet[address].z = "0.00";
+      });
+      XLSX.utils.book_append_sheet(workbook, summaryWorksheet, "Resumen");
+      const infoMatrix = [
+        ["Campo", "Valor"],
+        ["Archivo de origen", state.originalName],
+        ["Número del documento", state.documentInfo.numero || ""],
+        ["Fecha", state.documentInfo.fecha || ""],
+        ["Referencia", state.documentInfo.referencia || ""],
+        ["Destino", state.documentInfo.destino || ""],
+        ["Subtotal calculado (suma de Salidas - Total)", rowSubtotal],
+        [state.documentInfo.impuestoManual ? "Impuesto ingresado por el usuario" : "Impuesto del PDF", pdfTax === "" ? "" : pdfTax],
+        ["Total Neto calculado (Subtotal + Impuesto)", calculatedNetTotal === "" ? "" : calculatedNetTotal],
+        ["Subtotal impreso en PDF (solo referencia)", pdfSubtotal === "" ? "" : pdfSubtotal],
+        ["Total Neto impreso en PDF (solo referencia)", pdfNetTotal === "" ? "" : pdfNetTotal],
+        ["Diferencia informativa contra Subtotal", subtotalDifference === "" ? "" : subtotalDifference],
+        ["Diferencia informativa contra Total Neto", netTotalDifference === "" ? "" : netTotalDifference],
+        ["Estado del cálculo", overallStatus],
+        ["Registros detectados", state.rows.length],
+        ["Líneas con Salidas - Total", totals.lineasConTotal],
+        ["Líneas sin Salidas - Total", totals.lineasSinTotal],
+        ["Nota", "La hoja Respaldo original conserva las líneas de texto detectadas en el PDF."]
+      ];
+      const infoWorksheet = XLSX.utils.aoa_to_sheet(infoMatrix);
+      infoWorksheet["!cols"] = [{ wch: 48 }, { wch: 72 }];
+      for (let rowIndex = 7; rowIndex <= 13; rowIndex++) {
+        const address = `B${rowIndex}`;
+        if (infoWorksheet[address] && typeof infoWorksheet[address].v === "number") infoWorksheet[address].z = "0.00";
+      }
+      XLSX.utils.book_append_sheet(workbook, infoWorksheet, "Información");
+
+      const backupMatrix = [["Página", "Línea", "Texto original"]];
+      state.rawLines.forEach(line => backupMatrix.push([line.pagina, line.linea, line.texto]));
+      const backupWorksheet = XLSX.utils.aoa_to_sheet(backupMatrix);
+      backupWorksheet["!autofilter"] = { ref: `A1:C${backupMatrix.length}` };
+      backupWorksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+      backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
+      XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
+      XLSX.writeFile(workbook, safeFileName(state.originalName), { bookType: "xlsx" });
+      updateStep(4);
+    }
+
+    async function handleFile(file) {
+      if (!file || !/\.pdf$/i.test(file.name)) {
+        showMessage("Selecciona un archivo PDF válido.", "error");
+        return;
+      }
+      hideMessage();
+      state.originalName = file.name;
+      fileStatus.classList.add("show");
+      $("#file-name").textContent = file.name;
+      $("#file-detail").textContent = "Leyendo tabla...";
+      setLoading(true);
+      results.classList.remove("show");
+      updateStep(1);
+      try {
+        const parsed = await parsePdf(file);
+        state.rows = parsed.rows;
+        state.rawLines = parsed.rawLines;
+        state.documentInfo = parsed.documentInfo;
+        $("#tax-amount").value = state.documentInfo.impuesto;
+        state.available = new Set(COLUMN_DEFS.filter(def => state.rows.some(row => hasValue(row, def.key))).map(def => def.key));
+        state.selected = new Set(COLUMN_DEFS.filter(def => def.default && state.available.has(def.key)).map(def => def.key));
+        if (!state.selected.size && state.available.size) state.selected.add([...state.available][0]);
+        const totals = calculateTotals();
+        const totalsLabel = [
+          ["Subtotal", totals.subtotal],
+          ["Impuesto", totals.impuesto],
+          ["Total Neto", totals.totalNeto]
+        ].map(([label, value]) => `${label}: ${formatMoney(value)}`).join(" · ");
+        $("#file-detail").textContent = `${state.rows.length} registros encontrados + respaldo original · ${totalsLabel}`;
+        renderColumnPicker();
+        renderPreview();
+        results.classList.add("show");
+        updateStep(3);
+      } catch (error) {
+        console.error(error);
+        $("#file-detail").textContent = "No se pudo leer el archivo";
+        showMessage(error.message || "Ocurrió un error al leer el PDF.", "error");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function resetApp() {
+      state.rows = [];
+      state.rawLines = [];
+      state.documentInfo = {};
+      state.originalName = "documento.pdf";
+      results.classList.remove("show");
+      fileStatus.classList.remove("show");
+      fileInput.value = "";
+      hideMessage();
+      updateStep(1);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    $("#choose-button").addEventListener("click", event => { event.stopPropagation(); fileInput.click(); });
+    fileInput.addEventListener("change", event => handleFile(event.target.files[0]));
+    dropZone.addEventListener("click", () => fileInput.click());
+    dropZone.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") fileInput.click(); });
+    ["dragenter", "dragover"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.add("dragover"); }));
+    ["dragleave", "drop"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove("dragover"); }));
+    dropZone.addEventListener("drop", event => handleFile(event.dataTransfer.files[0]));
+    $("#export-button").addEventListener("click", exportExcel);
+    $("#tax-amount").addEventListener("input", event => {
+      const raw = event.target.value;
+      const amount = Number(raw);
+      state.documentInfo.impuesto = raw !== "" && Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : "";
+      state.documentInfo.impuestoManual = true;
+      renderPreview();
+    });
+    $("#reset-button").addEventListener("click", resetApp);
+  </script>
+</body>
+</html>
