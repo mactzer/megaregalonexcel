@@ -727,6 +727,8 @@
 
     function calculateTotals() {
       const subtotal = roundMoney(state.rows.reduce((sum, row) => sum + (typeof row.salidas_total === "number" ? row.salidas_total : 0), 0));
+      const totalUnidades = roundMoney(state.rows.reduce((sum, row) => sum + (typeof row.salidas_unidades === "number" ? row.salidas_unidades : 0), 0));
+      const lineasSinUnidades = state.rows.filter(row => typeof row.salidas_unidades !== "number").length;
       const impuesto = state.documentInfo.impuesto;
       const totalNeto = impuesto === "" ? "" : roundMoney(subtotal + impuesto);
       const subtotalPdf = state.documentInfo.subtotal;
@@ -737,6 +739,8 @@
       const lineasSinTotal = state.rows.length - lineasConTotal;
       return {
         subtotal,
+        totalUnidades,
+        lineasSinUnidades,
         impuesto,
         totalNeto,
         subtotalPdf,
@@ -806,8 +810,8 @@
 
     function renderPreview() {
       const totals = calculateTotals();
-      $("#calculated-totals").textContent = `Subtotal: ${formatMoney(totals.subtotal)} · Impuesto: ${formatMoney(totals.impuesto)} · Total Neto: ${formatMoney(totals.totalNeto)}`;
-      $("#totals-warning").textContent = [totals.impuesto === "" ? "Falta el impuesto: ingrésalo arriba (0 si no aplica)." : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
+      $("#calculated-totals").textContent = `Total de unidades: ${formatMoney(totals.totalUnidades)} · Subtotal: ${formatMoney(totals.subtotal)} · Impuesto: ${formatMoney(totals.impuesto)} · Total Neto: ${formatMoney(totals.totalNeto)}`;
+      $("#totals-warning").textContent = [totals.impuesto === "" ? "Falta el impuesto: ingrésalo arriba (0 si no aplica)." : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : "", totals.lineasSinUnidades ? `${totals.lineasSinUnidades} filas sin unidades detectadas: el total de unidades solo incluye cantidades disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
       const defs = selectedDefs();
       const tableWrap = $("#table-wrap");
       $("#preview-count").textContent = `${state.rows.length} fila${state.rows.length === 1 ? "" : "s"}`;
@@ -886,12 +890,13 @@
       const netTotalDifference = totals.diferenciaTotalNeto;
       const subtotalStatus = totals.estadoSubtotalPdf;
       const netTotalStatus = totals.estadoTotalNetoPdf;
-      const overallStatus = pdfTax === "" ? "FALTA IMPUESTO" : totals.lineasSinTotal ? "REVISAR FILAS SIN TOTAL" : "CALCULADO DESDE LAS LÍNEAS";
+      const overallStatus = pdfTax === "" ? "FALTA IMPUESTO" : totals.lineasSinTotal ? "REVISAR FILAS SIN TOTAL" : totals.lineasSinUnidades ? "REVISAR FILAS SIN UNIDADES" : "CALCULADO DESDE LAS LÍNEAS";
       const footerStart = state.rows.length + 3;
       XLSX.utils.sheet_add_aoa(worksheet, [
         ["Subtotal", rowSubtotal],
         ["Impuesto", pdfTax === "" ? "FALTA IMPUESTO" : pdfTax],
         ["Total Neto", calculatedNetTotal === "" ? "FALTA IMPUESTO" : calculatedNetTotal],
+        ["Total de unidades", totals.totalUnidades],
         ["Estado", overallStatus]
       ], { origin: `A${footerStart}` });
       const totalColumn = defs.findIndex(def => def.key === "salidas_total");
@@ -900,12 +905,19 @@
         worksheet[`B${footerStart}`].f = `ROUND(SUM(${col}2:${col}${state.rows.length + 1}),2)`;
       }
       if (calculatedNetTotal !== "") worksheet[`B${footerStart + 2}`].f = `ROUND(B${footerStart}+B${footerStart + 1},2)`;
-      for (let i = 0; i < 3; i++) worksheet[`B${footerStart + i}`].z = "0.00";
+      const unitsColumn = defs.findIndex(def => def.key === "salidas_unidades");
+      if (unitsColumn >= 0) {
+        const col = XLSX.utils.encode_col(unitsColumn);
+        worksheet[`B${footerStart + 3}`].f = `ROUND(SUM(${col}2:${col}${state.rows.length + 1}),2)`;
+      }
+      for (let i = 0; i < 4; i++) worksheet[`B${footerStart + i}`].z = "0.00";
       const summaryMatrix = [
         ["Concepto", "Valor calculado", "Fórmula / origen", "PDF impreso (solo referencia)", "Diferencia informativa", "Estado"],
         ["Subtotal", rowSubtotal, "Suma de Salidas - Total", pdfSubtotal === "" ? null : pdfSubtotal, subtotalDifference === "" ? null : subtotalDifference, pdfSubtotal === "" ? "CALCULADO" : subtotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
         ["Impuesto", pdfTax === "" ? null : pdfTax, state.documentInfo.impuestoManual ? "Ingresado por el usuario" : "Impuesto del PDF", null, null, pdfTax === "" ? "NO DETECTADO" : "DISPONIBLE"],
         ["Total Neto", calculatedNetTotal === "" ? null : calculatedNetTotal, "Subtotal + Impuesto", pdfNetTotal === "" ? null : pdfNetTotal, netTotalDifference === "" ? null : netTotalDifference, pdfNetTotal === "" ? "CALCULADO" : netTotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
+        ["Total de unidades", totals.totalUnidades, "Suma de Salidas - Unidades", null, null, totals.lineasSinUnidades ? "REVISAR FILAS SIN UNIDADES" : "CALCULADO"],
+        ["Líneas sin unidades", totals.lineasSinUnidades, "Cantidades no detectadas", null, null, totals.lineasSinUnidades ? "REVISAR" : "NINGUNA"],
         ["Filas de productos", null, state.rows.length, null, null, "DETECTADAS"],
         ["Líneas con Salidas - Total", null, totals.lineasConTotal, null, null, "DETECTADAS"],
         ["Líneas sin Salidas - Total", null, totals.lineasSinTotal, null, null, totals.lineasSinTotal ? "VACÍAS EN PDF" : "NINGUNA"],
@@ -913,7 +925,7 @@
       ];
       const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryMatrix);
       summaryWorksheet["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 30 }, { wch: 26 }, { wch: 20 }, { wch: 28 }];
-      ["B2", "D2", "E2", "B3", "B4", "D4", "E4"].forEach(address => {
+      ["B2", "D2", "E2", "B3", "B4", "D4", "E4", "B5"].forEach(address => {
         if (summaryWorksheet[address] && typeof summaryWorksheet[address].v === "number") summaryWorksheet[address].z = "0.00";
       });
       XLSX.utils.book_append_sheet(workbook, summaryWorksheet, "Resumen");
@@ -935,6 +947,8 @@
         ["Registros detectados", state.rows.length],
         ["Líneas con Salidas - Total", totals.lineasConTotal],
         ["Líneas sin Salidas - Total", totals.lineasSinTotal],
+        ["Total de unidades (suma de Salidas - Unidades)", totals.totalUnidades],
+        ["Líneas sin unidades detectadas", totals.lineasSinUnidades],
         ["Nota", "La hoja Respaldo original conserva las líneas de texto detectadas en el PDF."]
       ];
       const infoWorksheet = XLSX.utils.aoa_to_sheet(infoMatrix);
