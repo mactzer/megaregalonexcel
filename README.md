@@ -2,6 +2,14 @@
 
 Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. Funciona directamente en el navegador; los PDF no se envían a un servidor. No incluye OCR para documentos escaneados.
 
+## Autoría y condiciones de uso
+
+Creado por **Eddie Rivera**. © 2026 Eddie Rivera. Todos los derechos reservados sobre el código propio de esta aplicación.
+
+**Condición de uso establecida por el creador:** en caso de que Eddie Rivera sea despedido de la empresa que utiliza esta aplicación, la autorización de dicha empresa para usar la página queda revocada. Para continuar utilizándola, la empresa deberá dialogar con Eddie Rivera y acordar una compensación económica. El uso posterior requiere su autorización previa y por escrito, con las condiciones económicas pactadas por ambas partes.
+
+Las bibliotecas de terceros incluidas en `vendor` conservan sus propias licencias y atribuciones.
+
 ## Publicación automática
 
 El workflow `.github/workflows/pages.yml` publica la aplicación al subir cambios a `main`. Puedes seguir el despliegue en la pestaña **Actions**. Si GitHub pide habilitar Pages, selecciona **GitHub Actions** en **Settings → Pages**.
