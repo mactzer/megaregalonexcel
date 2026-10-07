@@ -659,20 +659,18 @@
           : textInRange(line.items, geometry.bounds[def.key]);
       }
 
-      // En algunos reportes el Estilo y la Ref. salen pegados o dentro del mismo
-      // bloque de texto. Se conserva el bloque completo y se intenta separarlo.
-      const styleRefText = textInRange(line.items, {
+      // El encabezado Ref. está centrado: sus valores pueden comenzar a su
+      // izquierda. Separar por posición conserva la referencia cuando Estilo
+      // está vacío y también las referencias que contienen varias palabras.
+      const styleRefBoundary = (geometry.starts.estilo + geometry.starts.ref) / 2;
+      row.estilo = textInRange(line.items, {
         start: geometry.starts.estilo - 5,
+        end: styleRefBoundary
+      });
+      row.ref = textInRange(line.items, {
+        start: styleRefBoundary,
         end: geometry.starts.iv - 15
       });
-      const styleRefParts = styleRefText.split(/\s+/).filter(Boolean);
-      if (styleRefParts.length > 1) {
-        row.estilo = styleRefParts[0];
-        row.ref = styleRefParts.slice(1).join(" ");
-      } else if (styleRefText) {
-        row.estilo = styleRefText;
-        row.ref = "";
-      }
       row.iv = textInRange(line.items, {
         start: geometry.starts.iv - 15,
         end: geometry.starts.costo
