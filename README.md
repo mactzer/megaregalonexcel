@@ -33,6 +33,14 @@ No hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js
 
 Después de cargar un PDF, edita **Nombre del archivo Excel** antes de descargar. La descarga usa ese nombre y añade `.xlsx` automáticamente. Si dejas el campo vacío, se utiliza el nombre sugerido a partir del PDF.
 
+## Productos gravados y exentos
+
+El impuesto se calcula con la tasa **I.V. de cada producto** aplicada a su importe en **Salidas - Total**. Por ejemplo, `G 7.00` aplica el 7 %; `E`, `EXENTO`, `0.00` y, en estos reportes, **I.V. vacío** corresponden a productos exentos (0 %). Se suman los impuestos sin redondear cada línea y se redondea el resultado final a dos decimales.
+
+La página y el Excel muestran la base gravada, la base exenta y el impuesto calculado. Los productos exentos se incluyen en el subtotal y en el total de unidades, con impuesto cero. El impuesto impreso en el PDF se conserva como referencia para comparar. Las tasas no reconocidas o los importes ausentes se señalan para revisión y no producen un impuesto automático completo.
+
+Para corregir el importe del impuesto, activa **Usar un impuesto manual**. Al desactivarlo, se recupera el cálculo por producto.
+
 ## Uso local
 
 En Windows puedes abrir `abrir_app.bat`. También puedes ejecutar `python -m http.server 8000` desde esta carpeta y abrir `http://localhost:8000`.

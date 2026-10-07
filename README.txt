@@ -5,8 +5,12 @@ Extrae todo el ZIP antes de abrir index.html o abrir_app.bat.
 El Subtotal, Impuesto y Total Neto aparecen debajo de los productos en Datos.
 Si incluyes Salidas - Total, el Subtotal usa una fórmula SUM en Excel.
 Si no incluyes esa columna, se exporta la suma calculada al convertir el archivo.
-El impuesto puede ingresarse o corregirse en pantalla como importe, no porcentaje.
-Si falta, se muestra FALTA IMPUESTO; no se supone que sea cero.
+El impuesto se calcula con la tasa I.V. de cada producto sobre Salidas - Total.
+G 7.00 aplica el 7 %. E, EXENTO, 0.00 e I.V. vacío corresponden a exentos (0 %)
+en estos reportes. Los exentos se incluyen en el subtotal sin añadir impuesto.
+Se suman los impuestos de las líneas y se redondea el resultado final.
+Puedes activar "Usar un impuesto manual" para corregir el importe, no el porcentaje.
+Si la tasa no se reconoce o falta un importe, se pide revisión; no se supone cero.
 Las filas sin total detectado se señalan para revisión, no se inventan importes.
 Que la suma sea correcta no garantiza por sí solo que la extracción sea completa.
 
@@ -31,10 +35,10 @@ información, el archivo también crea automáticamente:
 
 El cálculo principal no depende del Subtotal ni del Total Neto impresos en el PDF:
 - Subtotal calculado = suma de la columna "Salidas - Total".
-- Impuesto = impuesto leído del documento.
+- Impuesto = suma del importe de cada producto por su tasa I.V., redondeada al final.
 - Total Neto calculado = Subtotal calculado + Impuesto.
 
-Los valores impresos de Subtotal y Total Neto se conservan únicamente como referencia
+Los valores impresos de Subtotal, Impuesto y Total Neto se conservan como referencia
 informativa. Si el documento original tiene una diferencia, el Excel no modifica las
 líneas ni fuerza el resultado; muestra el cálculo real de las líneas y la diferencia
 informativa contra lo impreso.

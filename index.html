@@ -384,10 +384,12 @@
             <div class="empty-preview">Carga un PDF para ver los datos.</div>
           </div>
           <div style="margin-top:20px;padding:20px;background:#fff8e0;border:1px solid #eed080;border-radius:14px">
-            <h2>Totales calculados · versión 6</h2>
+            <h2>Totales calculados</h2>
             <p id="calculated-totals" aria-live="polite"></p>
+            <p id="tax-breakdown" class="panel-subtitle"></p>
+            <label style="display:block;margin-bottom:10px"><input id="manual-tax" type="checkbox"> Usar un impuesto manual</label>
             <label for="tax-amount">Impuesto (importe, no porcentaje): </label>
-            <input id="tax-amount" type="number" min="0" step="0.01" placeholder="Ingrese el impuesto" style="padding:10px;width:180px;border:1px solid #aaa;border-radius:8px">
+            <input id="tax-amount" type="number" min="0" step="0.01" placeholder="Calculado por producto" disabled style="padding:10px;width:180px;border:1px solid #aaa;border-radius:8px">
             <p id="totals-warning" style="color:#a52818"></p>
           </div>
           <div class="rename-row" style="margin-top:20px">
@@ -726,23 +728,63 @@
       return value !== "" && value !== null && value !== undefined;
     }
 
+    function getTaxRate(value) {
+      if (value === null || value === undefined) return null;
+      if (typeof value === "number") return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+      const text = cleanText(value).toUpperCase();
+      // En estos reportes, I.V. vacío identifica productos exentos.
+      if (!text) return 0;
+      const exempt = text.match(/^(?:EXENTO|E)\s*(\d+(?:[.,]\d+)?)?\s*%?$/);
+      if (exempt) return !exempt[1] || Number(exempt[1].replace(",", ".")) === 0 ? 0 : null;
+      const taxed = text.match(/^(?:G\s*)?(\d+(?:[.,]\d+)?)\s*%?$/);
+      if (!taxed) return null;
+      const rate = Number(taxed[1].replace(",", "."));
+      return Number.isFinite(rate) && rate >= 0 && rate <= 100 ? rate : null;
+    }
+
     function calculateTotals() {
       const subtotal = roundMoney(state.rows.reduce((sum, row) => sum + (typeof row.salidas_total === "number" ? row.salidas_total : 0), 0));
       const totalUnidades = roundMoney(state.rows.reduce((sum, row) => sum + (typeof row.salidas_unidades === "number" ? row.salidas_unidades : 0), 0));
       const lineasSinUnidades = state.rows.filter(row => typeof row.salidas_unidades !== "number").length;
-      const impuesto = state.documentInfo.impuesto;
+      let baseGravada = 0;
+      let baseExenta = 0;
+      let impuestoSinRedondear = 0;
+      let lineasSinTasa = 0;
+      for (const row of state.rows) {
+        const rate = getTaxRate(row.iv);
+        if (rate === null) {
+          lineasSinTasa++;
+          continue;
+        }
+        if (!Number.isFinite(row.salidas_total)) continue;
+        if (rate === 0) baseExenta += row.salidas_total;
+        else baseGravada += row.salidas_total;
+        impuestoSinRedondear += row.salidas_total * rate / 100;
+      }
+      const lineasConTotal = state.rows.filter(row => Number.isFinite(row.salidas_total)).length;
+      const lineasSinTotal = state.rows.length - lineasConTotal;
+      const impuestoCalculado = lineasSinTasa || lineasSinTotal ? "" : roundMoney(impuestoSinRedondear);
+      const manualAmount = state.documentInfo.impuestoManualImporte;
+      const impuesto = state.documentInfo.impuestoManual
+        ? Number.isFinite(manualAmount) && manualAmount >= 0 ? manualAmount : ""
+        : impuestoCalculado;
+      const impuestoPdf = state.documentInfo.impuesto ?? "";
       const totalNeto = impuesto === "" ? "" : roundMoney(subtotal + impuesto);
       const subtotalPdf = state.documentInfo.subtotal;
       const totalNetoPdf = state.documentInfo.total_neto;
       const diferenciaSubtotal = subtotalPdf === "" ? "" : roundMoney(subtotal - subtotalPdf);
       const diferenciaTotalNeto = totalNetoPdf === "" || totalNeto === "" ? "" : roundMoney(totalNeto - totalNetoPdf);
-      const lineasConTotal = state.rows.filter(row => typeof row.salidas_total === "number").length;
-      const lineasSinTotal = state.rows.length - lineasConTotal;
       return {
         subtotal,
         totalUnidades,
         lineasSinUnidades,
         impuesto,
+        impuestoCalculado,
+        impuestoPdf,
+        diferenciaImpuesto: impuestoPdf === "" || impuesto === "" ? "" : roundMoney(impuesto - impuestoPdf),
+        subtotalGravado: roundMoney(baseGravada),
+        subtotalExento: roundMoney(baseExenta),
+        lineasSinTasa,
         totalNeto,
         subtotalPdf,
         totalNetoPdf,
@@ -812,7 +854,11 @@
     function renderPreview() {
       const totals = calculateTotals();
       $("#calculated-totals").textContent = `Total de unidades: ${formatMoney(totals.totalUnidades)} · Subtotal: ${formatMoney(totals.subtotal)} · Impuesto: ${formatMoney(totals.impuesto)} · Total Neto: ${formatMoney(totals.totalNeto)}`;
-      $("#totals-warning").textContent = [totals.impuesto === "" ? "Falta el impuesto: ingrésalo arriba (0 si no aplica)." : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : "", totals.lineasSinUnidades ? `${totals.lineasSinUnidades} filas sin unidades detectadas: el total de unidades solo incluye cantidades disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
+      $("#tax-breakdown").textContent = `Base gravada: ${formatMoney(totals.subtotalGravado)} · Base exenta (0 %): ${formatMoney(totals.subtotalExento)}. ${state.documentInfo.impuestoManual ? "Impuesto ingresado manualmente." : "Impuesto calculado con la tasa I.V. de cada producto. I.V. vacío se considera exento (0 %)."}`;
+      $("#manual-tax").checked = !!state.documentInfo.impuestoManual;
+      $("#tax-amount").disabled = !state.documentInfo.impuestoManual;
+      if (!state.documentInfo.impuestoManual) $("#tax-amount").value = totals.impuesto;
+      $("#totals-warning").textContent = [totals.impuesto === "" ? "No se puede completar el impuesto. Revisa las tasas I.V. y los importes, o activa el impuesto manual." : "", totals.lineasSinTasa ? `${totals.lineasSinTasa} filas con tasa I.V. no reconocida: no se suponen exentas. Revisa esas filas.` : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : "", totals.lineasSinUnidades ? `${totals.lineasSinUnidades} filas sin unidades detectadas: el total de unidades solo incluye cantidades disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
       const defs = selectedDefs();
       const tableWrap = $("#table-wrap");
       $("#preview-count").textContent = `${state.rows.length} fila${state.rows.length === 1 ? "" : "s"}`;
@@ -891,14 +937,16 @@
       const netTotalDifference = totals.diferenciaTotalNeto;
       const subtotalStatus = totals.estadoSubtotalPdf;
       const netTotalStatus = totals.estadoTotalNetoPdf;
-      const overallStatus = pdfTax === "" ? "FALTA IMPUESTO" : totals.lineasSinTotal ? "REVISAR FILAS SIN TOTAL" : totals.lineasSinUnidades ? "REVISAR FILAS SIN UNIDADES" : "CALCULADO DESDE LAS LÍNEAS";
+      const overallStatus = totals.lineasSinTasa ? "REVISAR TASAS I.V." : pdfTax === "" ? "FALTA IMPUESTO" : totals.lineasSinTotal ? "REVISAR FILAS SIN TOTAL" : totals.lineasSinUnidades ? "REVISAR FILAS SIN UNIDADES" : state.documentInfo.impuestoManual ? "IMPUESTO MANUAL" : "CALCULADO DESDE LAS LÍNEAS";
       const footerStart = state.rows.length + 3;
       XLSX.utils.sheet_add_aoa(worksheet, [
         ["Subtotal", rowSubtotal],
         ["Impuesto", pdfTax === "" ? "FALTA IMPUESTO" : pdfTax],
         ["Total Neto", calculatedNetTotal === "" ? "FALTA IMPUESTO" : calculatedNetTotal],
         ["Total de unidades", totals.totalUnidades],
-        ["Estado", overallStatus]
+        ["Estado", overallStatus],
+        ["Base gravada", totals.subtotalGravado],
+        ["Base exenta (0 %)", totals.subtotalExento]
       ], { origin: `A${footerStart}` });
       const totalColumn = defs.findIndex(def => def.key === "salidas_total");
       if (totalColumn >= 0) {
@@ -912,21 +960,26 @@
         worksheet[`B${footerStart + 3}`].f = `ROUND(SUM(${col}2:${col}${state.rows.length + 1}),2)`;
       }
       for (let i = 0; i < 4; i++) worksheet[`B${footerStart + i}`].z = "0.00";
+      worksheet[`B${footerStart + 5}`].z = "0.00";
+      worksheet[`B${footerStart + 6}`].z = "0.00";
       const summaryMatrix = [
         ["Concepto", "Valor calculado", "Fórmula / origen", "PDF impreso (solo referencia)", "Diferencia informativa", "Estado"],
         ["Subtotal", rowSubtotal, "Suma de Salidas - Total", pdfSubtotal === "" ? null : pdfSubtotal, subtotalDifference === "" ? null : subtotalDifference, pdfSubtotal === "" ? "CALCULADO" : subtotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
-        ["Impuesto", pdfTax === "" ? null : pdfTax, state.documentInfo.impuestoManual ? "Ingresado por el usuario" : "Impuesto del PDF", null, null, pdfTax === "" ? "NO DETECTADO" : "DISPONIBLE"],
+        ["Impuesto", pdfTax === "" ? null : pdfTax, state.documentInfo.impuestoManual ? "Ingresado por el usuario" : "Suma de importe × tasa I.V. por producto", totals.impuestoPdf === "" ? null : totals.impuestoPdf, totals.diferenciaImpuesto === "" ? null : totals.diferenciaImpuesto, pdfTax === "" ? "NO CALCULADO" : "DISPONIBLE"],
         ["Total Neto", calculatedNetTotal === "" ? null : calculatedNetTotal, "Subtotal + Impuesto", pdfNetTotal === "" ? null : pdfNetTotal, netTotalDifference === "" ? null : netTotalDifference, pdfNetTotal === "" ? "CALCULADO" : netTotalStatus === "CUADRA" ? "IGUAL AL PDF" : "CALCULADO DESDE LÍNEAS"],
         ["Total de unidades", totals.totalUnidades, "Suma de Salidas - Unidades", null, null, totals.lineasSinUnidades ? "REVISAR FILAS SIN UNIDADES" : "CALCULADO"],
         ["Líneas sin unidades", totals.lineasSinUnidades, "Cantidades no detectadas", null, null, totals.lineasSinUnidades ? "REVISAR" : "NINGUNA"],
         ["Filas de productos", null, state.rows.length, null, null, "DETECTADAS"],
         ["Líneas con Salidas - Total", null, totals.lineasConTotal, null, null, "DETECTADAS"],
         ["Líneas sin Salidas - Total", null, totals.lineasSinTotal, null, null, totals.lineasSinTotal ? "VACÍAS EN PDF" : "NINGUNA"],
-        ["Estado general", null, "El cálculo usa las líneas y el impuesto", null, null, overallStatus]
+        ["Estado general", null, "El cálculo usa las líneas y el impuesto", null, null, overallStatus],
+        ["Base gravada", totals.subtotalGravado, "Importes de productos con tasa I.V. mayor que 0", null, null, "CALCULADO"],
+        ["Base exenta (0 %)", totals.subtotalExento, "Importes de productos exentos", null, null, "CALCULADO"],
+        ["Líneas con tasa I.V. no reconocida", totals.lineasSinTasa, "Revisar contra el PDF", null, null, totals.lineasSinTasa ? "REVISAR" : "NINGUNA"]
       ];
       const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryMatrix);
       summaryWorksheet["!cols"] = [{ wch: 26 }, { wch: 18 }, { wch: 30 }, { wch: 26 }, { wch: 20 }, { wch: 28 }];
-      ["B2", "D2", "E2", "B3", "B4", "D4", "E4", "B5"].forEach(address => {
+      ["B2", "D2", "E2", "B3", "D3", "E3", "B4", "D4", "E4", "B5", "B11", "B12"].forEach(address => {
         if (summaryWorksheet[address] && typeof summaryWorksheet[address].v === "number") summaryWorksheet[address].z = "0.00";
       });
       XLSX.utils.book_append_sheet(workbook, summaryWorksheet, "Resumen");
@@ -938,7 +991,7 @@
         ["Referencia", state.documentInfo.referencia || ""],
         ["Destino", state.documentInfo.destino || ""],
         ["Subtotal calculado (suma de Salidas - Total)", rowSubtotal],
-        [state.documentInfo.impuestoManual ? "Impuesto ingresado por el usuario" : "Impuesto del PDF", pdfTax === "" ? "" : pdfTax],
+        [state.documentInfo.impuestoManual ? "Impuesto ingresado por el usuario" : "Impuesto calculado por producto (I.V.)", pdfTax === "" ? "" : pdfTax],
         ["Total Neto calculado (Subtotal + Impuesto)", calculatedNetTotal === "" ? "" : calculatedNetTotal],
         ["Subtotal impreso en PDF (solo referencia)", pdfSubtotal === "" ? "" : pdfSubtotal],
         ["Total Neto impreso en PDF (solo referencia)", pdfNetTotal === "" ? "" : pdfNetTotal],
@@ -950,6 +1003,11 @@
         ["Líneas sin Salidas - Total", totals.lineasSinTotal],
         ["Total de unidades (suma de Salidas - Unidades)", totals.totalUnidades],
         ["Líneas sin unidades detectadas", totals.lineasSinUnidades],
+        ["Impuesto impreso en PDF (solo referencia)", totals.impuestoPdf],
+        ["Diferencia informativa contra Impuesto", totals.diferenciaImpuesto],
+        ["Base gravada", totals.subtotalGravado],
+        ["Base exenta (0 %)", totals.subtotalExento],
+        ["Líneas con tasa I.V. no reconocida", totals.lineasSinTasa],
         ["Nota", "La hoja Respaldo original conserva las líneas de texto detectadas en el PDF."]
       ];
       const infoWorksheet = XLSX.utils.aoa_to_sheet(infoMatrix);
@@ -958,6 +1016,9 @@
         const address = `B${rowIndex}`;
         if (infoWorksheet[address] && typeof infoWorksheet[address].v === "number") infoWorksheet[address].z = "0.00";
       }
+      ["B20", "B21", "B22", "B23"].forEach(address => {
+        if (infoWorksheet[address] && typeof infoWorksheet[address].v === "number") infoWorksheet[address].z = "0.00";
+      });
       XLSX.utils.book_append_sheet(workbook, infoWorksheet, "Información");
 
       const backupMatrix = [["Página", "Línea", "Texto original"]];
@@ -992,7 +1053,8 @@
         state.rows = parsed.rows;
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
-        $("#tax-amount").value = state.documentInfo.impuesto;
+        $("#manual-tax").checked = false;
+        $("#tax-amount").value = "";
         state.available = new Set(COLUMN_DEFS.filter(def => state.rows.some(row => hasValue(row, def.key))).map(def => def.key));
         state.selected = new Set(COLUMN_DEFS.filter(def => def.default && state.available.has(def.key)).map(def => def.key));
         if (!state.selected.size && state.available.size) state.selected.add([...state.available][0]);
@@ -1022,6 +1084,9 @@
       state.documentInfo = {};
       state.originalName = "documento.pdf";
       $("#excel-file-name").value = "";
+      $("#manual-tax").checked = false;
+      $("#tax-amount").value = "";
+      $("#tax-amount").disabled = true;
       results.classList.remove("show");
       fileStatus.classList.remove("show");
       fileInput.value = "";
@@ -1038,11 +1103,20 @@
     ["dragleave", "drop"].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove("dragover"); }));
     dropZone.addEventListener("drop", event => handleFile(event.dataTransfer.files[0]));
     $("#export-button").addEventListener("click", exportExcel);
+    $("#manual-tax").addEventListener("change", event => {
+      const automaticTax = calculateTotals().impuestoCalculado;
+      state.documentInfo.impuestoManual = event.target.checked;
+      if (event.target.checked) {
+        state.documentInfo.impuestoManualImporte = automaticTax;
+        $("#tax-amount").value = automaticTax;
+      }
+      renderPreview();
+    });
     $("#tax-amount").addEventListener("input", event => {
+      if (!state.documentInfo.impuestoManual) return;
       const raw = event.target.value;
       const amount = Number(raw);
-      state.documentInfo.impuesto = raw !== "" && Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : "";
-      state.documentInfo.impuestoManual = true;
+      state.documentInfo.impuestoManualImporte = raw !== "" && Number.isFinite(amount) && amount >= 0 ? roundMoney(amount) : "";
       renderPreview();
     });
     $("#reset-button").addEventListener("click", resetApp);
