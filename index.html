@@ -390,6 +390,11 @@
             <input id="tax-amount" type="number" min="0" step="0.01" placeholder="Ingrese el impuesto" style="padding:10px;width:180px;border:1px solid #aaa;border-radius:8px">
             <p id="totals-warning" style="color:#a52818"></p>
           </div>
+          <div class="rename-row" style="margin-top:20px">
+            <label for="excel-file-name">Nombre del archivo Excel</label>
+            <input id="excel-file-name" type="text" maxlength="120" placeholder="Ejemplo: Salidas octubre" aria-describedby="excel-file-name-help">
+          </div>
+          <p class="panel-subtitle" id="excel-file-name-help">Escribe el nombre que quieres usar al descargar. La extensión .xlsx se añade automáticamente.</p>
           <div class="export-bar">
             <div class="export-hint" id="export-hint">Selecciona por lo menos una columna para exportar.</div>
             <div class="export-actions">
@@ -827,8 +832,15 @@
     }
 
     function safeFileName(name) {
-      const base = String(name || "documento").replace(/\.pdf$/i, "").replace(/[^a-z0-9áéíóúüñ _-]/gi, "").trim() || "documento";
-      return `${base}_seleccion.xlsx`;
+      const base = String(name || "").replace(/(?:\.xlsx)+$/i, "")
+        .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "").trim().replace(/[. ]+$/, "");
+      if (!base) return "documento.xlsx";
+      const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(base);
+      return `${reserved ? "_" : ""}${base}.xlsx`;
+    }
+
+    function defaultExcelName() {
+      return `${state.originalName.replace(/\.pdf$/i, "")}_seleccion`;
     }
 
     function exportExcel() {
@@ -942,7 +954,9 @@
       backupWorksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
       backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
-      XLSX.writeFile(workbook, safeFileName(state.originalName), { bookType: "xlsx" });
+      const fileName = safeFileName($("#excel-file-name").value.trim() || defaultExcelName());
+      $("#excel-file-name").value = fileName.replace(/\.xlsx$/i, "");
+      XLSX.writeFile(workbook, fileName, { bookType: "xlsx" });
       updateStep(4);
     }
 
@@ -953,6 +967,7 @@
       }
       hideMessage();
       state.originalName = file.name;
+      $("#excel-file-name").value = safeFileName(defaultExcelName()).replace(/\.xlsx$/i, "");
       fileStatus.classList.add("show");
       $("#file-name").textContent = file.name;
       $("#file-detail").textContent = "Leyendo tabla...";
@@ -993,6 +1008,7 @@
       state.rawLines = [];
       state.documentInfo = {};
       state.originalName = "documento.pdf";
+      $("#excel-file-name").value = "";
       results.classList.remove("show");
       fileStatus.classList.remove("show");
       fileInput.value = "";

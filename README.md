@@ -21,6 +21,10 @@ Abre el enlace publicado, selecciona un PDF con texto, marca las columnas y puls
 
 No hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js y SheetJS están incluidas y usan rutas relativas compatibles con GitHub Pages.
 
+## Nombre del archivo Excel
+
+Después de cargar un PDF, edita **Nombre del archivo Excel** antes de descargar. La descarga usa ese nombre y añade `.xlsx` automáticamente. Si dejas el campo vacío, se utiliza el nombre sugerido a partir del PDF.
+
 ## Uso local
 
 En Windows puedes abrir `abrir_app.bat`. También puedes ejecutar `python -m http.server 8000` desde esta carpeta y abrir `http://localhost:8000`.
