@@ -209,16 +209,26 @@
       const error = new Error("No se pudo completar la operación con Supabase.");
       error.status = response.status;
       error.code = detail.code || detail.error_code || detail.error;
+      const authCode = typeof error.code === "string" ? error.code.toLowerCase() : "";
       if ((response.status === 404 && path.startsWith("/rest/")) || detail.code === "PGRST205" || detail.code === "42P01" || detail.code === "PGRST202") {
         error.message = "Configuración inicial pendiente. Revisa la guía de Supabase y ejecuta el archivo SQL de instalación.";
       } else if (response.status === 404 && path.startsWith("/storage/")) {
         error.message = "No se encontró el documento cifrado de esta salida. Solicita al administrador que revise el almacenamiento.";
-      } else if (path.startsWith("/auth/") && (detail.error_code === "invalid_credentials" || detail.error === "invalid_grant")) {
+      } else if (path.startsWith("/auth/") && (authCode === "invalid_credentials" || authCode === "invalid_grant")) {
         error.message = "El usuario o la contraseña no coinciden. Respeta las mayúsculas y los espacios de la contraseña que creaste para esta versión.";
-      } else if (detail.error_code === "email_not_confirmed") {
+      } else if (authCode === "email_not_confirmed") {
         error.message = "La confirmación por correo está activada. Desactívala en Supabase según la guía: este acceso utiliza usuario y contraseña.";
-      } else if (detail.error_code === "user_already_exists" || detail.error_code === "email_exists") {
+      } else if (authCode === "signup_disabled" || authCode === "signup_not_allowed") {
+        error.message = "Supabase tiene desactivado el registro de usuarios. Activa «Allow new users to sign up» en Authentication → Sign In / Providers → Email.";
+      } else if (authCode === "email_address_invalid" || authCode === "email_address_not_authorized") {
+        error.message = "Supabase rechazó el identificador interno. Comprueba que el proveedor Email esté activado y que Confirm email esté desactivado.";
+      } else if (authCode === "user_already_exists" || authCode === "email_exists") {
         error.message = "Ese usuario ya existe. Usa otro nombre o su contraseña actual para darle acceso.";
+      } else if (path.startsWith("/auth/") && authCode) {
+        // A safe provider code is more useful than the old generic message, but
+        // never expose the response body, password, token or internal URL.
+        const safeCode = authCode.replace(/[^a-z0-9_.-]/g, "").slice(0, 64) || "desconocido";
+        error.message = "Supabase rechazó la operación (código " + safeCode + ", HTTP " + response.status + "). Revisa la configuración de Authentication y vuelve a intentarlo.";
       } else if (response.status === 429) {
         error.message = "Se hicieron demasiados intentos. Espera unos minutos y vuelve a intentarlo.";
       } else if (response.status === 401 && !options.anonymous) {
@@ -302,10 +312,33 @@
     validateConfiguration();
     const normalized = window.AuditCrypto.normalizeUsername(rawUsername);
     const unlock = await window.AuditCrypto.unlockUser(normalized, password, CONFIG.workspace);
+    // Supabase exposes these settings without an authenticated session. Check
+    // them before deriving/sending the signup request so an installation error
+    // is actionable instead of appearing as a generic provider failure.
+    let settings;
+    try {
+      settings = await request("/auth/v1/settings", { anonymous: true });
+    } catch (error) {
+      // Older GoTrue versions may not expose this endpoint. The signup request
+      // still returns a specific provider error, so preserve compatibility.
+      if (error.status !== 404) throw error;
+    }
+    if (settings && settings.external && settings.external.email === false) {
+      throw new Error("Supabase tiene desactivado el proveedor Email. Actívalo en Authentication → Sign In / Providers → Email.");
+    }
+    if (settings && settings.disable_signup === true) {
+      throw new Error("Supabase tiene desactivado el registro. Activa «Allow new users to sign up» en Authentication → Sign In / Providers → Email.");
+    }
+    if (settings && settings.mailer_autoconfirm === false) {
+      throw new Error("Supabase está esperando confirmación por correo. Desactiva «Confirm email»: este acceso usa usuario y contraseña y no envía correos reales.");
+    }
     const result = await request("/auth/v1/signup", {
       method: "POST", anonymous: true,
       body: { email: normalized + "@" + ALIAS_DOMAIN, password: unlock.authPassword }
     });
+    if (result && result.user && !result.access_token) {
+      throw new Error("Supabase creó la cuenta, pero exige confirmar un correo. Desactiva «Confirm email» en Authentication y después inicia sesión con el usuario y la contraseña que acabas de crear.");
+    }
     const verified = acceptSession(result);
     if (verified.user.email !== normalized + "@" + ALIAS_DOMAIN) throw new Error("No se pudo verificar la cuenta creada. Revisa la configuración de acceso.");
     return { username: normalized, unlock, userId: verified.user.id };
