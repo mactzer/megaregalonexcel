@@ -23,12 +23,16 @@ jobs:
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
+      - name: Verificar conversión y auditoría interna
+        run: |
+          node --test tests/*.test.cjs
+          python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Configurar Pages
         uses: actions/configure-pages@v5
       - name: Preparar sitio
         run: |
           mkdir _site
-          cp index.html excel-table.js .nojekyll _site/
+          cp index.html excel-table.js audit.html audit.js audit.css .nojekyll _site/
           cp -R vendor _site/
       - name: Subir sitio
         uses: actions/upload-pages-artifact@v3

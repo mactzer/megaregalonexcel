@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auditoría de salidas | PDF a Excel</title>
+  <link rel="stylesheet" href="audit.css">
+  <script src="audit.js" defer></script>
+</head>
+<body class="audit-document">
+  <header class="audit-header">
+    <div class="audit-shell">
+      <a class="audit-back" href="index.html">← PDF a Excel</a>
+      <h1>Auditoría de salidas</h1>
+      <p>Historial compartido: quién generó cada salida, cuándo y sus documentos.</p>
+    </div>
+  </header>
+  <main class="audit-shell audit-main">
+    <div id="audit-bar" aria-live="polite"></div>
+    <div id="audit-page"></div>
+    <noscript><p class="audit-message audit-error">Activa JavaScript para consultar el historial.</p></noscript>
+  </main>
+  <footer class="audit-footer audit-shell">Creado por Eddie Rivera. © 2026 Eddie Rivera. Todos los derechos reservados.</footer>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # PDF a Excel — Selector de columnas
 
-Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. Funciona directamente en el navegador; los PDF no se envían a un servidor. No incluye OCR para documentos escaneados.
+Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. La conversión se realiza en el navegador. En GitHub Pages los documentos permanecen en tu computadora; en la versión interna con auditoría se guardan también en la computadora que comparte el historial dentro de la empresa. No incluye OCR para documentos escaneados.
 
 ## Autoría y condiciones de uso
 
@@ -27,7 +27,17 @@ Enlace previsto: https://mactzer.github.io/megaregalonexcel/
 
 Abre el enlace publicado, selecciona un PDF con texto, marca las columnas y pulsa **Descargar Excel**. Usa la dirección de GitHub Pages; la vista del archivo en github.com muestra el código.
 
-No hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js y SheetJS están incluidas y usan rutas relativas compatibles con GitHub Pages.
+Para el convertidor de GitHub Pages no hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js y SheetJS están incluidas y usan rutas relativas compatibles con GitHub Pages.
+
+## Auditoría compartida en la red de la empresa
+
+La versión interna permite buscar las salidas y consultar quién generó cada Excel y a qué fecha y hora. Conserva el PDF original y el Excel generado, con descargas protegidas por cuentas individuales. Todos los compañeros conectados a la misma instalación comparten el historial. Los registros se guardan antes de iniciar la descarga: un error al guardar impide una descarga sin registro.
+
+Una computadora autorizada dentro de la empresa aloja la aplicación completa y su base de datos SQLite. No utiliza servicios de nube ni requiere acceso al servidor central. Necesita Python 3.10 o posterior, permanecer encendida y permitir acceso desde las computadoras de los compañeros. El enlace público de GitHub Pages conserva el convertidor; el historial compartido se utiliza desde la dirección interna.
+
+En Windows, extrae el proyecto completo y abre **`iniciar_auditoria.bat`**. El primer inicio crea la cuenta administradora. Abre `http://127.0.0.1:8080/` y crea las cuentas de tus compañeros desde la auditoría. Comparte la dirección IPv4 de esa computadora con el puerto `8080`.
+
+Consulta [la guía de instalación, respaldos y HTTPS](intranet/LEEME.md). HTTP no cifra las contraseñas ni los documentos en la red; la guía explica cómo utilizar un certificado de la empresa. Los datos se guardan fuera del repositorio y no se suben a GitHub.
 
 ## Nombre del archivo Excel
 

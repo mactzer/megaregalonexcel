@@ -2,6 +2,9 @@ PDF A EXCEL - SELECTOR DE COLUMNAS
 
 VERSION 6 - TOTALES EN LA HOJA DATOS
 Extrae todo el ZIP antes de abrir index.html o abrir_app.bat.
+Para auditoría compartida entre compañeros, abre iniciar_auditoria.bat
+en la computadora interna que guardará los documentos; requiere Python 3.10+.
+Consulta intranet/LEEME.md para cuentas, acceso local, respaldos y HTTPS.
 El Subtotal, Impuesto y Total Neto aparecen debajo de los productos en Datos.
 Si incluyes Salidas - Total, el Subtotal usa una fórmula SUM en Excel.
 Si no incluyes esa columna, se exporta la suma calculada al convertir el archivo.
@@ -66,7 +69,9 @@ como "01".
 
 Privacidad
 ----------
-La lectura se realiza localmente en el navegador. El PDF no se sube a ningún servicio.
+La lectura se realiza localmente en el navegador. En GitHub Pages, el PDF no se sube.
+En la versión interna con auditoría, el PDF y el Excel se guardan también en
+la computadora que comparte el historial dentro de la empresa.
 Las librerías necesarias están incluidas dentro de la carpeta "vendor".
 
 Limitación actual

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PDF a Excel | Selector de columnas</title>
+  <link rel="stylesheet" href="audit.css">
   <style>
     :root {
       --ink: #191b22;
@@ -335,6 +336,7 @@
   </header>
 
   <main class="page">
+    <div id="audit-bar" aria-live="polite"></div>
     <div class="steps" aria-label="Pasos">
       <div class="step active" id="step-upload"><strong>1</strong><span>Cargar PDF</span></div>
       <div class="step" id="step-select"><strong>2</strong><span>Escoger columnas</span></div>
@@ -418,6 +420,7 @@
   <script src="vendor/pdf.min.js"></script>
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="excel-table.js"></script>
+  <script src="audit.js"></script>
   <script>
     "use strict";
 
@@ -448,7 +451,10 @@
       names: Object.fromEntries(COLUMN_DEFS.map(c => [c.key, c.label])),
       available: new Set(),
       originalName: "documento.pdf",
-      salidaNumero: ""
+      originalFile: null,
+      salidaNumero: "",
+      exporting: false,
+      pendingAudit: null
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -695,9 +701,9 @@
 
     async function getDocument(data) {
       try {
-        return await pdfjsLib.getDocument({ data }).promise;
+        return await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
       } catch (workerError) {
-        return await pdfjsLib.getDocument({ data, disableWorker: true }).promise;
+        return await pdfjsLib.getDocument({ data, disableWorker: true, isEvalSupported: false }).promise;
       }
     }
 
@@ -887,7 +893,7 @@
         return `<tr>${cells}</tr>`;
       }).join("");
       tableWrap.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
-      $("#export-button").disabled = false;
+      $("#export-button").disabled = state.exporting;
       $("#export-hint").textContent = `${defs.length} columna${defs.length === 1 ? "" : "s"} seleccionada${defs.length === 1 ? "" : "s"}. Se exportarán ${state.rows.length} filas.`;
       updateStep(3);
     }
@@ -904,7 +910,8 @@
       return `Salida${state.salidaNumero ? " " + state.salidaNumero : ""}`;
     }
 
-    function exportExcel() {
+    async function exportExcel() {
+      if (state.exporting) return;
       const defs = selectedDefs();
       if (!defs.length || !state.rows.length) return;
       if (!/^\d+$/.test(state.salidaNumero)) {
@@ -1046,26 +1053,65 @@
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
       const fileName = safeFileName(defaultExcelName());
       $("#excel-file-name").value = fileName;
-      const fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
-      const url = URL.createObjectURL(new Blob([fileBytes], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-      }));
-      const downloadLink = document.createElement("a");
-      downloadLink.href = url;
-      downloadLink.download = fileName;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      downloadLink.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
-      updateStep(4);
+      let fileBytes;
+      let auditRecord = null;
+      state.exporting = true;
+      $("#export-button").disabled = true;
+      $("#export-button").textContent = "Preparando Excel…";
+      try {
+        if (!window.AuditClient) throw new Error("No se pudo cargar la función de auditoría. Actualiza la página antes de descargar.");
+        const signature = JSON.stringify({ salida: state.salidaNumero, columns: defs.map(def => def.key), headers, rows: state.rows, info: state.documentInfo });
+        const cached = state.pendingAudit;
+        if (cached && cached.signature === signature && cached.pdfFile === state.originalFile) {
+          fileBytes = cached.excelBytes;
+        } else {
+          fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
+          state.pendingAudit = {
+            signature,
+            salidaNumero: state.salidaNumero,
+            pdfFile: state.originalFile,
+            excelBytes: fileBytes,
+            rowCount: state.rows.length,
+            totalUnits: totals.totalUnidades,
+            idempotencyKey: window.AuditClient.newIdempotencyKey()
+          };
+        }
+        $("#export-button").textContent = "Guardando y descargando…";
+        auditRecord = await window.AuditClient.record(state.pendingAudit);
+        const url = URL.createObjectURL(new Blob([fileBytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        }));
+        const downloadLink = document.createElement("a");
+        downloadLink.href = url;
+        downloadLink.download = fileName;
+        document.body.appendChild(downloadLink);
+        downloadLink.click();
+        downloadLink.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        updateStep(4);
+        state.pendingAudit = null;
+        if (auditRecord) showMessage(`Salida ${auditRecord.salida_numero} guardada en el historial compartido. Excel preparado para descargar.`, "info");
+      } catch (error) {
+        showMessage(error.message || "No se pudo guardar la salida. Intenta descargar de nuevo.", "error");
+      } finally {
+        state.exporting = false;
+        $("#export-button").textContent = "Descargar Excel";
+        $("#export-button").disabled = !selectedDefs().length || !state.rows.length;
+      }
     }
 
     async function handleFile(file) {
+      if (state.exporting) {
+        showMessage("Espera a que termine la descarga antes de cargar otro PDF.", "info");
+        return;
+      }
       if (!file || !/\.pdf$/i.test(file.name)) {
         showMessage("Selecciona un archivo PDF válido.", "error");
         return;
       }
       hideMessage();
+      state.originalFile = null;
+      state.pendingAudit = null;
       state.originalName = file.name;
       state.salidaNumero = "";
       $("#salida-number").value = "";
@@ -1081,6 +1127,7 @@
         state.rows = parsed.rows;
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
+        state.originalFile = file;
         state.salidaNumero = state.documentInfo.numero || "";
         $("#salida-number").value = state.salidaNumero;
         $("#excel-file-name").value = safeFileName(defaultExcelName());
@@ -1110,10 +1157,13 @@
     }
 
     function resetApp() {
+      if (state.exporting) return;
       state.rows = [];
       state.rawLines = [];
       state.documentInfo = {};
       state.originalName = "documento.pdf";
+      state.originalFile = null;
+      state.pendingAudit = null;
       state.salidaNumero = "";
       $("#salida-number").value = "";
       $("#excel-file-name").value = "";
