@@ -733,20 +733,37 @@
     page.replaceChildren();
     if (!status().authenticated || page.hidden) return;
     const panel = node("section", undefined, "audit-panel");
-    panel.append(node("h2", "Buscar una salida"));
-    panel.append(node("p", "Busca el número exacto, incluidos sus ceros iniciales. La fecha y la hora las registra Supabase; los documentos se descifran únicamente en tu navegador.", "audit-muted"));
+    panel.append(node("h2", "Historial de salidas"));
+    panel.append(node("p", "Busca por número, filtra por fecha y abre el PDF o el Excel original. La fecha y la hora las registra Supabase; los documentos se descifran únicamente en tu navegador.", "audit-muted"));
+    const overview = node("div", undefined, "audit-stats");
+    function stat(label, value) {
+      const card = node("div", undefined, "audit-stat");
+      const number = node("strong", value, "audit-stat-value");
+      card.append(number, node("span", label, "audit-stat-label"));
+      overview.append(card);
+      return number;
+    }
+    const totalStat = stat("Salidas encontradas", "—");
+    const unitsStat = stat("Unidades visibles", "—");
+    const latestStat = stat("Última fecha", "—");
+    panel.append(overview);
     const form = node("form", undefined, "audit-form audit-search");
     const search = field(form, "Número de salida", "search", "search", { required: false, maxLength: 60, placeholder: "Ejemplo: 29307", autocomplete: "off" });
     search.parentElement.classList.add("audit-field-wide");
+    const from = field(form, "Desde", "from", "date", { required: false, autocomplete: "off" });
+    const to = field(form, "Hasta", "to", "date", { required: false, autocomplete: "off" });
     const submit = button("Buscar");
     submit.type = "submit";
     const clear = button("Ver todas", true);
-    form.append(submit, clear);
+    const refresh = button("Actualizar", true);
+    form.append(submit, clear, refresh);
     const result = node("div");
     const recordsArea = node("div");
     panel.append(form, result, recordsArea);
     page.append(panel);
     let query = "";
+    let fromValue = "";
+    let toValue = "";
     let pageNumber = 1;
     let loadGeneration = 0;
     async function loadRecords() {
@@ -755,10 +772,17 @@
       const key = master;
       result.replaceChildren();
       recordsArea.replaceChildren(node("p", "Cargando y descifrando el historial…", "audit-state"));
-      submit.disabled = clear.disabled = true;
+      totalStat.textContent = unitsStat.textContent = latestStat.textContent = "—";
+      submit.disabled = clear.disabled = refresh.disabled = true;
       try {
         let path = "/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=*&order=created_at.desc,id.desc&limit=" + PAGE_SIZE + "&offset=" + ((pageNumber - 1) * PAGE_SIZE);
         if (query) path += "&salida_tag=eq." + await key.blindIndex(query);
+        if (fromValue) path += "&created_at=gte." + encodeURIComponent(fromValue + "T00:00:00-05:00");
+        if (toValue) {
+          const end = new Date(toValue + "T00:00:00-05:00");
+          end.setUTCDate(end.getUTCDate() + 1);
+          path += "&created_at=lt." + encodeURIComponent(end.toISOString());
+        }
         const responses = await Promise.all([
           request(path, { headers: { Prefer: "count=exact" }, raw: true }),
           rpc("mega_audit_authors", { p_workspace_id: CONFIG.workspace })
@@ -773,9 +797,17 @@
         if (!Array.isArray(rows)) throw new Error("El historial recibido no es válido.");
         const outcomes = await Promise.allSettled(rows.map(function (record) { return decryptedRecord(record, key); }));
         if (epoch !== generation || pageEpoch !== pageGeneration || sequence !== loadGeneration) return;
+        const decoded = outcomes.filter(function (outcome) { return outcome.status === "fulfilled"; }).map(function (outcome) { return outcome.value; });
+        const range = response.headers.get("Content-Range") || "";
+        const count = /\/(\d+)$/.exec(range);
+        const total = count ? Number(count[1]) : rows.length;
+        totalStat.textContent = String(total);
+        unitsStat.textContent = decoded.reduce(function (sum, record) { return sum + (Number(record.total_units) || 0); }, 0).toLocaleString("es-PA", { maximumFractionDigits: 2 });
+        latestStat.textContent = decoded.length ? formatWhen(decoded[0].created_at).date : "—";
         recordsArea.replaceChildren();
         if (!rows.length) {
-          recordsArea.append(node("p", query ? "No hay salidas con ese número." : "Todavía no hay salidas registradas. Descarga un Excel en el conversor para crear el primer registro.", "audit-empty"));
+          const filtered = query || fromValue || toValue;
+          recordsArea.append(node("p", filtered ? "No hay salidas con los filtros indicados." : "Todavía no hay salidas registradas. Descarga un Excel en el conversor para crear el primer registro.", "audit-empty"));
         } else {
           const wrap = node("div", undefined, "audit-table-wrap");
           const table = node("table", undefined, "audit-table");
@@ -827,16 +859,13 @@
           recordsArea.append(wrap);
           if (failedRows) feedback(result, failedRows + (failedRows === 1 ? " salida no pudo descifrarse" : " salidas no pudieron descifrarse") + ". Las demás se muestran. Solicita al administrador que revise los registros indicados.", true);
         }
-        const range = response.headers.get("Content-Range") || "";
-        const count = /\/(\d+)$/.exec(range);
-        const total = count ? Number(count[1]) : null;
         const pagination = node("div", undefined, "audit-pagination");
-        pagination.append(node("span", total === null ? "Página " + pageNumber : total + (total === 1 ? " salida" : " salidas") + " · Página " + pageNumber + " de " + Math.max(1, Math.ceil(total / PAGE_SIZE)), "audit-muted"));
+        pagination.append(node("span", total + (total === 1 ? " salida" : " salidas") + " · Página " + pageNumber + " de " + Math.max(1, Math.ceil(total / PAGE_SIZE)), "audit-muted"));
         const actions = node("div", undefined, "audit-actions");
         const previous = button("Anterior", true);
         const next = button("Siguiente", true);
         previous.disabled = pageNumber <= 1;
-        next.disabled = total === null ? rows.length < PAGE_SIZE : pageNumber * PAGE_SIZE >= total;
+        next.disabled = pageNumber * PAGE_SIZE >= total;
         previous.addEventListener("click", function () { pageNumber--; loadRecords(); });
         next.addEventListener("click", function () { pageNumber++; loadRecords(); });
         actions.append(previous, next);
@@ -847,7 +876,7 @@
         recordsArea.replaceChildren();
         feedback(result, errorText(error), true);
       } finally {
-        if (pageEpoch === pageGeneration && sequence === loadGeneration) submit.disabled = clear.disabled = false;
+        if (pageEpoch === pageGeneration && sequence === loadGeneration) submit.disabled = clear.disabled = refresh.disabled = false;
       }
     }
     form.addEventListener("submit", function (event) {
@@ -857,11 +886,18 @@
         feedback(result, "Ingresa solo el número exacto de la salida.", true);
         return;
       }
+      if (from.value && to.value && from.value > to.value) {
+        feedback(result, "La fecha «Desde» no puede ser posterior a «Hasta».", true);
+        return;
+      }
       query = value;
+      fromValue = from.value;
+      toValue = to.value;
       pageNumber = 1;
       loadRecords();
     });
-    clear.addEventListener("click", function () { search.value = ""; query = ""; pageNumber = 1; loadRecords(); });
+    clear.addEventListener("click", function () { search.value = ""; from.value = ""; to.value = ""; query = ""; fromValue = ""; toValue = ""; pageNumber = 1; loadRecords(); });
+    refresh.addEventListener("click", function () { loadRecords(); });
     loadRecords();
   }
 
