@@ -48,7 +48,13 @@
   }
 
   function errorText(error) {
-    return error && error.message ? error.message : "No se pudo completar la operación. Inténtalo nuevamente.";
+    const message = error && error.message ? error.message : "";
+    if (message === "No se pudo completar la operación con Supabase.") {
+      const status = error && error.status ? " HTTP " + error.status : "";
+      const code = error && typeof error.code === "string" ? error.code.replace(/[^a-z0-9_.-]/gi, "").slice(0, 64) : "sin_codigo";
+      return "Supabase rechazó la operación (código " + (code || "sin_codigo") + status + "). Revisa que Email esté activado y que el usuario y la contraseña sean los de esta aplicación.";
+    }
+    return message || "No se pudo completar la operación. Inténtalo nuevamente.";
   }
 
   function field(form, labelText, name, type, options) {
