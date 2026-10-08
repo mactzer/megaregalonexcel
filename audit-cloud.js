@@ -601,6 +601,7 @@
         });
         note.append(download);
         panel.append(note);
+        renderUserManagement(panel);
       }
     } else {
       panel.append(node("h2", "Inicia sesión en la auditoría"));
@@ -845,11 +846,11 @@
     });
     clear.addEventListener("click", function () { search.value = ""; query = ""; pageNumber = 1; loadRecords(); });
     loadRecords();
-    if (member.role === "admin") renderUserManagement(page, pageEpoch);
   }
 
-  function renderUserManagement(page, pageEpoch) {
-    const details = node("details", undefined, "audit-panel audit-admin");
+  function renderUserManagement(parent) {
+    const userGeneration = generation;
+    const details = node("details", undefined, "audit-admin");
     details.append(node("summary", "Administrar usuarios"));
     const body = node("div", undefined, "audit-admin-body");
     body.append(node("p", "Crea una cuenta por compañero. Su contraseña desbloquea una copia cifrada de la clave del equipo; nunca se envía a Supabase tal como la escribes.", "audit-muted"));
@@ -876,13 +877,13 @@
     const usersArea = node("div");
     body.append(form, result, usersArea);
     details.append(body);
-    page.append(details);
+    parent.append(details);
     let loaded = false;
     async function loadUsers() {
       usersArea.replaceChildren(node("p", "Cargando usuarios…", "audit-state"));
       try {
         const users = await rpc("mega_audit_list_members", { p_workspace_id: CONFIG.workspace });
-        if (pageEpoch !== pageGeneration) return;
+        if (userGeneration !== generation) return;
         if (!Array.isArray(users)) throw new Error("La lista de usuarios no es válida.");
         const wrap = node("div", undefined, "audit-table-wrap");
         const table = node("table", undefined, "audit-table");
@@ -905,7 +906,7 @@
         wrap.append(table);
         usersArea.replaceChildren(wrap);
       } catch (error) {
-        if (pageEpoch !== pageGeneration) return;
+        if (userGeneration !== generation) return;
         usersArea.replaceChildren();
         feedback(result, errorText(error), true);
       }
@@ -923,13 +924,13 @@
       feedback(result, "Creando usuario y cifrando su acceso…", false);
       try {
         await createMember(name.value, password.value, role.value);
-        if (pageEpoch !== pageGeneration) return;
+        if (userGeneration !== generation) return;
         form.reset();
         feedback(result, "Usuario creado. Ya puede iniciar sesión con su usuario y contraseña.", false);
         loaded = true;
         await loadUsers();
       } catch (error) {
-        if (pageEpoch === pageGeneration) feedback(result, errorText(error), true);
+        if (userGeneration === generation) feedback(result, errorText(error), true);
       } finally { submit.disabled = false; }
     });
   }

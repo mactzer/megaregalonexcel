@@ -83,7 +83,7 @@
 .audit-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .audit-documents { display: flex; flex-wrap: wrap; gap: 7px; min-width: 140px; }
 .audit-pagination { justify-content: space-between; margin-top: 16px; }
-.audit-admin { margin-top: 22px; }
+.audit-admin { margin-top: 18px; padding-top: 15px; border-top: 1px solid #e1e5ec; }
 .audit-admin summary { cursor: pointer; font-weight: 750; font-size: 16px; }
 .audit-admin-body { margin-top: 18px; }
 .audit-empty { padding: 24px 12px; text-align: center; color: #6b7280; }
