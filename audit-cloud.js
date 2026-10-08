@@ -581,6 +581,13 @@
         });
         actions.append(history);
       }
+      let adminToggle = null;
+      if (member.role === "admin") {
+        adminToggle = button("Administrar usuarios", true);
+        adminToggle.setAttribute("aria-expanded", "false");
+        adminToggle.setAttribute("aria-controls", "audit-admin-panel");
+        actions.append(adminToggle);
+      }
       const logout = button("Cerrar sesión", true);
       logout.addEventListener("click", async function () {
         logout.disabled = true;
@@ -601,7 +608,17 @@
         });
         note.append(download);
         panel.append(note);
-        renderUserManagement(panel);
+        const adminDetails = renderUserManagement(panel);
+        adminDetails.id = "audit-admin-panel";
+        adminDetails.hidden = true;
+        adminToggle.addEventListener("click", function () {
+          const open = adminDetails.hidden;
+          adminDetails.hidden = !open;
+          adminDetails.open = open;
+          adminToggle.setAttribute("aria-expanded", open ? "true" : "false");
+          adminToggle.textContent = open ? "Ocultar usuarios" : "Administrar usuarios";
+          if (open) adminDetails.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        });
       }
     } else {
       panel.append(node("h2", "Inicia sesión en la auditoría"));
@@ -933,6 +950,7 @@
         if (userGeneration === generation) feedback(result, errorText(error), true);
       } finally { submit.disabled = false; }
     });
+    return details;
   }
 
   function initialise() {
