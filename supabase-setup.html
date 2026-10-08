@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Preparar Supabase | PDF a Excel</title>
+  <link rel="stylesheet" href="audit.css">
+</head>
+<body class="audit-document">
+  <header class="audit-header"><div class="audit-shell"><a class="audit-back" href="index.html">← PDF a Excel</a><h1>Preparar la auditoría en Supabase</h1><p>Estos pasos se realizan una vez desde la cuenta dueña del proyecto.</p></div></header>
+  <main class="audit-shell audit-main">
+    <section class="audit-panel">
+      <h2>1. Crear las tablas y los permisos</h2>
+      <p>Abre <a href="https://supabase.com/dashboard/project/aixsnmsmgyejcbtuilwt/sql/new" target="_blank" rel="noopener noreferrer">SQL Editor de tu proyecto</a>. Pulsa el botón, pega el script en una consulta nueva y pulsa <strong>Run</strong>.</p>
+      <button class="audit-button" id="copy-schema" type="button">Copiar script de instalación</button>
+      <p id="schema-message" role="status"></p>
+      <details><summary>Ver el script si no puedes copiarlo</summary><textarea id="schema-text" readonly rows="12" style="width:100%;margin-top:12px" aria-label="Script de instalación"></textarea></details>
+    </section>
+    <section class="audit-panel">
+      <h2>2. Habilitar usuario y contraseña</h2>
+      <p>En Supabase entra en <strong>Authentication → Sign In / Providers → Email</strong>. Activa el proveedor y el registro de usuarios; desactiva <strong>Confirm email</strong>. La página utilizará identificadores internos y tus compañeros solo escribirán su usuario y contraseña.</p>
+      <p>Después, <a href="audit.html">abre la auditoría</a> y pulsa <strong>Crear mi cuenta</strong>. Usa una contraseña de al menos 12 caracteres. La contraseña de la versión local no se transfiere.</p>
+    </section>
+    <section class="audit-panel">
+      <h2>3. Activar tu cuenta administradora</h2>
+      <p>Al crear tu cuenta, vuelve aquí con su identificador. También puedes copiar su <strong>User UID</strong> desde <strong>Authentication → Users</strong> en Supabase. Verifica que el usuario corresponde a la cuenta que acabas de crear.</p>
+      <form id="admin-form" class="audit-form">
+        <div class="audit-field"><label for="owner-name">Tu usuario</label><input id="owner-name" required maxlength="32" autocomplete="username" placeholder="Ejemplo: eddie"></div>
+        <div class="audit-field"><label for="owner-id">User UID de tu cuenta</label><input id="owner-id" required autocomplete="off" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"></div>
+        <button class="audit-button" type="submit">Copiar activación de administrador</button>
+      </form>
+      <p id="admin-message" role="status"></p>
+      <textarea id="admin-text" readonly rows="8" style="width:100%" aria-label="Script de activación del administrador"></textarea>
+      <p>Pega esta activación en <strong>SQL Editor</strong> y pulsa <strong>Run</strong>. Luego vuelve a la auditoría e inicia sesión. Desde allí podrás crear las cuentas de tus compañeros.</p>
+    </section>
+    <section class="audit-panel"><h2>Conservar el acceso a los documentos</h2><p>Descarga la copia de recuperación de la clave desde la cuenta administradora y guárdala en un lugar protegido. No la subas a GitHub ni a Supabase. Los archivos y el contenido se cifran antes de subir; Supabase conserva las cuentas, fechas, tamaños y archivos cifrados.</p><p><a href="supabase/LEEME.md">Guía completa</a></p></section>
+  </main>
+  <footer class="audit-footer audit-shell">Creado por Eddie Rivera. © 2026 Eddie Rivera. Todos los derechos reservados.</footer>
+  <script>
+    "use strict";
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const USER = /^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$/;
+    const query = new URLSearchParams(location.search);
+    if (UUID.test(query.get("user") || "")) document.getElementById("owner-id").value = query.get("user");
+    const suggested = (query.get("username") || "").trim().toLowerCase();
+    if (USER.test(suggested) && !suggested.includes("..")) document.getElementById("owner-name").value = suggested;
+    async function copyText(text, target, fallback) {
+      fallback.value = text;
+      try {
+        await navigator.clipboard.writeText(text);
+        target.textContent = "Copiado. Pégalo en SQL Editor y pulsa Run.";
+      } catch (_) {
+        const details = fallback.closest("details");
+        if (details) details.open = true;
+        fallback.focus(); fallback.select();
+        target.textContent = "Seleccioné el script. Pulsa Ctrl+C para copiarlo.";
+      }
+    }
+    document.getElementById("copy-schema").addEventListener("click", async function () {
+      this.disabled = true;
+      try {
+        const response = await fetch("supabase/auditoria.sql", { cache: "no-store" });
+        if (!response.ok) throw new Error("No se pudo cargar el script. Actualiza la página.");
+        await copyText(await response.text(), document.getElementById("schema-message"), document.getElementById("schema-text"));
+      } catch (error) { document.getElementById("schema-message").textContent = error.message; }
+      finally { this.disabled = false; }
+    });
+    document.getElementById("admin-form").addEventListener("submit", async function (event) {
+      event.preventDefault();
+      const id = document.getElementById("owner-id").value.trim().toLowerCase();
+      const username = document.getElementById("owner-name").value.trim().toLowerCase();
+      const target = document.getElementById("admin-message");
+      if (!UUID.test(id) || !USER.test(username) || username.includes("..")) {
+        target.textContent = "Revisa el usuario y copia el User UID completo de tu propia cuenta.";
+        return;
+      }
+      const sql = `do $$\nbegin\n  if not exists (select 1 from auth.users where id = '${id}'::uuid and email = '${username}@usuarios.megaregalonexcel.invalid' and email_confirmed_at is not null) then\n    raise exception 'El UID no corresponde a ese usuario confirmado. Revisa Authentication Users y Confirm email.';\n  end if;\n  insert into public.mega_audit_members(workspace_id, user_id, role) values ('86551e44-7504-4d30-b453-c9e04b269a43', '${id}'::uuid, 'admin') on conflict (workspace_id, user_id) do update set role = 'admin';\nend;\n$$;`;
+      await copyText(sql, target, document.getElementById("admin-text"));
+    });
+  </script>
+</body>
+</html>

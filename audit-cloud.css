@@ -1,0 +1,18 @@
+.audit-cloud-form .audit-cloud-password-toggle {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #535b68;
+  font-size: 13px;
+  cursor: pointer;
+}
+.audit-cloud-password-toggle input { accent-color: #d71f2b; width: 16px; height: 16px; }
+.audit-cloud-signup { border-top: 1px solid #e1e5ec; padding-top: 15px; margin-top: 16px; }
+.audit-cloud-signup summary { font-weight: 700; cursor: pointer; }
+.audit-cloud-signup summary:focus-visible { outline: 3px solid #f5c928; outline-offset: 3px; }
+.audit-cloud-setup-link { color: #a91520; display: inline-block; margin-top: 5px; font-size: 13px; font-weight: 650; }
+.audit-cloud-recovery { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; border-top: 1px solid #e1e5ec; padding-top: 14px; margin-top: 15px; }
+.audit-cloud-recovery .audit-muted { flex: 1 1 280px; }
+#audit-page[hidden] { display: none; }
+.audit-cloud-unreadable td { color: #971b25; background: #fff4f5; }

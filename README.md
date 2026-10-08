@@ -1,6 +1,6 @@
 # PDF a Excel — Selector de columnas
 
-Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. La conversión se realiza en el navegador. En GitHub Pages los documentos permanecen en tu computadora; en la versión interna con auditoría se guardan también en la computadora que comparte el historial dentro de la empresa. No incluye OCR para documentos escaneados.
+Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
 
 ## Autoría y condiciones de uso
 
@@ -27,13 +27,25 @@ Enlace previsto: https://mactzer.github.io/megaregalonexcel/
 
 Abre el enlace publicado, selecciona un PDF con texto, marca las columnas y pulsa **Descargar Excel**. Usa la dirección de GitHub Pages; la vista del archivo en github.com muestra el código.
 
-Para el convertidor de GitHub Pages no hace falta instalar paquetes ni configurar un servidor. Las librerías PDF.js y SheetJS están incluidas y usan rutas relativas compatibles con GitHub Pages.
+Para la versión de GitHub Pages no hace falta instalar Python ni dejar una computadora interna encendida. Las librerías PDF.js y SheetJS están incluidas. La auditoría requiere instalar las tablas y permisos en el proyecto Supabase configurado.
+
+## Auditoría cifrada con Supabase
+
+Abre [la instalación guiada](https://mactzer.github.io/megaregalonexcel/supabase-setup.html) para copiar el SQL, configurar el acceso y activar tu propia cuenta administradora. La [guía completa](supabase/LEEME.md) incluye los pasos y la copia de recuperación.
+
+Cada persona utiliza **usuario y contraseña**, sin escribir un correo. El navegador deriva una credencial para Supabase Auth y una clave distinta que desbloquea el cifrado del historial. El PDF, el Excel, el nombre del archivo, las cantidades y el número de salida se cifran antes de subir. La búsqueda funciona por **número exacto** y conserva sus ceros iniciales. Los documentos se guardan en un bucket privado; las tablas y archivos solo están disponibles para miembros aprobados.
+
+Supabase fija la identidad del autor y la fecha y hora del registro. La interfaz muestra la hora de Panamá. Se registra antes de descargar y los reintentos no duplican una salida confirmada. Las claves desbloqueadas y sesiones permanecen en memoria; al recargar, se inicia sesión nuevamente. El administrador puede abrir el historial desde el conversor sin recargar la página.
+
+**Los datos cifrados se almacenan fuera de la empresa.** Supabase puede ver cuentas, identificadores, fechas y tamaños. Las contraseñas deben ser fuertes, de al menos 12 caracteres. Conserva una copia protegida de recuperación; no cambies contraseñas directamente en Supabase Auth porque el acceso está vinculado a claves cifradas por usuario. El historial local anterior no se migra automáticamente.
+
+El código público utiliza únicamente la URL y clave `anon` suministradas. No contiene `service_role`, secretos ni contraseñas. El SQL Editor del dueño del proyecto es necesario para instalar las tablas y aprobar el primer administrador; la clave pública no concede ese permiso.
 
 ## Auditoría compartida en la red de la empresa
 
 La versión interna permite buscar las salidas y consultar quién generó cada Excel y a qué fecha y hora. Conserva el PDF original y el Excel generado, con descargas protegidas por cuentas individuales. Todos los compañeros conectados a la misma instalación comparten el historial. Los registros se guardan antes de iniciar la descarga: un error al guardar impide una descarga sin registro.
 
-Una computadora autorizada dentro de la empresa aloja la aplicación completa y su base de datos SQLite. No utiliza servicios de nube ni requiere acceso al servidor central. Necesita Python 3.10 o posterior, permanecer encendida y permitir acceso desde las computadoras de los compañeros. El enlace público de GitHub Pages conserva el convertidor; el historial compartido se utiliza desde la dirección interna.
+Esta modalidad opcional utiliza una computadora autorizada dentro de la empresa para alojar la aplicación completa y su base de datos SQLite. No utiliza servicios de nube ni requiere acceso al servidor central. Necesita Python 3.10 o posterior, permanecer encendida y permitir acceso desde las computadoras de los compañeros. Se utiliza desde la dirección interna y conserva su historial independiente del de Supabase.
 
 En Windows, extrae el proyecto completo y abre **`iniciar_auditoria.bat`**. El primer inicio crea la cuenta administradora. Abre `http://127.0.0.1:8080/` y crea las cuentas de tus compañeros desde la auditoría. Comparte la dirección IPv4 de esa computadora con el puerto `8080`.
 
@@ -57,6 +69,6 @@ La hoja **Datos** se descarga como una tabla de Excel con encabezados, filtros y
 
 ## Uso local
 
-En Windows puedes abrir `abrir_app.bat`. También puedes ejecutar `python -m http.server 8000` desde esta carpeta y abrir `http://localhost:8000`.
+Para la modalidad interna con SQLite utiliza `iniciar_auditoria.bat`. Para Supabase utiliza el enlace de GitHub Pages; también puedes servir el proyecto para desarrollo con `python -m http.server 8000` y abrir `http://localhost:8000`. Abrir los HTML directamente desde el explorador no sustituye la instalación de Supabase.
 
 Consulta `README.txt` para los detalles de extracción y cálculo de totales. Revisa el resultado antes de utilizarlo: la extracción depende del formato del PDF.

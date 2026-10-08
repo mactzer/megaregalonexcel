@@ -1,6 +1,24 @@
 (function () {
   "use strict";
 
+  if (window.AuditCloud && document.documentElement.dataset.auditRequired !== "true") {
+    window.AuditClient = window.AuditCloud;
+    return;
+  }
+
+  if (document.documentElement.dataset.auditRequired !== "true" &&
+      (document.documentElement.dataset.auditProvider === "supabase" || window.SUPABASE_AUDIT_CONFIG)) {
+    const failed = function () { throw new Error("No se pudo cargar la auditoría de Supabase. Actualiza la página antes de descargar."); };
+    window.AuditClient = Object.freeze({ ready: async function () { failed(); }, record: async function () { failed(); }, newIdempotencyKey: failed });
+    const showFailure = function () {
+      const bar = document.getElementById("audit-bar");
+      if (bar) bar.textContent = "No se pudo cargar la auditoría de Supabase. Actualiza la página.";
+    };
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", showFailure, { once: true });
+    else showFailure();
+    return;
+  }
+
   const MAX_FILE_BYTES = 25 * 1024 * 1024;
   const PAGE_SIZE = 25;
   const API_ROOT = "/api";

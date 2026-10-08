@@ -1,5 +1,13 @@
 PDF A EXCEL - SELECTOR DE COLUMNAS
 
+AUDITORIA CON SUPABASE
+La version publicada usa usuario y contraseña y guarda una auditoria compartida.
+Los PDF, Excel y datos comerciales se cifran en el navegador antes de subirlos.
+Abre supabase-setup.html desde GitHub Pages para instalar tablas y permisos.
+Consulta supabase/LEEME.md. No requiere Python ni una PC interna encendida.
+Los archivos cifrados quedan fuera de la empresa; Supabase ve cuentas y fechas.
+Guarda la copia de recuperacion en un lugar protegido y usa contraseñas fuertes.
+
 VERSION 6 - TOTALES EN LA HOJA DATOS
 Extrae todo el ZIP antes de abrir index.html o abrir_app.bat.
 Para auditoría compartida entre compañeros, abre iniciar_auditoria.bat
@@ -69,7 +77,8 @@ como "01".
 
 Privacidad
 ----------
-La lectura se realiza localmente en el navegador. En GitHub Pages, el PDF no se sube.
+La lectura se realiza localmente en el navegador. En GitHub Pages, al descargar,
+el PDF y Excel se cifran y se guardan en Supabase con la auditoria compartida.
 En la versión interna con auditoría, el PDF y el Excel se guardan también en
 la computadora que comparte el historial dentro de la empresa.
 Las librerías necesarias están incluidas dentro de la carpeta "vendor".

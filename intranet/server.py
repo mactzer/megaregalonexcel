@@ -56,6 +56,10 @@ STATIC_PATHS = {
     "/audit.html": "audit.html",
     "/audit.js": "audit.js",
     "/audit.css": "audit.css",
+    "/audit-cloud.js": "audit-cloud.js",
+    "/audit-cloud.css": "audit-cloud.css",
+    "/audit-crypto.js": "audit-crypto.js",
+    "/supabase-config.js": "supabase-config.js",
     "/excel-table.js": "excel-table.js",
     "/vendor/pdf.min.js": "vendor/pdf.min.js",
     "/vendor/pdf.worker.min.js": "vendor/pdf.worker.min.js",
@@ -612,7 +616,7 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                     mime_type += "; charset=utf-8"
                 content = file_path.read_bytes()
                 if path in ("/", "/index.html", "/audit.html"):
-                    content = content.replace(b'<html lang="es">', b'<html lang="es" data-audit-required="true">', 1)
+                    content = content.replace(b'<html lang="es"', b'<html lang="es" data-audit-required="true"', 1)
                 self._send(200, content, mime_type)
             else:
                 raise APIError(404, "Archivo o ruta no encontrados.")

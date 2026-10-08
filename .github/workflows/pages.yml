@@ -23,7 +23,11 @@ jobs:
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
+      - name: Preparar pruebas de permisos de Supabase
+        run: npm install --prefix "$RUNNER_TEMP/mega-audit-tests" --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.5.8
       - name: Verificar conversión y auditoría interna
+        env:
+          NODE_PATH: ${{ runner.temp }}/mega-audit-tests/node_modules
         run: |
           node --test tests/*.test.cjs
           python3 -m unittest discover -s tests -p 'test_*.py'
@@ -32,7 +36,8 @@ jobs:
       - name: Preparar sitio
         run: |
           mkdir _site
-          cp index.html excel-table.js audit.html audit.js audit.css .nojekyll _site/
+          cp index.html excel-table.js audit.html audit.js audit.css audit-cloud.js audit-cloud.css audit-crypto.js supabase-config.js supabase-setup.html .nojekyll _site/
+          cp -R supabase _site/
           cp -R vendor _site/
       - name: Subir sitio
         uses: actions/upload-pages-artifact@v3
