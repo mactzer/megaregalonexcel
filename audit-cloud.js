@@ -210,11 +210,14 @@
       error.status = response.status;
       error.code = detail.code || detail.error_code || detail.error;
       const authCode = typeof error.code === "string" ? error.code.toLowerCase() : "";
+      const authDescription = [detail.error_description, detail.msg, detail.message]
+        .filter(function (value) { return typeof value === "string"; })
+        .join(" ").toLowerCase();
       if ((response.status === 404 && path.startsWith("/rest/")) || detail.code === "PGRST205" || detail.code === "42P01" || detail.code === "PGRST202") {
         error.message = "Configuración inicial pendiente. Revisa la guía de Supabase y ejecuta el archivo SQL de instalación.";
       } else if (response.status === 404 && path.startsWith("/storage/")) {
         error.message = "No se encontró el documento cifrado de esta salida. Solicita al administrador que revise el almacenamiento.";
-      } else if (path.startsWith("/auth/") && (authCode === "invalid_credentials" || authCode === "invalid_grant")) {
+      } else if (path.startsWith("/auth/") && (authCode === "invalid_credentials" || authCode === "invalid_grant" || /invalid login|invalid credential|invalid password|credentials/i.test(authDescription))) {
         error.message = "El usuario o la contraseña no coinciden. Respeta las mayúsculas y los espacios de la contraseña que creaste para esta versión.";
       } else if (authCode === "email_not_confirmed") {
         error.message = "La confirmación por correo está activada. Desactívala en Supabase según la guía: este acceso utiliza usuario y contraseña.";
@@ -238,6 +241,11 @@
         error.message = "Tu cuenta no tiene permiso para esta operación. Revisa su acceso a la auditoría.";
       } else if (typeof detail.message === "string" && /MEMBER_EXISTS|member already exists|ya tiene acceso/i.test(detail.message)) {
         error.message = "Ese usuario ya pertenece a la auditoría. Su cuenta y su clave se conservan.";
+      } else if (path.startsWith("/auth/")) {
+        // Some GoTrue versions return only `message` and omit `error_code`.
+        // Keep the response useful without exposing its body or any secret.
+        const safeCode = (authCode || "sin_codigo").replace(/[^a-z0-9_.-]/g, "").slice(0, 64) || "sin_codigo";
+        error.message = "Supabase rechazó el inicio de sesión (código " + safeCode + ", HTTP " + response.status + "). Revisa el usuario, la contraseña y la configuración de Email.";
       }
       throw error;
     }
