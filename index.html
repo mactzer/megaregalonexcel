@@ -1257,17 +1257,22 @@
     });
     $("#reset-button").addEventListener("click", resetApp);
 
-    const appPage = document.querySelector("main.page");
-    const converterTab = document.getElementById("converter-tab");
-    const auditTab = document.getElementById("audit-tab");
-    function selectAppSection(audit) {
-      appPage.classList.toggle("audit-mode", audit);
-      converterTab.setAttribute("aria-selected", audit ? "false" : "true");
-      auditTab.setAttribute("aria-selected", audit ? "true" : "false");
-      if (audit) window.scrollTo({ top: 0, behavior: "smooth" });
+    // The conversion helpers are also evaluated in small Node test contexts
+    // without a DOM. Only wire the visual tabs when the page has a real DOM.
+    if (typeof document.getElementById === "function") {
+      const appPage = document.querySelector("main.page");
+      const converterTab = document.getElementById("converter-tab");
+      const auditTab = document.getElementById("audit-tab");
+      function selectAppSection(audit) {
+        if (!appPage || !converterTab || !auditTab) return;
+        appPage.classList.toggle("audit-mode", audit);
+        converterTab.setAttribute("aria-selected", audit ? "false" : "true");
+        auditTab.setAttribute("aria-selected", audit ? "true" : "false");
+        if (audit) window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+      converterTab.addEventListener("click", () => selectAppSection(false));
+      auditTab.addEventListener("click", () => selectAppSection(true));
     }
-    converterTab.addEventListener("click", () => selectAppSection(false));
-    auditTab.addEventListener("click", () => selectAppSection(true));
   </script>
 </body>
 </html>
