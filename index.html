@@ -417,6 +417,7 @@
 
   <script src="vendor/pdf.min.js"></script>
   <script src="vendor/xlsx.full.min.js"></script>
+  <script src="excel-table.js"></script>
   <script>
     "use strict";
 
@@ -931,7 +932,6 @@
         }));
       }
       const worksheet = XLSX.utils.aoa_to_sheet(matrix);
-      worksheet["!autofilter"] = { ref: `A1:${XLSX.utils.encode_col(headers.length - 1)}${matrix.length}` };
       worksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
       worksheet["!cols"] = defs.map(def => ({ wch: def.key === "descripcion" ? 38 : def.kind === "number" ? 15 : 20 }));
       for (let rowIndex = 2; rowIndex <= matrix.length; rowIndex++) {
@@ -1046,7 +1046,17 @@
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
       const fileName = safeFileName(defaultExcelName());
       $("#excel-file-name").value = fileName;
-      XLSX.writeFile(workbook, fileName, { bookType: "xlsx" });
+      const fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
+      const url = URL.createObjectURL(new Blob([fileBytes], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      }));
+      const downloadLink = document.createElement("a");
+      downloadLink.href = url;
+      downloadLink.download = fileName;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
       updateStep(4);
     }
 

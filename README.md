@@ -41,6 +41,10 @@ La página y el Excel muestran la base gravada, la base exenta y el impuesto cal
 
 Para corregir el importe del impuesto, activa **Usar un impuesto manual**. Al desactivarlo, se recupera el cálculo por producto.
 
+## Tabla de Excel
+
+La hoja **Datos** se descarga como una tabla de Excel con encabezados, filtros y filas alternadas en gris. La tabla incluye los productos y el resumen inferior, conservando el orden de las columnas seleccionadas, las fórmulas y los códigos como texto.
+
 ## Uso local
 
 En Windows puedes abrir `abrir_app.bat`. También puedes ejecutar `python -m http.server 8000` desde esta carpeta y abrir `http://localhost:8000`.
