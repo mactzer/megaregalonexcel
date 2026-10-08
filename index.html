@@ -101,6 +101,46 @@
 
     .page { padding: 26px 0 54px; }
 
+    .app-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 18px;
+      padding: 5px;
+      background: #e7e9ef;
+      border-radius: 12px;
+    }
+
+    .app-tab {
+      flex: 1 1 0;
+      min-height: 40px;
+      padding: 8px 14px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      color: var(--muted);
+      background: transparent;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .app-tab[aria-selected="true"] {
+      color: var(--ink);
+      background: #fff;
+      border-color: var(--line);
+      box-shadow: 0 2px 7px rgba(25, 27, 34, .08);
+    }
+
+    .app-tab:focus-visible {
+      outline: 3px solid var(--yellow);
+      outline-offset: 2px;
+    }
+
+    .page:not(.audit-mode) #audit-bar,
+    .page:not(.audit-mode) > #audit-page { display: none; }
+    .page.audit-mode > .steps,
+    .page.audit-mode > .upload-card,
+    .page.audit-mode > .results,
+    .page.audit-mode > footer.footer-note { display: none; }
+
     .steps {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -337,8 +377,12 @@
   </header>
 
   <main class="page">
+    <nav class="app-tabs" aria-label="Secciones de la aplicación">
+      <button class="app-tab" id="converter-tab" type="button" aria-selected="true" aria-controls="converter-content">Convertir PDF a Excel</button>
+      <button class="app-tab" id="audit-tab" type="button" aria-selected="false" aria-controls="audit-bar">Auditoría</button>
+    </nav>
     <div id="audit-bar" aria-live="polite"></div>
-    <div class="steps" aria-label="Pasos">
+    <div id="converter-content" class="steps" aria-label="Pasos">
       <div class="step active" id="step-upload"><strong>1</strong><span>Cargar PDF</span></div>
       <div class="step" id="step-select"><strong>2</strong><span>Escoger columnas</span></div>
       <div class="step" id="step-export"><strong>3</strong><span>Descargar Excel</span></div>
@@ -423,7 +467,7 @@
   <script src="excel-table.js"></script>
   <script src="supabase-config.js"></script>
   <script src="audit-crypto.js"></script>
-  <script src="audit-cloud.js?v=3"></script>
+  <script src="audit-cloud.js?v=4"></script>
   <script src="audit.js"></script>
   <script>
     "use strict";
@@ -1212,6 +1256,18 @@
       renderPreview();
     });
     $("#reset-button").addEventListener("click", resetApp);
+
+    const appPage = document.querySelector("main.page");
+    const converterTab = document.getElementById("converter-tab");
+    const auditTab = document.getElementById("audit-tab");
+    function selectAppSection(audit) {
+      appPage.classList.toggle("audit-mode", audit);
+      converterTab.setAttribute("aria-selected", audit ? "false" : "true");
+      auditTab.setAttribute("aria-selected", audit ? "true" : "false");
+      if (audit) window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    converterTab.addEventListener("click", () => selectAppSection(false));
+    auditTab.addEventListener("click", () => selectAppSection(true));
   </script>
 </body>
 </html>
