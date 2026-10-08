@@ -23,7 +23,6 @@
   let refreshPromise = null;
   let busyLogin = false;
   let pageGeneration = 0;
-  let inlineHistory = false;
   let generation = 0;
   const pending = new Map();
   const pendingMembers = new Map();
@@ -565,21 +564,16 @@
       text.append(node("span", "Auditoría compartida · los documentos se cifran en este navegador antes de subirse.", "audit-muted"));
       const actions = node("div", undefined, "audit-actions");
       if (!document.body.classList.contains("audit-document")) {
-        const history = button(inlineHistory ? "Ocultar historial" : "Historial compartido", true);
-        history.addEventListener("click", function () {
-          inlineHistory = !inlineHistory;
-          let page = document.getElementById("audit-page");
-          if (!page) {
-            page = node("div");
-            page.id = "audit-page";
-            bar.after(page);
-          }
-          page.hidden = !inlineHistory;
-          renderAccountBar();
-          renderAuditPage();
-          if (inlineHistory) page.scrollIntoView({ block: "start", behavior: "smooth" });
-        });
-        actions.append(history);
+        // El historial compartido forma parte de la pestaña Auditoría y queda
+        // visible automáticamente al iniciar sesión. Solo se oculta mediante
+        // el selector de pestañas, no con un botón adicional del perfil.
+        let page = document.getElementById("audit-page");
+        if (!page) {
+          page = node("div");
+          page.id = "audit-page";
+          bar.after(page);
+        }
+        page.hidden = false;
       }
       let adminToggle = null;
       if (member.role === "admin") {
