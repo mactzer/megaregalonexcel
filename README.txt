@@ -1,4 +1,4 @@
-TRAZA | CENTRO DOCUMENTAL
+MegaControl | CONTROL DE SALIDAS DE MEGA REGALÓN
 
 NAVEGACION Y PERFIL
 Nueva salida: Cargar PDF -> Revisar informacion -> Guardar Excel.

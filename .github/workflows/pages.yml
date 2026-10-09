@@ -35,7 +35,7 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/traza-browser-tools" --ignore-scripts --no-audit --no-fund playwright@1.58.2
           "$RUNNER_TEMP/traza-browser-tools/node_modules/.bin/playwright" install --with-deps chromium
-      - name: Verificar TRAZA con documentos ficticios
+      - name: Verificar MegaControl con documentos ficticios
         env:
           NODE_PATH: ${{ runner.temp }}/traza-browser-tools/node_modules
           TRAZA_BROWSER_OUTPUT: ${{ runner.temp }}/traza-browser-results

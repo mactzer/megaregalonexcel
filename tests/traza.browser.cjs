@@ -30,7 +30,7 @@ function fakePdf() {
   ];
   const product = ['0001234567890', 'Producto ficticio de descripcion completa', 'Caja', 'Estilo A', 'REF-001 COMPLETA', '7%', '10.00', '12.00', '2', '20.00', '0', '0.00'];
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
-  const content = [text('TRAZA - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text('Numero: 00123', 10, 540), text('Fecha: 08/10/2026', 10, 520),
+  const content = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text('Numero: 00123', 10, 540), text('Fecha: 08/10/2026', 10, 520),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
     text('SubTotal: 35.00', 10, 400), text('Impuesto 1.40', 10, 380), text('Total Neto: 36.40', 10, 360)].join('\n');
   const objects = [
@@ -201,7 +201,7 @@ test('desktop: real encrypted archive, official author, damaged records, count, 
   try {
     await login(h.page);
     await checkNoOverflow(h.page);
-    assert.equal(await h.page.title(), 'TRAZA | Centro documental');
+    assert.equal(await h.page.title(), 'MegaControl | Control de salidas');
     assert.equal(await h.page.locator('.audit-table tbody tr').count(), 25);
     assert.match(await h.page.locator('#audit-page').innerText(), /28 salidas|28 coincidencias|28/);
     assert.match(await h.page.locator('#audit-page').innerText(), /Unidades verificadas en esta página: 120/);

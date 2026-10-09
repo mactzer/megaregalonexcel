@@ -1363,7 +1363,7 @@
       const result = node("div");
       modal.content.replaceChildren(explanation, download, result);
       download.addEventListener("click", async function () {
-        const selection = picker("TRAZA — Clave privada de recuperación.txt", "text");
+        const selection = picker("MegaControl — Clave privada de recuperación.txt", "text");
         let clear;
         const wipe = function () { if (clear) clear.fill(0); };
         modal.dialog.addEventListener("close", wipe, { once: true });
@@ -1374,8 +1374,8 @@
           guard();
           await requireAdmin(epoch);
           guard();
-          clear = new TextEncoder().encode("TRAZA — CLAVE PRIVADA DE RECUPERACIÓN\nNo la compartas ni la subas a GitHub o Supabase. Permite descifrar todo el archivo.\n\nAuditoría: " + CONFIG.workspace + "\n\n" + recoveryKey + "\n");
-          const message = await writeDownload(clear, handle, "TRAZA — Clave privada de recuperación.txt", "text/plain;charset=utf-8", guard);
+          clear = new TextEncoder().encode("MegaControl — CLAVE PRIVADA DE RECUPERACIÓN\nNo la compartas ni la subas a GitHub o Supabase. Permite descifrar todo el archivo.\n\nAuditoría: " + CONFIG.workspace + "\n\n" + recoveryKey + "\n");
+          const message = await writeDownload(clear, handle, "MegaControl — Clave privada de recuperación.txt", "text/plain;charset=utf-8", guard);
           guard();
           feedback(result, message, false);
         } catch (error) {

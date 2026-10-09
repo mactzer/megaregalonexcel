@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TRAZA | Centro documental</title>
-  <link rel="stylesheet" href="audit.css?v=traza-1">
-  <link rel="stylesheet" href="audit-cloud.css?v=traza-1">
+  <title>MegaControl | Control de salidas</title>
+  <link rel="stylesheet" href="audit.css?v=megacontrol-1">
+  <link rel="stylesheet" href="audit-cloud.css?v=megacontrol-1">
   <style>
     :root {
       --ink: #191b22;
@@ -361,15 +361,15 @@
       .export-actions { margin-top: 12px; }
     }
   </style>
-  <link rel="stylesheet" href="traza.css?v=traza-1">
+  <link rel="stylesheet" href="traza.css?v=megacontrol-1">
 </head>
 <body>
   <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
   <div class="traza-menu-overlay" id="traza-menu-overlay" hidden></div>
   <aside class="traza-sidebar" id="traza-sidebar" aria-label="Navegación principal">
-    <a class="traza-brand" href="#nueva-salida" data-traza-section="converter" aria-label="TRAZA, Nueva salida">
-      <svg class="traza-brand-symbol" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="10" fill="#2b494a"/><path d="M12 12h16M20 12v18M12 21h8M20 30l8-9" fill="none" stroke="#91d2ba" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      <span><strong>TRAZA</strong><small>Centro documental</small></span>
+    <a class="traza-brand" href="#nueva-salida" data-traza-section="converter" aria-label="MegaControl, Nueva salida">
+      <svg class="traza-brand-symbol" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="10" fill="#2b494a"/><path d="M11 28V12l9 10 9-10v16" fill="none" stroke="#91d2ba" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span><strong>MegaControl</strong><small>Mega Regalón · Control de salidas</small></span>
     </a>
     <button class="traza-menu-close" id="traza-menu-close" type="button" aria-label="Cerrar menú">×</button>
     <nav class="traza-nav" aria-label="Secciones">
@@ -382,7 +382,7 @@
     </div>
   </aside>
   <header class="traza-topbar" id="traza-topbar">
-    <div class="traza-topbar-location"><button class="traza-menu-button" id="traza-menu-button" type="button" aria-controls="traza-sidebar" aria-expanded="false" aria-label="Abrir menú"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="traza-location-prefix">Centro documental <span aria-hidden="true">/</span></span><strong id="traza-section-name">Nueva salida</strong></div>
+    <div class="traza-topbar-location"><button class="traza-menu-button" id="traza-menu-button" type="button" aria-controls="traza-sidebar" aria-expanded="false" aria-label="Abrir menú"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="traza-location-prefix">Mega Regalón <span aria-hidden="true">/</span></span><strong id="traza-section-name">Nueva salida</strong></div>
     <div id="app-profile" class="traza-app-profile"></div>
   </header>
   <main class="page traza-main" id="app-main" tabindex="-1">
@@ -470,16 +470,16 @@
     <footer class="footer-note">Creado por Eddie Rivera.<br>© 2026 Eddie Rivera. Todos los derechos reservados.</footer>
     </div>
   </main>
-  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de TRAZA</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel.</p><p>Elige la carpeta de destino en los navegadores compatibles. En los demás, revisa la configuración de descargas de tu navegador.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
+  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de MegaControl</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel.</p><p>Elige la carpeta de destino en los navegadores compatibles. En los demás, revisa la configuración de descargas de tu navegador.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
 
-  <script src="vendor/pdf.min.js?v=traza-1"></script>
-  <script src="vendor/xlsx.full.min.js?v=traza-1"></script>
-  <script src="excel-table.js?v=traza-1"></script>
-  <script src="supabase-config.js?v=traza-1"></script>
-  <script src="audit-crypto.js?v=traza-1"></script>
-  <script src="traza.js?v=traza-1"></script>
-  <script src="audit-cloud.js?v=traza-1"></script>
-  <script src="audit.js?v=traza-1"></script>
+  <script src="vendor/pdf.min.js?v=megacontrol-1"></script>
+  <script src="vendor/xlsx.full.min.js?v=megacontrol-1"></script>
+  <script src="excel-table.js?v=megacontrol-1"></script>
+  <script src="supabase-config.js?v=megacontrol-1"></script>
+  <script src="audit-crypto.js?v=megacontrol-1"></script>
+  <script src="traza.js?v=megacontrol-1"></script>
+  <script src="audit-cloud.js?v=megacontrol-1"></script>
+  <script src="audit.js?v=megacontrol-1"></script>
   <script>
     "use strict";
 

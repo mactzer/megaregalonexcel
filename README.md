@@ -1,6 +1,6 @@
-# TRAZA | Centro documental
+# MegaControl | Control de salidas de Mega Regalón
 
-TRAZA permite revisar salidas, seleccionar columnas de un PDF con texto y guardar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
+MegaControl permite revisar salidas, seleccionar columnas de un PDF con texto y guardar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
 
 ## Navegación y documentos
 
