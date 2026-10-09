@@ -60,6 +60,7 @@ STATIC_PATHS = {
     "/audit-cloud.css": "audit-cloud.css",
     "/traza.css": "traza.css",
     "/traza.js": "traza.js",
+    "/megacontrol-logo.png": "megacontrol-logo.png",
     "/audit-crypto.js": "audit-crypto.js",
     "/supabase-config.js": "supabase-config.js",
     "/excel-table.js": "excel-table.js",

@@ -2,6 +2,8 @@
 
 MegaControl permite revisar salidas, seleccionar columnas de un PDF con texto y guardar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
 
+El logo personalizado combina la M de Mega Regalón con documentos, una hoja de cálculo y una flecha de salida. Se incluye en `megacontrol-logo.png`, con fondo transparente, y se utiliza también como icono de la pestaña del navegador.
+
 ## Navegación y documentos
 
 **Nueva salida** presenta tres pasos: cargar PDF, revisar información y guardar Excel. **Archivo de salidas** consulta el historial compartido sin abandonar la aplicación: cambiar de sección conserva el PDF cargado y la sesión. El encabezado muestra el perfil; desde él puedes iniciar o cerrar sesión. Los administradores abren **Usuarios y permisos** y **Seguridad** en diálogos. La clave de recuperación se guarda como un archivo privado; consérvala en una ubicación protegida.
