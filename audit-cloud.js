@@ -32,6 +32,7 @@
   const archiveFilters = { query: "", from: "", to: "", author: "", page: 1 };
   const pending = new Map();
   const pendingMembers = new Map();
+  const verifiedUnitSummaries = new Map();
 
   function node(tag, text, classes) {
     const value = document.createElement(tag);
@@ -159,6 +160,7 @@
     refreshPromise = null;
     clearPending();
     pendingMembers.clear();
+    verifiedUnitSummaries.clear();
     Object.assign(archiveFilters, { query: "", from: "", to: "", author: "", page: 1 });
     window.dispatchEvent(new CustomEvent("audit:logout"));
     window.dispatchEvent(new CustomEvent("traza:session-cleared"));
@@ -1035,6 +1037,54 @@
     }
   }
 
+  function unitsTextFor(record) {
+    if (!record.unitCheck || record.unitCheck.state === "checking") return "Verificando unidades…";
+    if (record.unitCheck.state !== "verified") return "Unidades no verificadas";
+    return record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 });
+  }
+
+  function updateDetailUnits(view, record) {
+    const detail = view.detail;
+    if (!detail || detail.record !== record) return;
+    detail.units.textContent = unitsTextFor(record);
+    detail.units.dataset.unitState = record.unitCheck.state;
+    detail.products.textContent = record.row_count.toLocaleString("es-PA");
+    detail.unitsNote.textContent = record.unitCheck.state === "unverified" ? record.unitCheck.message :
+      record.unitCheck.changed ? "Unidades corregidas desde el PDF original. Usa Editar Excel para descargar el Excel actualizado; el Excel original se conserva." : "";
+    detail.unitsNote.hidden = !detail.unitsNote.textContent;
+  }
+
+  async function verifyRecordUnits(record, view, key, controller, guard) {
+    const cached = verifiedUnitSummaries.get(record.id);
+    if (cached && cached.metadata === record.unitRevision) {
+      guard();
+      return cached.summary;
+    }
+    let clear;
+    try {
+      guard();
+      if (!window.TrazaConverter || typeof window.TrazaConverter.analyzeUnits !== "function") {
+        throw new Error("No se pudo cargar la comprobación de unidades. Actualiza la página e inténtalo de nuevo.");
+      }
+      clear = await getDocument(record, "pdf", key, guard, controller.signal);
+      guard();
+      view.buffers.add(clear);
+      const summary = await window.TrazaConverter.analyzeUnits({ data: clear, signal: controller.signal, assertCurrent: guard, expectedNumber: record.salida_numero });
+      guard();
+      if (!summary || !summary.complete || summary.missingUnits !== 0 || !Number.isFinite(summary.totalUnits) || summary.totalUnits < 0 || !Number.isInteger(summary.rowCount) || summary.rowCount <= 0) {
+        throw new Error("El PDF contiene productos sin unidades legibles. Revisa el documento original antes de usar su total.");
+      }
+      const verified = { totalUnits: summary.totalUnits, rowCount: summary.rowCount };
+      // Only numerical summaries and encrypted revision markers live in this
+      // session cache. PDF bytes, products and descriptions are never retained.
+      verifiedUnitSummaries.set(record.id, { metadata: record.unitRevision, summary: verified });
+      if (verifiedUnitSummaries.size > 200) verifiedUnitSummaries.delete(verifiedUnitSummaries.keys().next().value);
+      return verified;
+    } finally {
+      if (clear) { clear.fill(0); view.buffers.delete(clear); }
+    }
+  }
+
   function documentButton(record, kind, label, result, view, detail) {
     const download = button(label, true);
     download.classList.add("audit-button-small");
@@ -1318,7 +1368,7 @@
     const panel = node("aside", undefined, "traza-detail audit-panel");
     panel.id = "traza-document-detail";
     panel.setAttribute("aria-labelledby", "traza-document-title");
-    const detail = { panel, opener, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null };
+    const detail = { panel, opener, record, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null };
     view.detail = detail;
     const guard = function () { assertView(view); if (view.detail !== detail || detail.controller.signal.aborted) throw new Error("La vista cambió."); };
     const header = node("div", undefined, "traza-detail-header");
@@ -1330,10 +1380,16 @@
     panel.append(header);
     const when = formatWhen(record.created_at);
     const facts = node("dl", undefined, "traza-detail-facts");
-    for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 })]]) {
-      facts.append(node("dt", pair[0]), node("dd", pair[1]));
+    for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", unitsTextFor(record)]]) {
+      const value = node("dd", pair[1]);
+      if (pair[0] === "Productos") detail.products = value;
+      if (pair[0] === "Unidades") detail.units = value;
+      facts.append(node("dt", pair[0]), value);
     }
     panel.append(facts);
+    detail.unitsNote = node("p", "", "audit-muted");
+    panel.append(detail.unitsNote);
+    updateDetailUnits(view, record);
     const result = node("div");
     const edit = node("div", undefined, "audit-actions");
     edit.append(editButton(record, result, view, detail));
@@ -1387,7 +1443,7 @@
     const panel = node("section", undefined, "audit-panel traza-archive-panel");
     const header = node("div", undefined, "traza-archive-header");
     const heading = node("div");
-    heading.append(node("h2", "Archivo de salidas"), node("p", "Consulta las salidas compartidas y guarda sus documentos originales.", "audit-muted"));
+    heading.append(node("h2", "Archivo de salidas"), node("p", "Consulta las salidas compartidas. Sus unidades se comprueban automáticamente con el PDF original.", "audit-muted"));
     const newOutput = button("Nueva salida");
     newOutput.addEventListener("click", function () { if (window.TrazaUI) window.TrazaUI.navigate("converter"); else location.href = "index.html#nueva-salida"; });
     header.append(heading, newOutput);
@@ -1491,14 +1547,31 @@
         const rows = await responses[0].json();
         guard();
         if (!Array.isArray(rows)) throw new Error("El archivo recibido no es válido.");
-        const outcomes = await Promise.allSettled(rows.map(async function (entry) { const decoded = await decryptedRecord(entry, key); guard(); return decoded; }));
+        const outcomes = await Promise.allSettled(rows.map(async function (entry) {
+          const decoded = await decryptedRecord(entry, key);
+          guard();
+          decoded.unitRevision = entry.encrypted_metadata;
+          decoded.unitCheck = { state: "checking", originalUnits: decoded.total_units, originalRowCount: decoded.row_count, changed: false };
+          return decoded;
+        }));
         guard();
         const verified = outcomes.filter(function (outcome) { return outcome.status === "fulfilled"; }).map(function (outcome) { return outcome.value; });
         const damaged = rows.length - verified.length;
         const count = /\/(\d+)$/.exec(responses[0].headers.get("Content-Range") || "");
         const total = count ? Number(count[1]) : null;
         totalText.textContent = total === null ? rows.length + " salidas en esta página" : total + (total === 1 ? " salida encontrada" : " salidas encontradas");
-        unitsText.textContent = (damaged ? "Unidades verificadas en esta página: " : "Unidades en esta página: ") + verified.reduce(function (sum, entry) { return sum + entry.total_units; }, 0).toLocaleString("es-PA", { maximumFractionDigits: 2 });
+        function updatePageUnits() {
+          guard();
+          const checking = verified.filter(function (record) { return record.unitCheck.state === "checking"; }).length;
+          const confirmed = verified.filter(function (record) { return record.unitCheck.state === "verified"; });
+          const incomplete = damaged || checking || confirmed.length !== verified.length;
+          const totalUnits = confirmed.reduce(function (sum, record) { return sum + record.total_units; }, 0);
+          unitsText.textContent = (incomplete ? "Unidades verificadas en esta página: " : "Unidades en esta página: ") + totalUnits.toLocaleString("es-PA", { maximumFractionDigits: 2 }) +
+            (checking ? " · Verificando " + checking + (checking === 1 ? " salida…" : " salidas…") : "");
+          unitsText.dataset.unitState = checking ? "checking" : incomplete ? "unverified" : "verified";
+        }
+        updatePageUnits();
+        const unitCells = [];
         recordsArea.replaceChildren();
         if (!rows.length) {
           const filtered = archiveFilters.query || archiveFilters.from || archiveFilters.to || archiveFilters.author;
@@ -1525,6 +1598,7 @@
             if (outcome.status !== "fulfilled") {
               cells[0].append(node("strong", "Salida no verificable"), node("span", String(official.id || "Identificador no disponible"), "audit-muted"));
               cells[3].textContent = "No disponibles";
+              cells[3].dataset.unitState = "unverified";
               const docs = node("div", undefined, "audit-documents");
               for (const label of ["Guardar PDF", "Guardar Excel"]) { const disabled = button(label, true); disabled.disabled = true; docs.append(disabled); }
               cells[4].append(docs);
@@ -1532,7 +1606,9 @@
             } else {
               const record = outcome.value;
               cells[0].append(node("strong", "Salida " + record.salida_numero));
-              cells[3].textContent = record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 });
+              cells[3].textContent = unitsTextFor(record);
+              cells[3].dataset.unitState = "checking";
+              unitCells.push({ record, cell: cells[3] });
               const docs = node("div", undefined, "audit-documents");
               docs.append(documentButton(record, "pdf", "Guardar PDF", result, view), documentButton(record, "excel", "Guardar Excel", result, view));
               cells[4].append(docs);
@@ -1562,6 +1638,41 @@
         actions.append(previous, next);
         pagination.append(actions);
         recordsArea.append(pagination);
+        // Filters stay usable while the PDFs are checked. A new load aborts
+        // this queue and its parser tasks before a late response can update UI.
+        submit.disabled = clear.disabled = refresh.disabled = false;
+        let nextUnit = 0;
+        async function verifyNext() {
+          while (nextUnit < unitCells.length) {
+            guard();
+            const item = unitCells[nextUnit++];
+            const record = item.record;
+            try {
+              const summary = await verifyRecordUnits(record, view, key, controller, guard);
+              guard();
+              record.unitCheck.changed = summary.totalUnits !== record.unitCheck.originalUnits || summary.rowCount !== record.unitCheck.originalRowCount;
+              record.total_units = summary.totalUnits;
+              record.row_count = summary.rowCount;
+              record.unitCheck.state = "verified";
+            } catch (error) {
+              guard();
+              record.unitCheck.state = "unverified";
+              record.unitCheck.message = "No se pudieron verificar las unidades. " + errorText(error) + " Usa Actualizar para intentarlo de nuevo.";
+            }
+            guard();
+            item.cell.replaceChildren(node("span", unitsTextFor(record)));
+            item.cell.dataset.unitState = record.unitCheck.state;
+            if (record.unitCheck.state === "unverified") {
+              item.cell.append(node("span", record.unitCheck.message, "audit-muted"));
+            } else if (record.unitCheck.changed) {
+              item.cell.append(node("span", "Corregidas desde el PDF", "audit-muted"));
+            }
+            updateDetailUnits(view, record);
+            updatePageUnits();
+          }
+        }
+        await Promise.all([verifyNext(), verifyNext()]);
+        guard();
       } catch (error) {
         if (archiveView !== view || view.disposed || sequence !== view.load || view.epoch !== generation) return;
         recordsArea.replaceChildren(node("p", "No se pudo cargar el archivo. Usa Actualizar para intentarlo nuevamente.", "audit-state"));
@@ -1576,7 +1687,7 @@
     }
     form.addEventListener("submit", function (event) { event.preventDefault(); applyFilters(); });
     clear.addEventListener("click", function () { search.value = from.value = to.value = author.value = ""; applyFilters(); });
-    refresh.addEventListener("click", function () { loadRecords(); });
+    refresh.addEventListener("click", function () { verifiedUnitSummaries.clear(); loadRecords(); });
     for (const label of ["Todo", "Hoy", "Esta semana", "Este mes"]) {
       const shortcut = button(label, true);
       shortcut.addEventListener("click", function () {

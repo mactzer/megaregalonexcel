@@ -11,9 +11,20 @@ recuperacion en un archivo privado y protegido; no se muestra en el historial.
 ARCHIVO Y DESCARGAS
 Filtra por numero exacto (incluye ceros iniciales), responsable y fechas de
 Panama. Accesos rapidos: Todo, Hoy, Esta semana (desde lunes) y Este mes.
-Actualizar conserva los filtros; Limpiar los elimina. Unidades en esta pagina
-suma solo los registros visibles. Los registros dañados siguen visibles, con
-aviso y documentos desactivados: se suman Unidades verificadas en esta pagina.
+Actualizar conserva los filtros; Limpiar los elimina. Las unidades y productos
+se recalculan automaticamente desde el PDF autorizado, tambien en salidas
+antiguas. Se usa el mismo resultado en la fila, detalle y suma de la pagina.
+Verificando unidades indica una lectura pendiente. Actualizar repite la
+comprobacion. El numero comercial registrado se conserva, aunque sea editable.
+Unidades en esta pagina suma solo los registros visibles comprobados.
+Si el PDF falla o tiene cantidades ilegibles, aparecen Unidades no verificadas
+y se excluyen de Unidades verificadas en esta pagina; sus documentos siguen
+disponibles. Los metadatos dañados conservan su fila y desactivan documentos.
+No se crean salidas ni se reescriben documentos o metadatos historicos.
+Los resumenes numericos permanecen solo en memoria durante la sesion;
+cambiar de vista cancela tareas y limpia copias claras del PDF.
+Si el total se corrige, usa Editar Excel para descargar el actualizado.
+Guardar Excel sigue descargando el original archivado.
 El detalle muestra el responsable oficial, fecha, productos, unidades,
 nombres de documentos y vista previa local de la primera pagina del PDF.
 La vista conserva las proporciones y ajusta su resolucion al tamaño de pantalla.

@@ -28,6 +28,7 @@
   let authenticationGeneration = 0;
   let loginInProgress = false;
   const archiveEdits = new Set();
+  const unitVerifications = new Set();
 
   function status() {
     return {
@@ -43,9 +44,15 @@
     archiveEdits.clear();
   }
 
+  function cancelUnitVerifications() {
+    for (const controller of unitVerifications) controller.abort();
+    unitVerifications.clear();
+  }
+
   function clearSession() {
     authenticationGeneration++;
     cancelArchiveEdits();
+    cancelUnitVerifications();
     currentStatus = { mode: "intranet", authenticated: false, user: null, csrf_token: null };
     window.dispatchEvent(new CustomEvent("traza:session-cleared"));
     renderAccountBar();
@@ -62,6 +69,7 @@
     if (Boolean(currentStatus && currentStatus.authenticated) !== Boolean(next.authenticated) || before !== after) {
       authenticationGeneration++;
       cancelArchiveEdits();
+      cancelUnitVerifications();
     }
     currentStatus = next;
   }
@@ -451,6 +459,7 @@
   function renderAuditPage() {
     const page = document.getElementById("audit-page");
     if (!page || !currentStatus) return;
+    cancelUnitVerifications();
     const generation = ++pageGeneration;
     page.replaceChildren();
     if (currentStatus.mode === "static") {
@@ -486,6 +495,7 @@
 
     async function loadRecords() {
       cancelArchiveEdits();
+      cancelUnitVerifications();
       const currentRequest = ++requestNumber;
       feedback.replaceChildren();
       recordsArea.replaceChildren(element("p", "Cargando historial…", "audit-state"));
@@ -500,6 +510,10 @@
         if (!result.records.length) {
           recordsArea.append(element("p", query ? "No hay salidas que coincidan con ese número." : "Todavía no hay salidas registradas. Descarga un Excel en el conversor interno para crear el primer registro.", "audit-empty"));
         } else {
+          const unitSummary = element("p", "Unidades verificadas en esta página: 0", "audit-muted");
+          unitSummary.setAttribute("role", "status");
+          recordsArea.append(unitSummary);
+          const verificationRows = [];
           const wrap = element("div", undefined, "audit-table-wrap");
           const table = element("table", undefined, "audit-table");
           const caption = element("caption", "Historial de salidas");
@@ -522,8 +536,9 @@
             const when = formatWhen(record.created_at);
             const date = element("td", when.date, "audit-number");
             date.append(element("span", when.time, "audit-muted"));
-            const amounts = element("td", String(record.row_count) + " productos", "audit-number");
-            amounts.append(element("span", Number(record.total_units).toLocaleString("es-PA", { maximumFractionDigits: 2 }) + " unidades", "audit-muted"));
+            const amounts = element("td", "Verificando unidades…", "audit-number");
+            amounts.dataset.unitState = "checking";
+            verificationRows.push({ record, amounts });
             const docs = element("td");
             const links = element("div", undefined, "audit-documents");
             links.append(documentLink(record.id, "pdf", "PDF original"), documentLink(record.id, "excel", "Excel"));
@@ -574,6 +589,7 @@
           table.append(caption, head, body);
           wrap.append(table);
           recordsArea.append(wrap);
+          verifyPageUnits(verificationRows, unitSummary, currentRequest);
         }
         const perPage = Number.isInteger(result.page_size) && result.page_size > 0 ? result.page_size : PAGE_SIZE;
         const totalPages = Math.max(1, Math.ceil(result.total / perPage));
@@ -598,6 +614,93 @@
           submit.disabled = false;
           clear.disabled = false;
         }
+      }
+    }
+
+    async function verifyPageUnits(rows, summary, selectedRequest) {
+      if (window.TrazaUI && window.TrazaUI.currentSection !== "archive") return;
+      const controller = new AbortController();
+      unitVerifications.add(controller);
+      const activeBuffers = new Set();
+      const clearBuffers = function () {
+        for (const bytes of activeBuffers) {
+          if (bytes.byteLength) bytes.fill(0);
+        }
+        activeBuffers.clear();
+      };
+      controller.signal.addEventListener("abort", clearBuffers, { once: true });
+      const account = status();
+      const viewGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
+      let cursor = 0;
+      let pending = rows.length;
+      let unverified = 0;
+      let verifiedUnits = 0;
+      const guard = function () {
+        assertAuthentication(account);
+        if (controller.signal.aborted || generation !== pageGeneration || selectedRequest !== requestNumber ||
+            !summary.isConnected || (window.TrazaUI && (window.TrazaUI.currentSection !== "archive" || window.TrazaUI.generation !== viewGeneration))) {
+          throw new Error("La vista cambió. Abre de nuevo el archivo de salidas.");
+        }
+      };
+      const updateSummary = function () {
+        const amount = verifiedUnits.toLocaleString("es-PA", { maximumFractionDigits: 2 });
+        summary.textContent = "Unidades verificadas en esta página: " + amount +
+          (pending ? " · Verificando " + pending + (pending === 1 ? " salida…" : " salidas…") : "") +
+          (unverified ? " · " + unverified + (unverified === 1 ? " salida sin verificar" : " salidas sin verificar") : "");
+      };
+      updateSummary();
+      const worker = async function () {
+        while (cursor < rows.length && !controller.signal.aborted) {
+          const entry = rows[cursor++];
+          let bytes;
+          try {
+            guard();
+            bytes = await archivedPdf(entry.record, controller, guard);
+            activeBuffers.add(bytes);
+            guard();
+            if (!window.TrazaConverter || typeof window.TrazaConverter.analyzeUnits !== "function") {
+              throw new Error("No se pudo comprobar el PDF original. Actualiza la página e inténtalo de nuevo.");
+            }
+            const result = await window.TrazaConverter.analyzeUnits({
+              data: bytes, signal: controller.signal, assertCurrent: guard, expectedNumber: String(entry.record.salida_numero)
+            });
+            guard();
+            if (result && result.rowCount === 0) {
+              throw new Error("No se detectaron productos en el PDF original. Si contiene una imagen, necesita texto legible para comprobar sus unidades.");
+            }
+            if (result && result.missingUnits > 0) {
+              throw new Error("Hay productos sin unidades legibles en el PDF original. Esta salida no se incluye en la suma de unidades verificadas.");
+            }
+            if (!result || result.complete !== true || !Number.isInteger(result.rowCount) || result.rowCount < 1 ||
+                !Number.isFinite(result.totalUnits) || result.totalUnits < 0 || result.missingUnits !== 0) {
+              throw new Error("El PDF original no permite verificar todas las unidades de esta salida.");
+            }
+            entry.amounts.replaceChildren(element("span", result.rowCount + (result.rowCount === 1 ? " producto" : " productos")));
+            entry.amounts.append(element("span", result.totalUnits.toLocaleString("es-PA", { maximumFractionDigits: 2 }) + " unidades", "audit-muted"));
+            entry.amounts.dataset.unitState = "verified";
+            verifiedUnits += result.totalUnits;
+          } catch (error) {
+            try { guard(); } catch (_) { return; }
+            entry.amounts.replaceChildren(element("span", "Unidades no verificadas"), element("span", errorText(error), "audit-muted"));
+            entry.amounts.dataset.unitState = "unverified";
+            unverified++;
+          } finally {
+            if (bytes && bytes.byteLength) bytes.fill(0);
+            activeBuffers.delete(bytes);
+          }
+          guard();
+          pending--;
+          updateSummary();
+        }
+      };
+      try {
+        await Promise.all([worker(), worker()]);
+      } catch (_) {
+        // Una vista invalidada no puede recuperar documentos ni actualizar sus conteos.
+      } finally {
+        controller.signal.removeEventListener("abort", clearBuffers);
+        clearBuffers();
+        unitVerifications.delete(controller);
       }
     }
     searchForm.addEventListener("submit", function (event) {
@@ -728,6 +831,7 @@
 
   window.addEventListener("traza-ui:navigated", function (event) {
     cancelArchiveEdits();
+    cancelUnitVerifications();
     if (event.detail && event.detail.section === "archive" && currentStatus && currentStatus.authenticated) renderAuditPage();
   });
   window.AuditClient = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey });

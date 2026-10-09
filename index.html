@@ -472,7 +472,7 @@
     <footer class="footer-note">Creado por Eddie Rivera.<br>© 2026 Eddie Rivera. Todos los derechos reservados.</footer>
     </div>
   </main>
-  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de MegaControl</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y descargar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel. En su detalle, <strong>Editar Excel</strong> permite escoger columnas y nombres usando el PDF guardado, sin subirlo de nuevo ni crear otra salida. Los documentos originales se conservan.</p><p>El Excel se descarga una sola vez y muestra una confirmación con su nombre. Para elegir carpeta, activa <strong>Preguntar dónde guardar cada archivo</strong> en las descargas de Chrome o Edge. Para abrirlo en Excel automáticamente, selecciona <strong>Abrir siempre archivos de este tipo</strong> en el menú del Excel descargado, si aparece esa opción. Excel debe estar instalado; la página no puede activar ese ajuste por ti.</p><p>Para el PDF puedes elegir carpeta desde la app en navegadores compatibles. <strong>Descargar una copia</strong> permite añadir ese PDF al panel de descargas cuando lo necesites.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
+  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de MegaControl</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y descargar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Las unidades se recalculan automáticamente desde cada PDF original, también en las salidas antiguas; Actualizar repite la comprobación. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel. En su detalle, <strong>Editar Excel</strong> permite escoger columnas y nombres usando el PDF guardado, sin subirlo de nuevo ni crear otra salida. Los documentos originales se conservan.</p><p>El Excel se descarga una sola vez y muestra una confirmación con su nombre. Para elegir carpeta, activa <strong>Preguntar dónde guardar cada archivo</strong> en las descargas de Chrome o Edge. Para abrirlo en Excel automáticamente, selecciona <strong>Abrir siempre archivos de este tipo</strong> en el menú del Excel descargado, si aparece esa opción. Excel debe estar instalado; la página no puede activar ese ajuste por ti.</p><p>Para el PDF puedes elegir carpeta desde la app en navegadores compatibles. <strong>Descargar una copia</strong> permite añadir ese PDF al panel de descargas cuando lo necesites.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
 
   <script src="vendor/pdf.min.js?v=megacontrol-1"></script>
   <script src="vendor/xlsx.full.min.js?v=megacontrol-1"></script>
@@ -480,8 +480,8 @@
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=megacontrol-1"></script>
   <script src="traza.js?v=megacontrol-units-1"></script>
-  <script src="audit-cloud.js?v=megacontrol-units-1"></script>
-  <script src="audit.js?v=megacontrol-edit-1"></script>
+  <script src="audit-cloud.js?v=megacontrol-archive-units-1"></script>
+  <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
 
@@ -824,6 +824,11 @@
     let activeParse = null;
 
     function assertParseCurrent(context) {
+      if (context && context.independent) {
+        if (context.signal && context.signal.aborted) throw staleConverterError("La comprobación de unidades se canceló.");
+        if (context.assertCurrent) context.assertCurrent();
+        return;
+      }
       if (context && context.generation !== converterParseGeneration) {
         const error = new Error("La lectura del PDF se canceló.");
         error.trazaStale = true;
@@ -847,8 +852,13 @@
 
     async function getDocument(data, context) {
       let task;
+      const taskData = () => {
+        const copy = data.slice();
+        if (context && context.pdfBuffers) context.pdfBuffers.push(copy);
+        return copy;
+      };
       try {
-        task = pdfjsLib.getDocument({ data: data.slice(), isEvalSupported: false });
+        task = pdfjsLib.getDocument({ data: taskData(), isEvalSupported: false });
         if (context) context.task = task;
         const pdf = await task.promise;
         assertParseCurrent(context);
@@ -856,7 +866,7 @@
       } catch (workerError) {
         if (task) await task.destroy();
         assertParseCurrent(context);
-        task = pdfjsLib.getDocument({ data: data.slice(), disableWorker: true, isEvalSupported: false });
+        task = pdfjsLib.getDocument({ data: taskData(), disableWorker: true, isEvalSupported: false });
         if (context) context.task = task;
         const pdf = await task.promise;
         assertParseCurrent(context);
@@ -1487,6 +1497,64 @@
     }
 
     if (typeof window !== "undefined") window.TrazaConverter = Object.freeze({
+      async analyzeUnits(options) {
+        if (!options || !(options.data instanceof Uint8Array) || !options.data.byteLength ||
+            typeof options.assertCurrent !== "function" || !/^\d{1,60}$/.test(String(options.expectedNumber || ""))) {
+          throw new Error("No se pudo verificar el PDF para comprobar sus unidades.");
+        }
+        const data = options.data.slice();
+        const context = {
+          independent: true,
+          signal: options.signal,
+          assertCurrent: options.assertCurrent,
+          task: null,
+          buffer: data,
+          pdfBuffers: []
+        };
+        let parsed;
+        const clearBuffers = () => {
+          if (data.byteLength) data.fill(0);
+          if (context.buffer && context.buffer.byteLength) context.buffer.fill(0);
+          context.pdfBuffers.forEach(buffer => { if (buffer.byteLength) buffer.fill(0); });
+          context.pdfBuffers.length = 0;
+        };
+        const cancel = () => {
+          clearBuffers();
+          if (context.task) context.task.destroy().catch(() => {});
+        };
+        if (context.signal) context.signal.addEventListener("abort", cancel, { once: true });
+        try {
+          assertParseCurrent(context);
+          parsed = await parsePdf({ arrayBuffer: async () => data.buffer }, context);
+          assertParseCurrent(context);
+          const missingUnits = parsed.rows.filter(row => !Number.isFinite(row.salidas_unidades)).length;
+          const totalUnits = roundMoney(parsed.rows.reduce((sum, row) => sum + (Number.isFinite(row.salidas_unidades) ? row.salidas_unidades : 0), 0));
+          const documentNumber = String(parsed.documentInfo.numero || "");
+          return {
+            rowCount: parsed.rows.length,
+            totalUnits,
+            missingUnits,
+            documentNumber,
+            numberMatches: documentNumber === String(options.expectedNumber),
+            complete: missingUnits === 0 && Number.isFinite(totalUnits)
+          };
+        } catch (error) {
+          assertParseCurrent(context);
+          throw error;
+        } finally {
+          if (context.signal) context.signal.removeEventListener("abort", cancel);
+          clearBuffers();
+          if (parsed) {
+            parsed.rows.forEach(row => Object.keys(row).forEach(key => { row[key] = null; }));
+            parsed.rows.length = 0;
+            parsed.rawLines.forEach(line => { line.texto = ""; });
+            parsed.rawLines.length = 0;
+            Object.keys(parsed.documentInfo).forEach(key => { parsed.documentInfo[key] = null; });
+          }
+          context.assertCurrent = null;
+          context.signal = null;
+        }
+      },
       async openArchived(options) {
         if (state.exporting) throw new Error("Espera a que termine el guardado antes de editar otra salida.");
         const record = options && options.record;
