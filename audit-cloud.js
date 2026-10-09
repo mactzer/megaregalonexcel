@@ -687,6 +687,32 @@
     }
   }
 
+  async function confirmArchivedRecord(recordId) {
+    const id = String(recordId || "").toLowerCase();
+    if (!UUID.test(id)) throw new Error("La salida seleccionada no es válida. Vuelve a abrirla desde el archivo.");
+    const epoch = generation;
+    const key = master;
+    const viewGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
+    const guard = function () {
+      assertAccount(epoch);
+      if (!status().authenticated || !key || key !== master ||
+          (window.TrazaUI && window.TrazaUI.generation !== viewGeneration)) {
+        throw new Error("La sesión o la sección cambió. Vuelve a abrir la salida desde el archivo.");
+      }
+    };
+    guard();
+    // RLS checks current access again. Editing a local workbook must never
+    // upload new documents or create another audit entry for this record.
+    const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&id=eq." + id + "&select=*&limit=2");
+    guard();
+    if (!Array.isArray(rows) || rows.length !== 1 || rows[0].id !== id) {
+      throw new Error("Ya no tienes acceso a esta salida o el registro ya no está disponible. No se guardó el Excel.");
+    }
+    const archived = await decryptedRecord(rows[0], key);
+    guard();
+    return archived;
+  }
+
   function clearPending() {
     for (const snapshot of pending.values()) {
       for (const name of ["pdf", "excel", "encryptedPdf", "encryptedExcel"]) {
@@ -961,6 +987,8 @@
   }
 
   function disposeDetail(view, restore) {
+    if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
+    if (view && view.edit) { view.edit.controller.abort(); view.edit = null; }
     if (!view || !view.detail) return;
     const detail = view.detail;
     view.detail = null;
@@ -978,6 +1006,7 @@
 
   function disposeArchive() {
     if (!archiveView) return;
+    if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
     disposeDetail(archiveView, false);
     for (const clear of archiveView.buffers) { try { clear.fill(0); } catch (_) {} }
     archiveView.buffers.clear();
@@ -1008,6 +1037,7 @@
       let clear;
       // No network, decryption or async session check precedes the picker.
       const selection = picker(name, kind);
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       download.disabled = true;
       result.replaceChildren();
       if (!selection) feedback(result, "Se usará la configuración de descargas del navegador.", false);
@@ -1019,9 +1049,11 @@
         guard();
         view.buffers.add(clear);
         if (selected) selected.buffers.add(clear);
-        const message = await writeDownload(clear, destination, name, kind === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", guard);
+        const mime = kind === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        const message = await writeDownload(clear, destination, name, mime, guard);
         guard();
         feedback(result, message, false);
+        if (destination && window.TrazaSavedFile) window.TrazaSavedFile.show({ data: clear, name: destination.name || name, mime, guard, message });
       } catch (error) {
         if (epoch === generation && archiveView === view && load === view.load && view.detail === selected) {
           if (error && error.name === "AbortError") feedback(result, "Guardado cancelado. No se recuperó el documento.", false);
@@ -1035,6 +1067,61 @@
       }
     });
     return download;
+  }
+
+  function editButton(record, result, view, detail) {
+    const edit = button("Editar Excel", true);
+    edit.classList.add("audit-button-small");
+    edit.setAttribute("aria-label", "Editar Excel de salida " + record.salida_numero);
+    edit.addEventListener("click", async function () {
+      const epoch = generation;
+      const key = master;
+      const selected = detail || view.detail;
+      const load = view.load;
+      if (view.edit) view.edit.controller.abort();
+      const attempt = { controller: new AbortController() };
+      view.edit = attempt;
+      const parentSignal = selected ? selected.controller.signal : view.loadController.signal;
+      const abort = function () { attempt.controller.abort(); };
+      parentSignal.addEventListener("abort", abort, { once: true });
+      const guard = function () {
+        assertView(view, load);
+        if (view.edit !== attempt || attempt.controller.signal.aborted || view.detail !== selected || !key || key !== master ||
+            (selected && selected.controller.signal.aborted)) throw new Error("La vista cambió.");
+      };
+      let clear;
+      edit.disabled = true;
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
+      feedback(result, "Abriendo el PDF guardado para editar las columnas del Excel…", false);
+      try {
+        guard();
+        if (!window.TrazaConverter || typeof window.TrazaConverter.openArchived !== "function") {
+          throw new Error("No se pudo cargar el editor. Actualiza la página e inténtalo nuevamente.");
+        }
+        clear = await getDocument(record, "pdf", key, guard, attempt.controller.signal);
+        guard();
+        view.buffers.add(clear);
+        if (selected) selected.buffers.add(clear);
+        const file = new File([clear], record.pdf_name, { type: "application/pdf" });
+        const authentication = status();
+        guard();
+        // The converter takes the source and then navigates. The archive view
+        // intentionally becomes invalid at that point, so do not guard again.
+        await window.TrazaConverter.openArchived({ file, record, authentication });
+      } catch (error) {
+        if (epoch === generation && archiveView === view && load === view.load && view.detail === selected && view.edit === attempt) {
+          feedback(result, errorText(error), true);
+        }
+      } finally {
+        parentSignal.removeEventListener("abort", abort);
+        if (view.edit === attempt) view.edit = null;
+        if (clear) clear.fill(0);
+        if (clear) view.buffers.delete(clear);
+        if (clear && selected) selected.buffers.delete(clear);
+        edit.disabled = false;
+      }
+    });
+    return edit;
   }
 
   function openDetail(view, record, officialName, opener) {
@@ -1060,6 +1147,9 @@
     }
     panel.append(facts);
     const result = node("div");
+    const edit = node("div", undefined, "audit-actions");
+    edit.append(editButton(record, result, view, detail));
+    panel.append(edit, node("p", "Elige las columnas y guarda otra versión del Excel con el PDF ya archivado. Los documentos originales se conservan.", "audit-muted"));
     for (const kind of ["pdf", "excel"]) {
       const file = node("div", undefined, "traza-document-name");
       file.append(node("span", kind === "pdf" ? "PDF original" : "Libro de Excel", "audit-muted"), node("strong", kind === "pdf" ? record.pdf_name : record.excel_name, "traza-file-name"), documentButton(record, kind, kind === "pdf" ? "Guardar PDF" : "Guardar Excel", result, view, detail));
@@ -1184,6 +1274,7 @@
     }
 
     async function loadRecords() {
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       disposeDetail(view, false);
       for (const clear of view.buffers) { try { clear.fill(0); } catch (_) {} }
       view.buffers.clear();
@@ -1249,7 +1340,7 @@
           table.setAttribute("aria-label", "Archivo de salidas");
           const head = node("thead");
           const headings = node("tr");
-          const titles = ["Salida", "Responsable", "Fecha y hora", "Unidades", "Documentos", "Detalle"];
+          const titles = ["Salida", "Responsable", "Fecha y hora", "Unidades", "Documentos", "Acciones"];
           for (const title of titles) { const th = node("th", title); th.scope = "col"; headings.append(th); }
           head.append(headings);
           const body = node("tbody");
@@ -1279,7 +1370,7 @@
               const open = button("Detalle", true);
               open.setAttribute("aria-label", "Abrir detalle de salida " + record.salida_numero);
               open.addEventListener("click", function () { openDetail(view, record, officialName, open); });
-              cells[5].append(open);
+              cells[5].append(open, editButton(record, result, view));
             }
             row.append.apply(row, cells);
             body.append(row);
@@ -1453,7 +1544,7 @@
     catch (error) { const bar = document.getElementById("audit-bar"); if (bar) feedback(bar, errorText(error), true); }
   }
 
-  window.AuditCloud = Object.freeze({ ready, status, record, newIdempotencyKey });
+  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {
     for (const dialog of openDialogs) dialog.close();

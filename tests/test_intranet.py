@@ -162,11 +162,35 @@ class IntranetAuditTests(unittest.TestCase):
         self.assertIsNone(body["user"])
         self.assertFalse(body.get("csrf_token"))
         unknown_record = str(uuid.uuid4())
-        for path in ("/api/audits", "/api/users", f"/api/audits/{unknown_record}/pdf",
+        for path in ("/api/audits", "/api/users", f"/api/audits/{unknown_record}", f"/api/audits/{unknown_record}/pdf",
                      f"/api/audits/{unknown_record}/excel"):
             with self.subTest(path=path):
                 status, _, _ = self.request(path)
                 self.assertEqual(status, 401)
+
+    def test_archived_record_confirmation_returns_only_authorized_metadata(self):
+        self.login()
+        status, body, _ = self.create_record()
+        self.assertIn(status, (200, 201), body)
+        original = body["record"]
+        endpoint = f"/api/audits/{original['id']}"
+        self.assertEqual(self.request(endpoint, client=self.new_client())[0], 401)
+        status, body, _ = self.request(endpoint)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body, {"record": original})
+        self.assertEqual(body["record"]["salida_numero"], "001234")
+        self.assertEqual(set(body["record"]), {
+            "id", "salida_numero", "created_at", "user_display_name", "username",
+            "pdf_name", "excel_name", "row_count", "total_units",
+        })
+        status, body, _ = self.request(f"/api/audits/{uuid.uuid4()}")
+        self.assertEqual(status, 404, body)
+        # Every authorized team member can regenerate an Excel from the shared PDF.
+        self.create_user()
+        colleague = self.new_client()
+        self.login("companero", "Clave-companero-123!", client=colleague)
+        self.assertEqual(self.request(endpoint, client=colleague)[1], {"record": original})
+        self.assertEqual(self.request("/api/audits")[1]["total"], 1)
 
     def test_login_invalid_password_and_logout(self):
         status, _, _ = self.request("/api/login", "POST", {

@@ -362,7 +362,7 @@
       .export-actions { margin-top: 12px; }
     }
   </style>
-  <link rel="stylesheet" href="traza.css?v=megacontrol-logo-1">
+  <link rel="stylesheet" href="traza.css?v=megacontrol-edit-1">
 </head>
 <body>
   <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
@@ -390,7 +390,8 @@
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
     <div id="converter-view">
-      <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1>Nueva salida</h1><p>Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
+      <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
+      <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
     <div id="converter-content" class="steps" aria-label="Pasos">
       <div class="step active" id="step-upload"><strong>1</strong><span>Cargar PDF</span></div>
       <div class="step" id="step-select"><strong>2</strong><span>Revisar información</span></div>
@@ -471,16 +472,16 @@
     <footer class="footer-note">Creado por Eddie Rivera.<br>© 2026 Eddie Rivera. Todos los derechos reservados.</footer>
     </div>
   </main>
-  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de MegaControl</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel.</p><p>Elige la carpeta de destino en los navegadores compatibles. En los demás, revisa la configuración de descargas de tu navegador.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
+  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de MegaControl</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel. En su detalle, <strong>Editar Excel</strong> permite escoger columnas y nombres usando el PDF guardado, sin subirlo de nuevo ni crear otra salida. Los documentos originales se conservan.</p><p>Elige la carpeta de destino en los navegadores compatibles. Verás una confirmación al guardar; <strong>Descargar una copia</strong> añade una copia a las descargas del navegador cuando la necesites. En los demás navegadores se usa su configuración de descargas.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
 
   <script src="vendor/pdf.min.js?v=megacontrol-1"></script>
   <script src="vendor/xlsx.full.min.js?v=megacontrol-1"></script>
   <script src="excel-table.js?v=megacontrol-1"></script>
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=megacontrol-1"></script>
-  <script src="traza.js?v=megacontrol-1"></script>
-  <script src="audit-cloud.js?v=megacontrol-1"></script>
-  <script src="audit.js?v=megacontrol-1"></script>
+  <script src="traza.js?v=megacontrol-edit-1"></script>
+  <script src="audit-cloud.js?v=megacontrol-edit-1"></script>
+  <script src="audit.js?v=megacontrol-edit-1"></script>
   <script>
     "use strict";
 
@@ -515,7 +516,8 @@
       salidaNumero: "",
       exporting: false,
       pendingAudit: null,
-      excelNameEdited: false
+      excelNameEdited: false,
+      archiveSource: null
     };
 
     function clearPendingAudit() {
@@ -530,6 +532,40 @@
     const loadingBar = $("#loading-bar");
     const fileStatus = $("#file-status");
     const results = $("#results");
+
+    function staleConverterError(message) {
+      const error = new Error(message);
+      error.trazaStale = true;
+      return error;
+    }
+
+    function assertArchiveAccount(source) {
+      const current = window.AuditClient && typeof window.AuditClient.status === "function" ? window.AuditClient.status() : null;
+      const previous = source && source.authentication;
+      if (!previous || !previous.authenticated || !previous.user || !current || !current.authenticated || !current.user ||
+          current.mode !== previous.mode || current.user.id !== previous.user.id || current.generation !== previous.generation) {
+        throw staleConverterError("La sesión cambió. Abre de nuevo la salida desde el Archivo para editar su Excel.");
+      }
+    }
+
+    function assertArchiveSource(source) {
+      assertArchiveAccount(source);
+      if (state.archiveSource !== source || state.salidaNumero !== source.salidaNumero || $("#salida-number").value !== source.salidaNumero) {
+        throw staleConverterError("La salida cambió. Abre de nuevo el documento desde el Archivo.");
+      }
+    }
+
+    function clearArchiveSource() {
+      state.archiveSource = null;
+      $("#archive-source-banner").hidden = true;
+      $("#archive-source-message").textContent = "";
+      $("#salida-number").readOnly = false;
+      dropZone.hidden = false;
+      $("#step-upload span").textContent = "Cargar PDF";
+      $("#converter-title").textContent = "Nueva salida";
+      $("#converter-description").textContent = "Convierte tu documento en un Excel y conserva su respaldo.";
+      $("#excel-file-name-help").textContent = "Puedes editar el número y el nombre. «Guardar Excel…» permite elegir una carpeta en Chrome y Edge. En otros navegadores se usará la configuración de descargas.";
+    }
 
     function normalize(value) {
       return String(value || "")
@@ -773,6 +809,12 @@
         const error = new Error("La lectura del PDF se canceló.");
         error.trazaStale = true;
         throw error;
+      }
+      if (context && context.archiveSource) {
+        assertArchiveSource(context.archiveSource);
+        if (window.TrazaUI && (window.TrazaUI.currentSection !== "converter" || window.TrazaUI.generation !== context.viewGeneration)) {
+          throw staleConverterError("La lectura del PDF se canceló al cambiar de sección.");
+        }
       }
     }
 
@@ -1021,7 +1063,7 @@
       return `Salida${state.salidaNumero ? " " + state.salidaNumero : ""}`;
     }
 
-    async function chooseExcelWriter(fileName) {
+    async function chooseExcelWriter(fileName, archived) {
       if (typeof window.showSaveFilePicker !== "function") return null;
       let handle;
       try {
@@ -1033,10 +1075,10 @@
           }]
         });
       } catch (error) {
-        if (error && error.name === "AbortError") throw new Error("Guardado cancelado. No se registró ni se descargó el Excel.");
+        if (error && error.name === "AbortError") throw new Error(archived ? "Guardado cancelado. No se descargó el Excel ni se cambió la salida original." : "Guardado cancelado. No se registró ni se descargó el Excel.");
         throw new Error("No se pudo abrir el selector de carpeta. Inténtalo nuevamente o usa la carpeta de descargas del navegador.");
       }
-      return async function (bytes, assertCurrent) {
+      const writer = async function (bytes, assertCurrent) {
         let writable;
         try {
           if (assertCurrent) assertCurrent();
@@ -1049,9 +1091,11 @@
         } catch (error) {
           try { if (writable) await writable.abort(); } catch (_) {}
           if (error && error.trazaStale) throw error;
-          throw new Error("No se pudo guardar el Excel en la carpeta elegida. Comprueba que tengas permisos y vuelve a intentarlo. La salida ya está registrada y el reintento conservará ese mismo registro.");
+          throw new Error("No se pudo guardar el Excel en la carpeta elegida. Comprueba que tengas permisos y vuelve a intentarlo. " + (archived ? "La salida original se conserva; reintentar no crea otra salida." : "La salida ya está registrada y el reintento conservará ese mismo registro."));
         }
       };
+      writer.fileName = handle.name || fileName;
+      return writer;
     }
 
     const converterBlobUrls = new Set();
@@ -1079,19 +1123,23 @@
         $("#salida-number").focus();
         return;
       }
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       const fileName = safeFileName($("#excel-file-name").value || defaultExcelName());
       $("#excel-file-name").value = fileName;
       const uiGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
       const authSnapshot = window.AuditClient && typeof window.AuditClient.status === "function" ? window.AuditClient.status() : null;
+      const archiveSource = state.archiveSource;
+      const originalFile = state.originalFile;
       function assertExportCurrent() {
         const viewChanged = window.TrazaUI && (window.TrazaUI.currentSection !== "converter" || window.TrazaUI.generation !== uiGeneration);
         const current = authSnapshot && window.AuditClient.status();
-        const sessionChanged = authSnapshot && authSnapshot.mode === "supabase" && (!current.authenticated || !authSnapshot.authenticated || current.generation !== authSnapshot.generation || current.user.id !== authSnapshot.user.id);
-        if (viewChanged || sessionChanged) {
+        const sessionChanged = authSnapshot && authSnapshot.mode !== "static" && (!current || current.mode !== authSnapshot.mode || current.generation !== authSnapshot.generation || current.authenticated !== authSnapshot.authenticated || (authSnapshot.authenticated && (!current.user || !authSnapshot.user || current.user.id !== authSnapshot.user.id)));
+        if (viewChanged || sessionChanged || originalFile !== state.originalFile || archiveSource !== state.archiveSource) {
           const error = new Error(sessionChanged ? "La sesión cambió. Inicia sesión y vuelve a guardar el Excel." : "La sección cambió. Vuelve a Nueva salida para guardar el Excel.");
           error.trazaStale = true;
           throw error;
         }
+        if (archiveSource) assertArchiveSource(archiveSource);
       }
       let fileBytes;
       let auditRecord = null;
@@ -1100,7 +1148,7 @@
       $("#export-button").textContent = "Preparando Excel…";
       try {
         // Open the picker in the original click, before encryption or network work.
-        const saveWriter = await chooseExcelWriter(fileName);
+        const saveWriter = await chooseExcelWriter(fileName, Boolean(archiveSource));
         assertExportCurrent();
         if (!window.AuditClient) throw new Error("No se pudo cargar la función de auditoría. Actualiza la página antes de guardar.");
       const headers = [];
@@ -1236,26 +1284,38 @@
       backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
         const signature = JSON.stringify({ salida: state.salidaNumero, excelName: fileName, columns: defs.map(def => def.key), headers, rows: state.rows, info: state.documentInfo });
-        const cached = state.pendingAudit;
-        if (cached && cached.signature === signature && cached.pdfFile === state.originalFile) {
-          fileBytes = cached.excelBytes;
-        } else {
+        if (archiveSource) {
           clearPendingAudit();
           fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
-          state.pendingAudit = {
-            signature,
-            salidaNumero: state.salidaNumero,
-            excelName: fileName,
-            pdfFile: state.originalFile,
-            excelBytes: fileBytes,
-            rowCount: state.rows.length,
-            totalUnits: totals.totalUnidades,
-            idempotencyKey: window.AuditClient.newIdempotencyKey()
-          };
+          if (typeof window.AuditClient.confirmArchivedRecord !== "function") throw new Error("No se pudo verificar la salida original. Actualiza la página y vuelve a abrirla desde el Archivo.");
+          $("#export-button").textContent = "Verificando salida original…";
+          const confirmed = await window.AuditClient.confirmArchivedRecord(archiveSource.id);
+          assertExportCurrent();
+          if (!confirmed || String(confirmed.id) !== archiveSource.id || String(confirmed.salida_numero) !== archiveSource.salidaNumero) {
+            throw new Error("La salida original no coincide. Vuelve a abrirla desde el Archivo antes de guardar.");
+          }
+        } else {
+          const cached = state.pendingAudit;
+          if (cached && cached.signature === signature && cached.pdfFile === state.originalFile) {
+            fileBytes = cached.excelBytes;
+          } else {
+            clearPendingAudit();
+            fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
+            state.pendingAudit = {
+              signature,
+              salidaNumero: state.salidaNumero,
+              excelName: fileName,
+              pdfFile: state.originalFile,
+              excelBytes: fileBytes,
+              rowCount: state.rows.length,
+              totalUnits: totals.totalUnidades,
+              idempotencyKey: window.AuditClient.newIdempotencyKey()
+            };
+          }
+          $("#export-button").textContent = "Registrando salida…";
+          auditRecord = await window.AuditClient.record(state.pendingAudit);
+          assertExportCurrent();
         }
-        $("#export-button").textContent = "Registrando salida…";
-        auditRecord = await window.AuditClient.record(state.pendingAudit);
-        assertExportCurrent();
         $("#export-button").textContent = "Guardando Excel…";
         if (saveWriter) {
           await saveWriter(fileBytes, assertExportCurrent);
@@ -1267,18 +1327,27 @@
         updateStep(4);
         state.pendingAudit = null;
         const destination = saveWriter ? "Excel guardado en la carpeta elegida." : "Se inició la descarga del Excel usando la configuración de descargas del navegador.";
-        showMessage((auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination, "info");
+        const confirmation = (archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination;
+        showMessage(confirmation, "info");
+        if (window.TrazaSavedFile) window.TrazaSavedFile.show({
+          data: saveWriter ? fileBytes : undefined,
+          name: saveWriter ? saveWriter.fileName : fileName,
+          mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          guard: assertExportCurrent,
+          message: confirmation
+        });
         if (fileBytes && typeof fileBytes.fill === "function") fileBytes.fill(0);
       } catch (error) {
-        showMessage(error.message || "No se pudo guardar la salida. Intenta descargar de nuevo.", "error");
+        if (!error.trazaStale) showMessage(error.message || "No se pudo guardar la salida. Intenta descargar de nuevo.", "error");
       } finally {
+        if (archiveSource && fileBytes && typeof fileBytes.fill === "function") fileBytes.fill(0);
         state.exporting = false;
         $("#export-button").textContent = "Guardar Excel…";
         $("#export-button").disabled = !selectedDefs().length || !state.rows.length;
       }
     }
 
-    async function handleFile(file) {
+    async function handleFile(file, archiveSource) {
       if (state.exporting) {
         showMessage("Espera a que termine la descarga antes de cargar otro PDF.", "info");
         return;
@@ -1287,16 +1356,33 @@
         showMessage("Selecciona un archivo PDF válido.", "error");
         return;
       }
+      if (archiveSource) assertArchiveAccount(archiveSource);
       hideMessage();
       cancelConverterParse();
-      const parseContext = { generation: converterParseGeneration, task: null, buffer: null };
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
+      clearArchiveSource();
+      const parseContext = { generation: converterParseGeneration, task: null, buffer: null, archiveSource, viewGeneration: window.TrazaUI ? window.TrazaUI.generation : null };
       activeParse = parseContext;
+      state.rows = [];
+      state.rawLines = [];
+      state.documentInfo = {};
       state.originalFile = null;
       clearPendingAudit();
       state.originalName = file.name;
-      state.salidaNumero = "";
+      state.archiveSource = archiveSource || null;
+      state.salidaNumero = archiveSource ? archiveSource.salidaNumero : "";
       state.excelNameEdited = false;
-      $("#salida-number").value = "";
+      $("#salida-number").value = state.salidaNumero;
+      if (archiveSource) {
+        $("#salida-number").readOnly = true;
+        dropZone.hidden = true;
+        $("#step-upload span").textContent = "PDF del Archivo";
+        $("#converter-title").textContent = "Editar Excel";
+        $("#converter-description").textContent = "Elige las columnas de la salida guardada y guarda una nueva copia.";
+        $("#archive-source-message").textContent = `Editando Excel de salida ${archiveSource.salidaNumero}. El PDF y el Excel originales siguen en el Archivo. Esta copia no crea otra salida.`;
+        $("#archive-source-banner").hidden = false;
+        $("#excel-file-name-help").textContent = "El número corresponde a la salida guardada. Puedes cambiar las columnas, sus nombres y el nombre del Excel. Guardar esta copia no crea otra salida ni cambia los documentos originales.";
+      }
       $("#excel-file-name").value = "";
       fileStatus.classList.add("show");
       $("#file-name").textContent = file.name;
@@ -1311,7 +1397,7 @@
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
         state.originalFile = file;
-        state.salidaNumero = state.documentInfo.numero || "";
+        state.salidaNumero = archiveSource ? archiveSource.salidaNumero : state.documentInfo.numero || "";
         $("#salida-number").value = state.salidaNumero;
         $("#excel-file-name").value = safeFileName(defaultExcelName());
         $("#manual-tax").checked = false;
@@ -1330,11 +1416,16 @@
         renderPreview();
         results.classList.add("show");
         updateStep(3);
+        return true;
       } catch (error) {
-        if (error.trazaStale || parseContext.generation !== converterParseGeneration) return;
+        if (error.trazaStale || parseContext.generation !== converterParseGeneration) {
+          if (archiveSource) throw error;
+          return;
+        }
         console.error(error);
         $("#file-detail").textContent = "No se pudo leer el archivo";
         showMessage(error.message || "Ocurrió un error al leer el PDF.", "error");
+        if (archiveSource) throw error;
       } finally {
         if (parseContext.generation === converterParseGeneration) {
           activeParse = null;
@@ -1343,10 +1434,12 @@
       }
     }
 
-    function resetApp() {
-      if (state.exporting) return;
+    function resetApp(force) {
+      if (state.exporting && force !== true) return;
       cancelConverterParse();
       setLoading(false);
+      if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
+      clearArchiveSource();
       state.rows = [];
       state.rawLines = [];
       state.documentInfo = {};
@@ -1365,8 +1458,42 @@
       fileInput.value = "";
       hideMessage();
       updateStep(1);
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      $("#column-list").replaceChildren();
+      $("#rename-list").replaceChildren();
+      $("#table-wrap").innerHTML = '<div class="empty-preview">Carga un PDF para ver los datos.</div>';
+      $("#preview-count").textContent = "0 filas";
+      $("#file-name").textContent = "-";
+      $("#file-detail").textContent = "";
+      $("#calculated-totals").textContent = "";
+      $("#tax-breakdown").textContent = "";
+      $("#totals-warning").textContent = "";
+      $("#export-button").disabled = true;
+      if (force !== true) window.scrollTo({ top: 0, behavior: "smooth" });
     }
+
+    if (typeof window !== "undefined") window.TrazaConverter = Object.freeze({
+      async openArchived(options) {
+        if (state.exporting) throw new Error("Espera a que termine el guardado antes de editar otra salida.");
+        const record = options && options.record;
+        const file = options && options.file;
+        const authentication = options && options.authentication;
+        if (!record || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(record.id)) || !/^\d{1,60}$/.test(String(record.salida_numero)) || !file || typeof file.arrayBuffer !== "function") {
+          throw new Error("No se pudo verificar el documento guardado para editar su Excel.");
+        }
+        const source = {
+          id: String(record.id),
+          salidaNumero: String(record.salida_numero),
+          authentication: authentication && { mode: authentication.mode, authenticated: authentication.authenticated, generation: authentication.generation, user: authentication.user && { id: authentication.user.id } }
+        };
+        assertArchiveAccount(source);
+        if (window.TrazaUI) window.TrazaUI.navigate("converter");
+        const loaded = await handleFile(file, source);
+        assertArchiveSource(source);
+        if (!loaded || (window.TrazaUI && window.TrazaUI.currentSection !== "converter")) throw staleConverterError("La edición se canceló. Abre otra vez la salida desde el Archivo.");
+        const firstColumn = $("#column-list input[data-column]");
+        if (firstColumn) firstColumn.focus();
+      }
+    });
 
     $("#choose-button").addEventListener("click", event => { event.stopPropagation(); fileInput.click(); });
     fileInput.addEventListener("change", event => handleFile(event.target.files[0]));
@@ -1377,6 +1504,10 @@
     dropZone.addEventListener("drop", event => handleFile(event.dataTransfer.files[0]));
     $("#export-button").addEventListener("click", exportExcel);
     $("#salida-number").addEventListener("input", event => {
+      if (state.archiveSource) {
+        event.target.value = state.archiveSource.salidaNumero;
+        return;
+      }
       state.salidaNumero = event.target.value.trim();
       if (!state.excelNameEdited) $("#excel-file-name").value = safeFileName(defaultExcelName());
       hideMessage();
@@ -1399,6 +1530,7 @@
       renderPreview();
     });
     $("#reset-button").addEventListener("click", resetApp);
+    $("#archive-source-return").addEventListener("click", () => window.TrazaUI && window.TrazaUI.navigate("archive"));
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
       window.addEventListener("traza:session-cleared", () => {
         for (const url of converterBlobUrls) URL.revokeObjectURL(url);
@@ -1406,6 +1538,10 @@
         clearPendingAudit();
         cancelConverterParse();
         setLoading(false);
+        if (state.archiveSource) resetApp(true);
+      });
+      window.addEventListener("traza-ui:navigated", () => {
+        if (activeParse && activeParse.archiveSource && window.TrazaUI && window.TrazaUI.currentSection !== "converter") resetApp(true);
       });
     }
 

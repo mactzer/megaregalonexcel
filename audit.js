@@ -25,7 +25,54 @@
   let currentStatus = null;
   let statusPromise = null;
   let pageGeneration = 0;
+  let authenticationGeneration = 0;
   let loginInProgress = false;
+  const archiveEdits = new Set();
+
+  function status() {
+    return {
+      mode: currentStatus ? currentStatus.mode : "intranet",
+      authenticated: Boolean(currentStatus && currentStatus.authenticated),
+      user: currentStatus && currentStatus.user ? Object.assign({}, currentStatus.user) : null,
+      generation: authenticationGeneration
+    };
+  }
+
+  function cancelArchiveEdits() {
+    for (const controller of archiveEdits) controller.abort();
+    archiveEdits.clear();
+  }
+
+  function clearSession() {
+    authenticationGeneration++;
+    cancelArchiveEdits();
+    currentStatus = { mode: "intranet", authenticated: false, user: null, csrf_token: null };
+    window.dispatchEvent(new CustomEvent("traza:session-cleared"));
+    renderAccountBar();
+    renderAuditPage();
+  }
+
+  function setStatus(next) {
+    if (currentStatus && currentStatus.authenticated && !next.authenticated) {
+      clearSession();
+      return;
+    }
+    const before = currentStatus && currentStatus.user && currentStatus.user.id;
+    const after = next.user && next.user.id;
+    if (Boolean(currentStatus && currentStatus.authenticated) !== Boolean(next.authenticated) || before !== after) {
+      authenticationGeneration++;
+      cancelArchiveEdits();
+    }
+    currentStatus = next;
+  }
+
+  function assertAuthentication(snapshot) {
+    const now = status();
+    if (!snapshot.authenticated || !now.authenticated || snapshot.generation !== now.generation ||
+        !snapshot.user || !now.user || String(snapshot.user.id) !== String(now.user.id)) {
+      throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+    }
+  }
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -75,6 +122,7 @@
 
   async function request(path, options) {
     options = options || {};
+    const epoch = authenticationGeneration;
     const headers = new Headers(options.headers || {});
     if (options.body !== undefined) headers.set("Content-Type", "application/json");
     if (options.method && options.method !== "GET" && currentStatus && currentStatus.csrf_token) {
@@ -87,24 +135,26 @@
         headers,
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         credentials: "same-origin",
-        cache: "no-store"
+        cache: "no-store",
+        signal: options.signal
       });
     } catch (error) {
+      if (error.name === "AbortError") throw error;
       throw new Error("No se pudo conectar con el equipo que guarda la auditoría. Comprueba que esté encendido y vuelve a intentarlo.");
     }
+    if (response.status === 401 && options.sessionAware !== false && epoch === authenticationGeneration &&
+        currentStatus && currentStatus.mode === "intranet") clearSession();
     let result;
     try { result = await response.json(); }
     catch (error) {
       throw new Error("El equipo de auditoría devolvió una respuesta inválida. Vuelve a intentarlo.");
     }
     if (!response.ok) {
-      if (response.status === 401 && options.sessionAware !== false && currentStatus && currentStatus.mode === "intranet") {
-        currentStatus = { mode: "intranet", authenticated: false, user: null, csrf_token: null };
-        renderAccountBar();
-        renderAuditPage();
-      }
       const serverError = typeof result.error === "string" ? result.error : result.message;
       throw new Error(serverError || (response.status === 401 ? "Tu sesión ha terminado. Inicia sesión nuevamente." : "No se pudo completar la operación."));
+    }
+    if (options.sessionAware !== false && epoch !== authenticationGeneration) {
+      throw new Error("La sesión cambió. Inicia sesión nuevamente.");
     }
     return result;
   }
@@ -142,13 +192,15 @@
 
   async function ready() {
     if (!statusPromise) {
+      const epoch = authenticationGeneration;
       statusPromise = loadStatus().then(function (status) {
-        currentStatus = status;
+        if (epoch !== authenticationGeneration) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+        setStatus(status);
         renderAccountBar();
         renderAuditPage();
         return status;
       }).catch(function (error) {
-        renderConnectionError(error);
+        if (epoch === authenticationGeneration) renderConnectionError(error);
         throw error;
       });
     }
@@ -168,6 +220,22 @@
     return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
   }
 
+  async function confirmArchivedRecord(recordId, options) {
+    await ready();
+    const account = status();
+    assertAuthentication(account);
+    if (typeof recordId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recordId)) {
+      throw new Error("No se pudo identificar la salida del archivo.");
+    }
+    const result = await request("/audits/" + encodeURIComponent(recordId), { signal: options && options.signal });
+    assertAuthentication(account);
+    if (!result || !result.record || result.record.id !== recordId || typeof result.record.salida_numero !== "string" ||
+        typeof result.record.pdf_name !== "string" || typeof result.record.excel_name !== "string") {
+      throw new Error("No se pudo confirmar la salida del archivo. Actualiza el historial.");
+    }
+    return result.record;
+  }
+
   function asBytes(value) {
     if (value instanceof ArrayBuffer) return new Uint8Array(value);
     if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
@@ -183,9 +251,12 @@
   }
 
   async function record(options) {
-    const status = await ready();
-    if (status.mode === "static") return null;
-    if (!status.authenticated) {
+    const beforeReady = status();
+    const service = await ready();
+    if (service.mode === "static") return null;
+    if (beforeReady.authenticated) assertAuthentication(beforeReady);
+    const account = status();
+    if (!account.authenticated) {
       const input = document.getElementById("audit-login-username");
       if (input) input.focus();
       throw new Error("Inicia sesión en la auditoría antes de descargar el Excel.");
@@ -198,24 +269,28 @@
       throw new Error("La auditoría permite un máximo de 25 MB por documento (PDF o Excel).");
     }
     const pdfBytes = new Uint8Array(await options.pdfFile.arrayBuffer());
-    const result = await request("/audits", {
-      method: "POST",
-      headers: { "Idempotency-Key": options.idempotencyKey || newIdempotencyKey() },
-      body: {
-        salida_numero: String(options.salidaNumero),
-        row_count: options.rowCount,
-        total_units: options.totalUnits,
-        pdf_name: options.pdfFile.name,
-        pdf_base64: base64(pdfBytes),
-        excel_base64: base64(excelBytes)
+    try {
+      assertAuthentication(account);
+      const result = await request("/audits", {
+        method: "POST",
+        headers: { "Idempotency-Key": options.idempotencyKey || newIdempotencyKey() },
+        body: {
+          salida_numero: String(options.salidaNumero),
+          row_count: options.rowCount,
+          total_units: options.totalUnits,
+          pdf_name: options.pdfFile.name,
+          pdf_base64: base64(pdfBytes),
+          excel_base64: base64(excelBytes)
+        }
+      });
+      assertAuthentication(account);
+      const savedRecord = result && result.record;
+      if (!savedRecord || savedRecord.id === undefined || String(savedRecord.salida_numero) !== String(options.salidaNumero)) {
+        throw new Error("No se pudo confirmar el registro de esta salida. Intenta descargarla nuevamente.");
       }
-    });
-    const savedRecord = result && result.record;
-    if (!savedRecord || savedRecord.id === undefined || String(savedRecord.salida_numero) !== String(options.salidaNumero)) {
-      throw new Error("No se pudo confirmar el registro de esta salida. Intenta descargarla nuevamente.");
-    }
-    window.dispatchEvent(new CustomEvent("audit:recorded", { detail: savedRecord }));
-    return savedRecord;
+      window.dispatchEvent(new CustomEvent("audit:recorded", { detail: savedRecord }));
+      return savedRecord;
+    } finally { pdfBytes.fill(0); }
   }
 
   function renderConnectionError(error) {
@@ -274,17 +349,16 @@
       const logout = button("Cerrar sesión", "audit-button-secondary");
       logout.addEventListener("click", async function () {
         logout.disabled = true;
+        const csrfToken = currentStatus.csrf_token;
+        clearSession();
+        const controller = new AbortController();
+        const timeout = window.setTimeout(function () { controller.abort(); }, 8000);
         try {
-          await request("/logout", { method: "POST", body: {} });
-          currentStatus = { mode: "intranet", authenticated: false, user: null, csrf_token: null };
-          renderAccountBar();
-          renderAuditPage();
+          await request("/logout", { method: "POST", body: {}, headers: { "X-CSRF-Token": csrfToken }, signal: controller.signal, sessionAware: false });
         } catch (error) {
-          logout.disabled = false;
-          const oldError = panel.querySelector(".audit-error");
-          if (oldError) oldError.remove();
-          panel.append(message(errorText(error), true));
-        }
+          // Local documents and session have already been removed. A remote
+          // revocation failure must never restore them.
+        } finally { window.clearTimeout(timeout); }
       });
       actions.append(logout);
       account.append(text, actions);
@@ -305,11 +379,13 @@
         loginInProgress = true;
         submit.disabled = true;
         feedback.replaceChildren();
+        const epoch = authenticationGeneration;
         try {
           const result = await request("/login", { method: "POST", body: { username: username.value.trim(), password: password.value }, sessionAware: false });
+          if (epoch !== authenticationGeneration || !form.isConnected) return;
           if (!result.user || !result.csrf_token) throw new Error("No se pudo iniciar una sesión válida.");
           password.value = "";
-          currentStatus = { mode: "intranet", authenticated: true, user: result.user, csrf_token: result.csrf_token };
+          setStatus({ mode: "intranet", authenticated: true, user: result.user, csrf_token: result.csrf_token });
           renderAccountBar();
           renderAuditPage();
         } catch (error) {
@@ -346,6 +422,30 @@
     const link = element("a", label, "audit-button audit-button-secondary audit-button-small");
     link.href = API_ROOT + "/audits/" + encodeURIComponent(recordId) + "/" + kind;
     return link;
+  }
+
+  async function archivedPdf(record, controller, guard) {
+    let response;
+    try {
+      response = await fetch(API_ROOT + "/audits/" + encodeURIComponent(record.id) + "/pdf", {
+        credentials: "same-origin", cache: "no-store", signal: controller.signal
+      });
+    } catch (error) {
+      if (error.name === "AbortError") throw error;
+      throw new Error("No se pudo recuperar el PDF guardado. Comprueba la conexión y vuelve a intentarlo.");
+    }
+    guard();
+    if (response.status === 401) {
+      clearSession();
+      throw new Error("Tu sesión ha terminado. Inicia sesión nuevamente.");
+    }
+    if (!response.ok) throw new Error("No se pudo recuperar el PDF guardado. Actualiza el archivo e inténtalo de nuevo.");
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    try {
+      guard();
+      if (!bytes.byteLength || bytes.byteLength > MAX_FILE_BYTES) throw new Error("El PDF guardado no es válido o supera el tamaño permitido.");
+      return bytes;
+    } catch (error) { bytes.fill(0); throw error; }
   }
 
   function renderAuditPage() {
@@ -385,6 +485,7 @@
     let requestNumber = 0;
 
     async function loadRecords() {
+      cancelArchiveEdits();
       const currentRequest = ++requestNumber;
       feedback.replaceChildren();
       recordsArea.replaceChildren(element("p", "Cargando historial…", "audit-state"));
@@ -426,6 +527,46 @@
             const docs = element("td");
             const links = element("div", undefined, "audit-documents");
             links.append(documentLink(record.id, "pdf", "PDF original"), documentLink(record.id, "excel", "Excel"));
+            const edit = button("Editar Excel", "audit-button-secondary audit-button-small");
+            edit.addEventListener("click", async function () {
+              cancelArchiveEdits();
+              const controller = new AbortController();
+              archiveEdits.add(controller);
+              const account = status();
+              const viewGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
+              const selectedRequest = requestNumber;
+              const guard = function () {
+                assertAuthentication(account);
+                if (controller.signal.aborted || generation !== pageGeneration || selectedRequest !== requestNumber ||
+                    !edit.isConnected || (window.TrazaUI && (window.TrazaUI.currentSection !== "archive" || window.TrazaUI.generation !== viewGeneration))) {
+                  throw new Error("La vista cambió. Abre de nuevo la salida que deseas editar.");
+                }
+              };
+              let bytes;
+              edit.disabled = true;
+              feedback.replaceChildren(message("Recuperando el PDF de la salida…", false));
+              try {
+                guard();
+                const confirmed = await confirmArchivedRecord(record.id, { signal: controller.signal });
+                guard();
+                bytes = await archivedPdf(confirmed, controller, guard);
+                guard();
+                if (!window.TrazaConverter || typeof window.TrazaConverter.openArchived !== "function") {
+                  throw new Error("No se pudo abrir el editor. Actualiza la página e inténtalo de nuevo.");
+                }
+                const file = new File([bytes], confirmed.pdf_name, { type: "application/pdf" });
+                await window.TrazaConverter.openArchived({ file, record: confirmed, authentication: account });
+              } catch (error) {
+                if (account.generation === authenticationGeneration && generation === pageGeneration && selectedRequest === requestNumber && edit.isConnected && !controller.signal.aborted) {
+                  showMessage(feedback, errorText(error), true);
+                }
+              } finally {
+                if (bytes) bytes.fill(0);
+                archiveEdits.delete(controller);
+                if (edit.isConnected) edit.disabled = false;
+              }
+            });
+            links.append(edit);
             docs.append(links);
             row.append(salida, user, date, amounts, docs);
             body.append(row);
@@ -585,7 +726,11 @@
     ready().catch(function () {});
   }
 
-  window.AuditClient = Object.freeze({ ready, record, newIdempotencyKey });
+  window.addEventListener("traza-ui:navigated", function (event) {
+    cancelArchiveEdits();
+    if (event.detail && event.detail.section === "archive" && currentStatus && currentStatus.authenticated) renderAuditPage();
+  });
+  window.AuditClient = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialise, { once: true });
   else initialise();
 })();

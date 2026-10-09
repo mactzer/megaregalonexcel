@@ -16,6 +16,10 @@ Al abrir una salida, el detalle muestra sus documentos y una vista previa real d
 
 Al guardar desde el convertidor, el nombre sugerido es **Salida [número].xlsx** y se puede editar. La auditoría se confirma antes de escribir el archivo o iniciar la descarga. Cancelar el selector no registra la salida; si una escritura local falla después de registrarla, reintentar no crea otro registro.
 
+**Editar Excel** recupera el PDF autorizado de una salida del Archivo y abre el convertidor con la misma sesión. Puedes elegir nuevamente las columnas (incluido el código de barras), cambiar sus encabezados y el nombre del Excel. El número de la salida se mantiene; al guardar se confirma de nuevo el acceso al registro existente. Esta copia no sube documentos ni crea otra salida: el PDF y el Excel originales permanecen en el Archivo. `audit.html` abre directamente el Archivo de la misma aplicación.
+
+El guardado muestra una confirmación visible con el nombre del archivo. Cuando eliges una carpeta, el navegador escribe el archivo allí y no lo añade a su panel de descargas. El botón **Descargar una copia** inicia una descarga adicional con los mismos bytes, sin volver a registrar la salida ni abrir otro selector. Puedes usarlo si quieres que aparezca en el panel del navegador; esa copia sigue su configuración habitual de descargas. La confirmación y la copia disponible se limpian al cambiar de sección o cerrar sesión.
+
 ## Desarrollo y validación
 
 La interfaz utiliza `traza.css` y `traza.js`, con iconos locales y bibliotecas incluidas en `vendor`. No requiere compilación. Sirve la carpeta con `python3 -m http.server 8000`. Las dos modalidades de auditoría conservan su almacenamiento independiente: Supabase con cifrado en el navegador e intranet con el servidor Python y SQLite. Abrir un HTML directamente no sustituye la instalación del servicio de auditoría.

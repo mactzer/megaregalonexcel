@@ -98,10 +98,26 @@ async function harness(options = {}) {
   page.setDefaultTimeout(10000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowStorage: null, noCount: false, role: options.role || 'admin', external: [] };
+  const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
+  page.on('download', download => state.downloads.push(download.suggestedFilename()));
   await context.addInitScript(() => {
     window.__picker = { cancel: false, failWrite: false, files: [], calls: [] };
     window.__events = [];
+    window.__blobUrls = new Set();
+    window.__revokedBlobUrls = [];
+    const createUrl = URL.createObjectURL;
+    const revokeUrl = URL.revokeObjectURL;
+    URL.createObjectURL = function (blob) {
+      const url = createUrl.call(this, blob);
+      window.__blobUrls.add(url);
+      window.__latestBlobUrl = url;
+      return url;
+    };
+    URL.revokeObjectURL = function (url) {
+      window.__blobUrls.delete(url);
+      window.__revokedBlobUrls.push(url);
+      return revokeUrl.call(this, url);
+    };
     const readBytes = Response.prototype.arrayBuffer;
     Response.prototype.arrayBuffer = async function () {
       if (window.__delayBody && this.url.includes('/storage/')) {
@@ -115,10 +131,11 @@ async function harness(options = {}) {
     window.showSaveFilePicker = async function (options) {
       window.__events.push('picker'); window.__picker.calls.push({ options, active: navigator.userActivation.isActive });
       if (window.__picker.cancel) throw new DOMException('Cancelled', 'AbortError');
-      return { async createWritable() {
+      const name = window.__picker.chosenName || options.suggestedName;
+      return { name, async createWritable() {
         let data;
         return { async write(value) { if (window.__picker.failWrite) throw new Error('Fictional local write failure'); data = Array.from(value instanceof Blob ? new Uint8Array(await value.arrayBuffer()) : value instanceof Uint8Array ? value : new Uint8Array(value)); },
-          async close() { window.__picker.files.push({ name: options.suggestedName, bytes: data }); }, async abort() {} };
+          async close() { window.__picker.files.push({ name, bytes: data }); }, async abort() {} };
       } };
     };
   });
@@ -153,6 +170,7 @@ async function harness(options = {}) {
       await json(row); return;
     }
     if (pathname === '/rest/v1/mega_audit_records') {
+      if (state.slowConfirmation && url.searchParams.has('id')) await state.slowConfirmation;
       if (state.failList) { await json({ code: 'fictional_error' }, state.failList); return; }
       const eq = key => (url.searchParams.get(key) || '').replace(/^eq\./, '');
       let rows = state.records.filter(row => (!eq('id') || row.id === eq('id')) && (!eq('salida_tag') || row.salida_tag === eq('salida_tag')) && (!eq('created_by') || row.created_by === eq('created_by')));
@@ -166,6 +184,7 @@ async function harness(options = {}) {
       const location = pathname.slice(storage.length).replace(/^authenticated\//, '').replace(/^mega-audit-documents\//, '');
       if (method === 'POST') { if (state.storage.has(location)) { await json({ code: 'Duplicate' }, 409); return; } state.storage.set(location, request.postDataBuffer()); await json({ Key: location }); return; }
       if (state.slowStorage) await state.slowStorage;
+      for (const [id, delay] of state.slowDocuments) if (location.includes(id)) await delay;
       if (state.failStorage) { await json({ code: 'fictional_error' }, state.failStorage); return; }
       const bytes = state.storage.get(location);
       if (!bytes) { await json({ code: 'not_found' }, 404); return; }
@@ -187,6 +206,8 @@ async function login(page, filename = 'index.html') {
 
 async function convert(page) {
   await page.evaluate(() => window.TrazaUI.navigate('converter'));
+  assert.equal(await page.locator('#drop-zone').isVisible(), true);
+  assert.equal(await page.locator('#converter-title').innerText(), 'Nueva salida');
   await page.locator('#file-input').setInputFiles({ name: 'Salida ficticia 00123.pdf', mimeType: 'application/pdf', buffer: fixture.pdf });
   await page.locator('#export-button:not([disabled])').waitFor();
   assert.equal(await page.locator('#salida-number').inputValue(), '00123');
@@ -195,6 +216,42 @@ async function convert(page) {
 async function waitNotBusy(page) { await page.locator('#export-button:not([disabled])').waitFor(); }
 async function profile(page) { await page.locator('#app-profile button').first().click(); }
 async function checkNoOverflow(page) { assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Viewport must not scroll horizontally'); }
+
+async function savedNotice(page, name) {
+  const notice = page.locator('#traza-save-notice');
+  await notice.waitFor({ state: 'visible' });
+  assert.equal(await notice.getAttribute('role'), 'status');
+  assert.equal(await notice.locator('#traza-saved-file-name').innerText(), name);
+  assert.match(await notice.locator('#traza-saved-file-message').innerText(), /guardad.*carpeta/i);
+  await notice.getByRole('button', { name: 'Descargar una copia', exact: true }).waitFor({ state: 'visible' });
+  return notice;
+}
+
+async function copySavedFile(h, expected, name) {
+  const pickerCalls = await h.page.evaluate(() => window.__picker.calls.length);
+  const requests = h.state.requests.length;
+  const pending = h.page.waitForEvent('download');
+  await h.page.locator('#traza-save-notice').getByRole('button', { name: 'Descargar una copia', exact: true }).click();
+  const download = await pending;
+  assert.equal(download.suggestedFilename(), name);
+  assert.equal(Buffer.compare(fs.readFileSync(await download.path()), expected), 0, 'The browser download must copy the exact bytes saved in the chosen folder');
+  assert.equal(await h.page.evaluate(() => window.__picker.calls.length), pickerCalls, 'Copy never opens another folder picker');
+  assert.equal(h.state.requests.length, requests, 'Copy never registers, uploads or fetches the document again');
+  assert.match(await h.page.locator('#traza-saved-file-message').innerText(), /descarga.*copia.*panel de descargas/i);
+}
+
+async function editArchived(page) {
+  await page.getByRole('button', { name: /^Abrir detalle de salida / }).first().click();
+  await page.getByText('Página 1 de 1', { exact: true }).waitFor();
+  await page.locator('#traza-document-detail').getByRole('button', { name: /Editar Excel/ }).click();
+  await page.locator('#export-button:not([disabled])').waitFor();
+  assert.equal(await page.evaluate(() => window.TrazaUI.currentSection), 'converter');
+  assert.equal(await page.locator('#converter-title').innerText(), 'Editar Excel');
+  assert.equal(await page.locator('#drop-zone').isVisible(), false, 'Editing a stored PDF does not ask the user to upload it again');
+  assert.match(await page.locator('#step-upload').innerText(), /PDF del Archivo/);
+  assert.equal(await page.locator('#salida-number').inputValue(), '00123');
+  assert.equal(await page.locator('#salida-number').evaluate(input => input.readOnly), true, 'An archived re-export must keep its original audit number');
+}
 
 test('desktop: real encrypted archive, official author, damaged records, count, preview and document bytes', async () => {
   const h = await harness();
@@ -328,9 +385,11 @@ test('converter: picker cancellation does not register or download; local write 
     await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
     assert.equal(h.state.recordCalls, 0);
     assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
     await h.page.evaluate(() => { window.__picker.cancel = false; window.__picker.failWrite = true; });
     await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
     assert.equal(h.state.recordCalls, 1);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
     const count = h.state.records.length;
     await h.page.evaluate(() => { window.__picker.failWrite = false; });
     await h.page.locator('#export-button').click();
@@ -454,7 +513,10 @@ test('audit.html opens archive directly and offers navigation back to converter'
     await login(h.page, 'audit.html');
     assert.equal(await h.page.evaluate(() => window.TrazaUI.currentSection), 'archive');
     const back = h.page.getByRole('link', { name: 'Nueva salida', exact: true }).first();
-    assert.match(await back.getAttribute('href'), /index\.html.*nueva-salida/);
+    assert.match(await back.getAttribute('href'), /(?:index\.html.*)?#nueva-salida/);
+    await back.click();
+    await h.page.waitForFunction(() => window.TrazaUI.currentSection === 'converter');
+    assert.equal(await h.page.evaluate(() => window.AuditCloud.status().authenticated), true, 'The archive entry point shares the converter session');
   } finally { await h.close(); }
 });
 
@@ -628,5 +690,335 @@ test('intranet: shared shell keeps native login, profile, user dialog and logout
     await profile(h.page);
     await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
     await h.page.locator('#app-profile').getByRole('button', { name: 'Iniciar sesión', exact: true }).waitFor();
+  } finally { await h.close(); }
+});
+
+test('intranet: an authorized user edits a saved PDF and exports a native Excel copy without inserting another audit', async () => {
+  const h = await harness();
+  let authenticated = false;
+  const user = { id: 2, username: 'operador', display_name: 'Usuario ficticio', role: 'user', active: true };
+  const record = { id: fixture.records[0].id, salida_numero: '00123', pdf_name: 'Documento interno ficticio.pdf', excel_name: 'Salida 00123.xlsx',
+    created_at: '2026-10-09T02:30:00Z', username: 'administrador', user_display_name: 'Autor oficial ficticio', row_count: 2, total_units: 5 };
+  const requests = [];
+  try {
+    await h.context.route(`${origin}/index.html*`, route => route.fulfill({ contentType: 'text/html', body: fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace('<html lang="es"', '<html lang="es" data-audit-required="true"') }));
+    await h.context.route(`${origin}/api/**`, route => {
+      const request = route.request(), pathname = new URL(request.url()).pathname;
+      requests.push({ pathname, method: request.method() });
+      let result;
+      if (pathname === '/api/login') { authenticated = true; result = { user, csrf_token: 'fictional-csrf' }; }
+      else if (pathname === '/api/logout') { authenticated = false; result = {}; }
+      else if (pathname === '/api/status') result = { mode: 'intranet', authenticated, user: authenticated ? user : null, csrf_token: authenticated ? 'fictional-csrf' : null };
+      else if (pathname === '/api/audits') result = { records: [record], total: 1, page_size: 25 };
+      else if (pathname === `/api/audits/${record.id}`) result = { record };
+      else if (pathname === `/api/audits/${record.id}/pdf`) return route.fulfill({ contentType: 'application/pdf', body: fixture.pdf });
+      else throw new Error(`Unexpected fictional intranet route: ${request.method()} ${pathname}`);
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(result) });
+    });
+    await h.page.goto(`${origin}/index.html#archivo`);
+    await h.page.locator('#audit-login-username').fill('operador');
+    await h.page.locator('#audit-login-password').fill(PASSWORD);
+    await h.page.locator('#audit-bar').getByRole('button', { name: 'Iniciar sesión', exact: true }).click();
+    await h.page.getByRole('button', { name: 'Editar Excel', exact: true }).waitFor();
+    await h.page.getByRole('button', { name: 'Editar Excel', exact: true }).click();
+    await h.page.locator('#export-button:not([disabled])').waitFor();
+    assert.equal(await h.page.evaluate(() => window.AuditClient.status().mode), 'intranet');
+    assert.equal(await h.page.locator('#converter-title').innerText(), 'Editar Excel');
+    assert.equal(await h.page.locator('#drop-zone').isVisible(), false);
+    assert.equal(await h.page.locator('#salida-number').inputValue(), '00123');
+    assert.equal(await h.page.locator('#salida-number').evaluate(input => input.readOnly), true);
+    await h.page.locator('input[data-column="descripcion"]').check();
+    await h.page.locator('#excel-file-name').fill('Salida 00123 interna editada.xlsx');
+    await h.page.evaluate(() => { window.__events = []; });
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 1);
+    const saved = await h.page.evaluate(() => window.__picker.files[0]);
+    const bytes = Buffer.from(saved.bytes);
+    const book = XLSX.read(bytes, { type: 'buffer' });
+    assert.equal(book.Sheets.Datos.A2.t, 's');
+    assert.equal(book.Sheets.Datos.A2.v, '0001234567890');
+    assert.equal(book.Sheets.Datos.A3.v, '0000000000012');
+    assert.ok(XLSX.CFB.find(XLSX.CFB.read(bytes, { type: 'buffer' }), '/xl/tables/table1.xml'), 'The internal edited Excel contains a native table');
+    assert.equal((await h.page.evaluate(() => window.__events))[0], 'picker');
+    assert.equal(requests.filter(r => r.pathname === '/api/audits' && r.method === 'POST').length, 0, 'An internal re-export never creates another audit');
+    assert.equal(requests.filter(r => r.pathname === `/api/audits/${record.id}`).length, 2, 'The server authorizes opening and saving the existing record');
+    assert.equal(requests.filter(r => r.pathname === `/api/audits/${record.id}/pdf`).length, 1);
+    await savedNotice(h.page, saved.name);
+    const beforeCopy = requests.length;
+    await copySavedFile(h, bytes, saved.name);
+    assert.equal(requests.length, beforeCopy, 'Copying an internal saved file does not contact the server again');
+    await profile(h.page);
+    await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    assert.equal(await h.page.evaluate(() => window.AuditClient.status().authenticated), false);
+    assert.equal(await h.page.locator('#results').isVisible(), false);
+    assert.equal(await h.page.locator('#traza-save-notice').count(), 0);
+  } finally { await h.close(); }
+});
+
+test('archive editor: authorized stored PDF, chosen columns, native Excel table and text barcodes without another audit record', async () => {
+  const h = await harness({ role: 'user' });
+  try {
+    await login(h.page);
+    const count = h.state.records.length;
+    await editArchived(h.page);
+    await h.page.locator('input[data-column="descripcion"]').check();
+    await h.page.locator('input[data-column="ref"]').check();
+    await h.page.locator('input[data-rename="codigo"]').fill('Código elegido');
+    await h.page.locator('#excel-file-name').fill('Salida 00123 columnas elegidas.xlsx');
+    await h.page.evaluate(() => { window.__events = []; window.__picker.chosenName = 'Copia elegida 00123.xlsx'; });
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 1);
+    const saved = await h.page.evaluate(() => window.__picker.files[0]);
+    assert.equal(saved.name, 'Copia elegida 00123.xlsx', 'The confirmation identifies the name actually chosen in the folder picker');
+    const events = await h.page.evaluate(() => window.__events);
+    assert.equal(events[0], 'picker', 'An archived re-export opens its picker before confirming server authorization');
+    assert.equal(await h.page.evaluate(() => window.__picker.calls[0].active), true);
+    const bytes = Buffer.from(saved.bytes);
+    const book = XLSX.read(bytes, { type: 'buffer' });
+    assert.deepEqual(book.SheetNames, ['Datos', 'Resumen', 'Información', 'Respaldo original']);
+    const rows = XLSX.utils.sheet_to_json(book.Sheets.Datos, { header: 1 });
+    assert.equal(rows[0][0], 'Código elegido');
+    assert.equal(book.Sheets.Datos.A2.t, 's');
+    assert.equal(book.Sheets.Datos.A2.v, '0001234567890');
+    assert.equal(book.Sheets.Datos.A3.v, '0000000000012');
+    assert.equal(rows[1][rows[0].indexOf('Descripción')], 'Producto ficticio de descripcion completa');
+    assert.equal(rows[1][rows[0].indexOf('Ref.')], 'REF-001 COMPLETA');
+    const table = XLSX.CFB.find(XLSX.CFB.read(bytes, { type: 'buffer' }), '/xl/tables/table1.xml');
+    assert.ok(table, 'An edited archive Excel must contain a native table');
+    assert.match(Buffer.from(table.content).toString(), /<autoFilter/);
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(h.state.records.length, count);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/') && r.method === 'POST').length, 0);
+    assert.ok(h.state.requests.some(r => r.pathname === '/rest/v1/mega_audit_records' && new URLSearchParams(r.search).get('id') === `eq.${fixture.records[0].id}`), 'Re-export checks that the original record is still authorized');
+    await savedNotice(h.page, saved.name);
+    assert.equal(h.state.downloads.length, 0, 'Saving to a selected folder does not automatically download a duplicate');
+    await copySavedFile(h, bytes, saved.name);
+    await h.page.screenshot({ path: path.join(OUTPUT, 'desktop-archive-editor-saved.png'), fullPage: true });
+
+    await h.page.locator('input[data-column="codigo"]').uncheck();
+    await h.page.locator('#excel-file-name').fill('Salida 00123 sin código.xlsx');
+    await h.page.evaluate(() => { delete window.__picker.chosenName; });
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 2);
+    const second = await h.page.evaluate(() => window.__picker.files[1]);
+    const secondBook = XLSX.read(Buffer.from(second.bytes), { type: 'buffer' });
+    const headings = XLSX.utils.sheet_to_json(secondBook.Sheets.Datos, { header: 1 })[0];
+    assert.ok(!headings.includes('Código elegido') && !headings.includes('Código de barras'), 'The user can omit barcodes from the edited main sheet');
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(h.state.records.length, count);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/') && r.method === 'POST').length, 0);
+    await savedNotice(h.page, second.name);
+    await h.page.evaluate(() => window.TrazaUI.navigate('archive'));
+    await h.page.getByRole('button', { name: /^Abrir detalle de salida / }).first().waitFor();
+    const original = h.page.waitForEvent('download');
+    await h.page.evaluate(() => { delete window.showSaveFilePicker; });
+    await h.page.locator('.audit-table tbody tr').first().getByRole('button', { name: 'Guardar Excel', exact: true }).click();
+    assert.deepEqual(fs.readFileSync(await (await original).path()), fixture.excel, 'Editing preserves the original encrypted Excel in the archive');
+  } finally { await h.close(); }
+});
+
+test('archive editor: cancellation and write failure create no copy; retry reuses the original audit', async () => {
+  const h = await harness();
+  try {
+    await login(h.page); await editArchived(h.page);
+    const count = h.state.records.length;
+    const requests = h.state.requests.length;
+    await h.page.evaluate(() => { window.__picker.cancel = true; });
+    await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
+    assert.equal(h.state.requests.length, requests, 'Cancelling the original click stops before server authorization');
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
+    await h.page.evaluate(() => { window.__picker.cancel = false; window.__picker.failWrite = true; });
+    await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
+    await h.page.evaluate(() => { window.__picker.failWrite = false; });
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 1);
+    const saved = await h.page.evaluate(() => window.__picker.files[0]);
+    await savedNotice(h.page, saved.name);
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(h.state.records.length, count);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/') && r.method === 'POST').length, 0);
+  } finally { await h.close(); }
+});
+
+test('archive editor: re-export HTTP 500, network loss and revoked session never write or download', async () => {
+  const h = await harness();
+  try {
+    await login(h.page); await editArchived(h.page);
+    h.state.failList = 500;
+    await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.match(await h.page.locator('#message').innerText(), /Supabase|500|operación/i);
+    h.state.failList = 0;
+    const fail = route => route.abort('failed');
+    await h.context.route('**/rest/v1/mega_audit_records?*', fail);
+    await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.match(await h.page.locator('#message').innerText(), /conectar|conexión/i);
+    await h.context.unroute('**/rest/v1/mega_audit_records?*', fail);
+    h.state.failList = 401;
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => !window.AuditCloud.status().authenticated);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(h.state.records.length, fixture.records.length);
+    assert.equal(await h.page.locator('#results').isVisible(), false, 'Revocation immediately clears the decoded archive editor');
+  } finally { await h.close(); }
+});
+
+test('archive editor: a decrypted PDF response arriving after logout cannot open the editor', async () => {
+  const h = await harness();
+  try {
+    await login(h.page);
+    await h.page.getByRole('button', { name: /^Abrir detalle de salida / }).first().click();
+    await h.page.getByText('Página 1 de 1', { exact: true }).waitFor();
+    await h.page.evaluate(() => { window.__delayBody = true; });
+    await h.page.locator('#traza-document-detail').getByRole('button', { name: /Editar Excel/ }).click();
+    await h.page.waitForFunction(() => window.__bodyWaiting);
+    await profile(h.page);
+    await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    await h.page.evaluate(() => { window.__delayBody = false; window.__releaseBody(); });
+    await h.page.waitForTimeout(200);
+    assert.equal(await h.page.evaluate(() => window.AuditCloud.status().authenticated), false);
+    assert.equal(await h.page.evaluate(() => window.TrazaUI.currentSection), 'archive');
+    assert.equal(await h.page.locator('#results').isVisible(), false);
+    assert.equal(await h.page.locator('#traza-document-detail').count(), 0);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
+  } finally { await h.close(); }
+});
+
+test('archive editor: authorization arriving after logout cannot save a file or restore a copy', async () => {
+  const h = await harness();
+  let release;
+  try {
+    await login(h.page); await editArchived(h.page);
+    h.state.slowConfirmation = new Promise(resolve => { release = resolve; });
+    await h.page.evaluate(() => { window.__events = []; });
+    await h.page.locator('#export-button').click();
+    await h.page.waitForFunction(() => window.__events.some(event => event === 'fetch:/rest/v1/mega_audit_records'));
+    await profile(h.page);
+    await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    release(); h.state.slowConfirmation = null;
+    await h.page.waitForTimeout(200);
+    assert.equal(await h.page.evaluate(() => window.AuditCloud.status().authenticated), false);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(h.state.downloads.length, 0);
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(await h.page.locator('#results').isVisible(), false);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
+  } finally { if (release) release(); await h.close(); }
+});
+
+test('archive editor: a late first document cannot replace a more recent edit selection', async () => {
+  const h = await harness();
+  let release;
+  try {
+    await login(h.page);
+    const first = fixture.records[0].id;
+    h.state.slowDocuments.set(first, new Promise(resolve => { release = resolve; }));
+    await h.page.evaluate(() => { window.__events = []; });
+    const edit = h.page.getByRole('button', { name: /^Editar Excel de salida / });
+    await edit.first().click();
+    await h.page.waitForFunction(id => window.__events.some(event => event.includes(id) && event.includes('/storage/')), first);
+    await edit.nth(1).click();
+    await h.page.locator('#export-button:not([disabled])').waitFor();
+    assert.equal(await h.page.locator('#salida-number').inputValue(), '30002');
+    assert.equal(await h.page.evaluate(() => window.TrazaUI.currentSection), 'converter');
+    release(); h.state.slowDocuments.clear();
+    await h.page.waitForTimeout(200);
+    assert.equal(await h.page.locator('#salida-number').inputValue(), '30002', 'The late first response must not replace the newer selection');
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(h.state.recordCalls, 0);
+  } finally { if (release) release(); await h.close(); }
+});
+
+for (const mobile of [false, true]) {
+  test(`${mobile ? 'mobile 390 px' : 'desktop'}: folder success has visible confirmation and an explicit exact-byte browser copy`, async () => {
+    const h = await harness({ mobile });
+    try {
+      await login(h.page); await convert(h.page);
+      await h.page.locator('#export-button').click();
+      await h.page.waitForFunction(() => window.__picker.files.length === 1);
+      const saved = await h.page.evaluate(() => window.__picker.files[0]);
+      const notice = await savedNotice(h.page, saved.name);
+      assert.equal(h.state.downloads.length, 0, 'A browser copy is created only when the user requests it');
+      await checkNoOverflow(h.page);
+      const box = await notice.boundingBox();
+      const viewport = h.page.viewportSize();
+      assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, 'Save confirmation stays visible inside the viewport');
+      const calls = h.state.recordCalls;
+      await copySavedFile(h, Buffer.from(saved.bytes), saved.name);
+      assert.equal(h.state.recordCalls, calls, 'An explicit browser copy never creates another audit entry');
+      await h.page.screenshot({ path: path.join(OUTPUT, `${mobile ? 'mobile' : 'desktop'}-save-confirmation.png`), fullPage: true });
+      const url = await h.page.evaluate(() => window.__latestBlobUrl);
+      await notice.getByRole('button', { name: 'Cerrar confirmación de guardado', exact: true }).click();
+      assert.equal(await notice.isVisible(), false);
+      assert.equal(await h.page.evaluate(value => window.__revokedBlobUrls.includes(value), url), true, 'Closing releases the saved cleartext Blob URL');
+
+      await h.page.locator('#export-button').click();
+      await h.page.waitForFunction(() => window.__picker.files.length === 2);
+      await savedNotice(h.page, saved.name);
+      await h.page.locator('#reset-button').click();
+      assert.equal(await notice.isVisible(), false, 'Loading another PDF clears the previous confirmation and copy');
+      assert.equal(await h.page.locator('#drop-zone').isVisible(), true);
+    } finally { await h.close(); }
+  });
+}
+
+test('archive folder downloads: exact PDF copy and cleanup on document, navigation and session changes', async () => {
+  const h = await harness();
+  try {
+    await login(h.page);
+    const rows = h.page.locator('.audit-table tbody tr');
+    await rows.first().getByRole('button', { name: 'Guardar PDF', exact: true }).click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 1);
+    const saved = await h.page.evaluate(() => window.__picker.files[0]);
+    const notice = await savedNotice(h.page, saved.name);
+    await copySavedFile(h, fixture.pdf, saved.name);
+    let url = await h.page.evaluate(() => window.__latestBlobUrl);
+    await h.page.getByRole('button', { name: /^Abrir detalle de salida / }).nth(1).click();
+    assert.equal(await notice.isVisible(), false, 'Changing the selected document clears its old saved copy');
+    assert.equal(await h.page.evaluate(value => window.__revokedBlobUrls.includes(value), url), true);
+    await h.page.getByText('Página 1 de 1', { exact: true }).waitFor();
+    await h.page.locator('#traza-document-detail').getByRole('button', { name: 'Guardar PDF', exact: true }).click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 2);
+    await savedNotice(h.page, saved.name);
+    url = await h.page.evaluate(() => window.__latestBlobUrl);
+    await h.page.evaluate(() => window.TrazaUI.navigate('converter'));
+    assert.equal(await notice.isVisible(), false);
+    assert.equal(await h.page.evaluate(value => window.__revokedBlobUrls.includes(value), url), true);
+    await h.page.evaluate(() => window.TrazaUI.navigate('archive'));
+    await h.page.getByRole('button', { name: /^Abrir detalle de salida / }).first().waitFor();
+    await rows.first().getByRole('button', { name: 'Guardar PDF', exact: true }).click();
+    await h.page.waitForFunction(() => window.__picker.files.length === 3);
+    await savedNotice(h.page, saved.name);
+    url = await h.page.evaluate(() => window.__latestBlobUrl);
+    await profile(h.page);
+    await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+    assert.equal(await notice.isVisible(), false);
+    assert.equal(await h.page.evaluate(value => window.__revokedBlobUrls.includes(value), url), true);
+    assert.equal(h.state.recordCalls, 0);
+  } finally { await h.close(); }
+});
+
+test('converter: an unsigned visitor receives a visible login error and cannot save or copy an unregistered Excel', async () => {
+  const h = await harness();
+  try {
+    await h.page.goto(`${origin}/index.html#nueva-salida`);
+    await convert(h.page);
+    await h.page.locator('#export-button').click();
+    await waitNotBusy(h.page);
+    assert.equal(await h.page.locator('#message').isVisible(), true);
+    assert.match(await h.page.locator('#message').innerText(), /Inicia sesión.*antes de descargar/i);
+    assert.equal(await h.page.evaluate(() => window.__picker.calls.length), 1);
+    assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
+    assert.equal(h.state.recordCalls, 0);
+    assert.equal(h.state.downloads.length, 0);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/') && r.method === 'POST').length, 0);
+    assert.equal(await h.page.getByRole('button', { name: 'Descargar una copia', exact: true }).isVisible().catch(() => false), false);
   } finally { await h.close(); }
 });

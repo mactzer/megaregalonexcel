@@ -32,6 +32,8 @@
       main.inert = false;
       topbar.inert = false;
       if (skipLink) skipLink.inert = false;
+      const savedNotice = document.getElementById("traza-save-notice");
+      if (savedNotice) savedNotice.inert = false;
       sidebar.inert = mobile.matches;
       menuButton.setAttribute("aria-expanded", "false");
       if (returnFocus !== false && menuReturnFocus && menuReturnFocus.isConnected) menuReturnFocus.focus();
@@ -45,6 +47,8 @@
       main.inert = true;
       topbar.inert = true;
       if (skipLink) skipLink.inert = true;
+      const savedNotice = document.getElementById("traza-save-notice");
+      if (savedNotice) savedNotice.inert = true;
       overlay.hidden = false;
       menuButton.setAttribute("aria-expanded", "true");
       document.body.classList.add("traza-menu-open");
@@ -174,7 +178,6 @@
             signIn.textContent = "Iniciar sesión";
             signIn.addEventListener("click", function () { navigate("archive"); if (login) login.focus(); });
             profile.append(signIn);
-            window.dispatchEvent(new CustomEvent("traza:session-cleared"));
           } else if (nativeAccount) {
             const trigger = document.createElement("button");
             trigger.type = "button";
@@ -268,4 +271,91 @@
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
   else boot();
+})();
+
+(function () {
+  "use strict";
+  if (window.TrazaSavedFile) return;
+  let active = null;
+
+  function clear() {
+    if (!active) return;
+    const previous = active;
+    active = null;
+    previous.controller.abort();
+    if (previous.url) URL.revokeObjectURL(previous.url);
+    const returnFocus = previous.panel.contains(document.activeElement);
+    previous.panel.remove();
+    if (returnFocus && previous.opener && previous.opener.isConnected &&
+        !previous.opener.closest("[hidden], [inert]")) previous.opener.focus();
+  }
+
+  function show(options) {
+    options = options || {};
+    if (options.guard) options.guard();
+    clear();
+    const controller = new AbortController();
+    const panel = document.createElement("section");
+    panel.id = "traza-save-notice";
+    panel.className = "traza-save-notice";
+    panel.setAttribute("role", "status");
+    panel.setAttribute("aria-live", "polite");
+    panel.setAttribute("aria-atomic", "true");
+    panel.inert = document.body.classList.contains("traza-menu-open");
+    const heading = document.createElement("strong");
+    heading.textContent = options.data ? "Archivo guardado" : "Descarga iniciada";
+    const name = document.createElement("p");
+    name.id = "traza-saved-file-name";
+    name.className = "traza-saved-file-name";
+    name.textContent = String(options.name || "Documento");
+    const message = document.createElement("p");
+    message.id = "traza-saved-file-message";
+    message.textContent = options.message || "Archivo guardado en la carpeta elegida.";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "traza-icon-button traza-save-close";
+    close.setAttribute("aria-label", "Cerrar confirmación de guardado");
+    close.textContent = "×";
+    close.addEventListener("click", clear, { signal: controller.signal });
+    panel.append(heading, close, name, message);
+    const notice = { panel, controller, url: null, opener: document.activeElement };
+    if (options.data) {
+      // Retain only a temporary Blob URL after a confirmed write. Callers wipe
+      // their mutable clear buffers; navigation/logout revokes this copy.
+      notice.url = URL.createObjectURL(new Blob([options.data], { type: options.mime || "application/octet-stream" }));
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "audit-button audit-button-secondary";
+      copy.textContent = "Descargar una copia";
+      copy.addEventListener("click", function () {
+        try {
+          if (active !== notice) return;
+          if (options.guard) options.guard();
+          const link = document.createElement("a");
+          link.href = notice.url;
+          link.download = String(options.name || "Documento");
+          document.body.append(link);
+          link.click();
+          link.remove();
+          heading.textContent = "Copia enviada a descargas";
+          message.textContent = "Se inició la descarga de una copia. Revisa el panel de descargas del navegador.";
+        } catch (_) {
+          clear();
+        }
+      }, { signal: controller.signal });
+      const explanation = document.createElement("p");
+      explanation.className = "audit-muted";
+      explanation.textContent = "El archivo ya está en tu carpeta. Si quieres verlo también en las descargas del navegador, descarga otra copia.";
+      panel.append(explanation, copy);
+    }
+    active = notice;
+    const main = document.getElementById("app-main");
+    (main || document.body).append(panel);
+    if (window.matchMedia("(max-width: 600px)").matches) panel.scrollIntoView({ block: "nearest" });
+  }
+
+  window.TrazaSavedFile = Object.freeze({ show, clear });
+  window.addEventListener("traza-ui:navigated", clear);
+  window.addEventListener("traza:session-cleared", clear);
+  window.addEventListener("pagehide", clear);
 })();

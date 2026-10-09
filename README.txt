@@ -21,6 +21,22 @@ Otros navegadores usan su configuracion de descargas. Cancelar el selector
 detiene la operacion. El convertidor confirma la auditoria antes de escribir
 el Excel; reintentar una escritura local fallida no duplica el registro.
 
+EDITAR UN EXCEL GUARDADO
+En el Archivo, Editar Excel recupera el PDF original con la misma sesion y abre
+el convertidor. Elige otras columnas (codigo de barras, descripcion, etc.),
+cambia sus encabezados o el nombre del Excel y guarda una nueva copia.
+El numero de salida se conserva. Antes de guardar se confirma el acceso al
+registro existente: no se suben documentos ni se crea otra salida. El PDF y
+el Excel originales siguen en el Archivo. audit.html abre esa misma aplicacion.
+
+CONFIRMACION DE GUARDADO
+La app muestra una confirmacion visible con el nombre del archivo guardado.
+Elegir carpeta escribe el archivo alli; Chrome y Edge no lo muestran en su
+panel de descargas. Descargar una copia inicia otra descarga con los mismos
+bytes, sin registrar de nuevo la salida. Esa copia usa la configuracion de
+descargas del navegador. Cambiar de seccion o cerrar sesion limpia la
+confirmacion y la copia disponible.
+
 AUDITORIA CON SUPABASE
 La version publicada usa usuario y contraseña y guarda una auditoria compartida.
 Los PDF, Excel y datos comerciales se cifran en el navegador antes de subirlos.

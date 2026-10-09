@@ -519,6 +519,18 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
             ).fetchall()
         self._json(200, {"records": [record_dict(row) for row in rows], "total": count, "page": page, "page_size": PAGE_SIZE})
 
+    def _audit_record(self, audit_id: str) -> None:
+        """Confirm access to an existing record without returning document bytes."""
+        self._require_session()
+        with self.app.connect() as connection:
+            row = connection.execute(
+                "SELECT id, salida_numero, created_at, user_display_name, username, pdf_name, excel_name, row_count, total_units FROM audits WHERE id = ?",
+                (audit_id,),
+            ).fetchone()
+        if row is None:
+            raise APIError(404, "Salida no encontrada.")
+        self._json(200, {"record": record_dict(row)})
+
     def _store_audit(self, session: dict) -> None:
         if not self.app._upload_slots.acquire(blocking=False):
             self.close_connection = True
@@ -600,6 +612,8 @@ class AuditRequestHandler(BaseHTTPRequestHandler):
                 self._json(200, status)
             elif path == "/api/audits":
                 self._list_audits(parsed.query)
+            elif match := re.fullmatch(r"/api/audits/([0-9a-fA-F-]{36})", path):
+                self._audit_record(match[1])
             elif match := re.fullmatch(r"/api/audits/([0-9a-fA-F-]{36})/(pdf|excel)", path):
                 self._download(match[1], match[2])
             elif path == "/api/users":
