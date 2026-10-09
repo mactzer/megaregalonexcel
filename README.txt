@@ -16,6 +16,10 @@ suma solo los registros visibles. Los registros dañados siguen visibles, con
 aviso y documentos desactivados: se suman Unidades verificadas en esta pagina.
 El detalle muestra el responsable oficial, fecha, productos, unidades,
 nombres de documentos y vista previa local de la primera pagina del PDF.
+La vista conserva las proporciones y ajusta su resolucion al tamaño de pantalla.
+Ampliar, Reducir y Ajustar a ancho permiten leer los detalles. Ver PDF ampliado
+abre un visor grande, con cierre mediante boton o Escape, sin recuperar otra
+vez el documento. Las imagenes escaneadas conservan la calidad del PDF original.
 Chrome y Edge compatibles permiten elegir carpeta y nombre antes de guardar.
 Otros navegadores usan su configuracion de descargas. Cancelar el selector
 detiene la operacion. El convertidor confirma la auditoria antes de escribir

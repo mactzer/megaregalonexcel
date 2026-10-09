@@ -992,6 +992,7 @@
     if (!view || !view.detail) return;
     const detail = view.detail;
     view.detail = null;
+    if (detail.previewCleanup) detail.previewCleanup();
     detail.controller.abort();
     if (detail.renderTask) { try { detail.renderTask.cancel(); } catch (_) {} }
     if (detail.loadingTask) { try { Promise.resolve(detail.loadingTask.destroy()).catch(function () {}); } catch (_) {} }
@@ -1124,6 +1125,174 @@
     return edit;
   }
 
+  function createPdfPreview(detail, record, guard) {
+    const preview = node("div", undefined, "traza-detail-preview");
+    const toolbar = node("div", undefined, "traza-preview-toolbar");
+    toolbar.setAttribute("role", "group");
+    toolbar.setAttribute("aria-label", "Controles de la vista previa del PDF");
+    const reduce = button("−", true);
+    reduce.setAttribute("aria-label", "Reducir vista previa");
+    const enlarge = button("+", true);
+    enlarge.setAttribute("aria-label", "Ampliar vista previa");
+    const zoomText = node("span", "100%", "traza-preview-zoom");
+    const fit = button("Ajustar a ancho", true);
+    const large = button("Ver PDF ampliado", true);
+    large.setAttribute("aria-haspopup", "dialog");
+    toolbar.append(reduce, zoomText, enlarge, fit, large);
+    const previewStatus = node("p", "Cargando la primera página del PDF…", "traza-preview-status");
+    previewStatus.setAttribute("role", "status");
+    const scroll = node("div", undefined, "traza-preview-scroll");
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", "Primera página del PDF; desplázate para leer la vista ampliada");
+    scroll.tabIndex = 0;
+    scroll.setAttribute("aria-busy", "true");
+    preview.append(toolbar, previewStatus, scroll);
+    let page = null;
+    let zoom = 1;
+    let revision = 0;
+    let timer = null;
+    let requestedSize = "";
+    let active = true;
+    let largeDialog = null;
+    let canvas = null;
+    const controls = [reduce, enlarge, fit, large];
+    for (const control of controls) control.disabled = true;
+
+    function current(sequence) {
+      guard();
+      if (!active || sequence !== revision) throw new Error("La vista previa cambió.");
+    }
+
+    function updateControls() {
+      reduce.disabled = !page || zoom <= 0.5;
+      enlarge.disabled = !page || zoom >= 3;
+      fit.disabled = !page;
+      large.disabled = !page || Boolean(largeDialog);
+      zoomText.textContent = Math.round(zoom * 100) + "%";
+    }
+
+    function geometry() {
+      const raw = page.getViewport({ scale: 1 });
+      const cssWidth = Math.max(1, scroll.clientWidth) * zoom;
+      const cssHeight = cssWidth * raw.height / raw.width;
+      const density = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3,
+        8192 / Math.max(cssWidth, cssHeight), Math.sqrt(16000000 / (cssWidth * cssHeight)));
+      return { cssWidth, cssHeight, viewport: page.getViewport({ scale: cssWidth / raw.width * density }) };
+    }
+
+    async function render(sequence) {
+      let raster;
+      let task;
+      let installed = false;
+      try {
+        current(sequence);
+        const size = geometry();
+        raster = node("canvas");
+        raster.setAttribute("aria-label", "Vista previa de la primera página del PDF");
+        raster.dataset.testid = "pdf-preview";
+        raster.width = Math.max(1, Math.floor(size.viewport.width));
+        raster.height = Math.max(1, Math.floor(size.viewport.height));
+        raster.style.width = size.cssWidth + "px";
+        raster.style.height = size.cssHeight + "px";
+        task = page.render({ canvasContext: raster.getContext("2d"), viewport: size.viewport });
+        detail.renderTask = task;
+        await task.promise;
+        current(sequence);
+        const old = canvas;
+        canvas = raster;
+        scroll.replaceChildren(canvas);
+        installed = true;
+        if (old) { old.width = old.height = 0; }
+        previewStatus.textContent = "Página 1 de " + detail.pdf.numPages;
+        previewStatus.setAttribute("role", "status");
+        scroll.setAttribute("aria-busy", "false");
+      } catch (error) {
+        if (active && sequence === revision && error.name !== "RenderingCancelledException") {
+          try {
+            guard();
+            previewStatus.textContent = errorText(error);
+            previewStatus.setAttribute("role", "alert");
+            scroll.setAttribute("aria-busy", "false");
+          } catch (_) {}
+        }
+      } finally {
+        if (detail.renderTask === task) detail.renderTask = null;
+        if (raster && !installed) raster.width = raster.height = 0;
+      }
+    }
+
+    function requestRender(force) {
+      if (!active || !page) return;
+      try { guard(); } catch (_) { return; }
+      const size = scroll.clientWidth + ":" + zoom + ":" + (window.devicePixelRatio || 1);
+      if (!force && size === requestedSize) return;
+      requestedSize = size;
+      const sequence = ++revision;
+      clearTimeout(timer);
+      if (detail.renderTask) { try { detail.renderTask.cancel(); } catch (_) {} }
+      scroll.setAttribute("aria-busy", "true");
+      previewStatus.textContent = "Preparando vista previa…";
+      timer = setTimeout(function () { timer = null; render(sequence); }, 60);
+    }
+
+    function changeZoom(value) {
+      zoom = Math.max(0.5, Math.min(3, value));
+      updateControls();
+      requestRender(true);
+    }
+    reduce.addEventListener("click", function () { changeZoom(zoom - 0.25); }, { signal: detail.controller.signal });
+    enlarge.addEventListener("click", function () { changeZoom(zoom + 0.25); }, { signal: detail.controller.signal });
+    fit.addEventListener("click", function () { scroll.scrollTo(0, 0); changeZoom(1); }, { signal: detail.controller.signal });
+    large.addEventListener("click", function () {
+      guard();
+      if (!page || largeDialog) return;
+      const modal = createDialog("Vista ampliada · Salida " + record.salida_numero, large);
+      largeDialog = modal.dialog;
+      modal.dialog.classList.add("traza-pdf-dialog");
+      const heading = modal.dialog.querySelector("h2");
+      heading.id = "traza-pdf-preview-title";
+      modal.dialog.setAttribute("aria-labelledby", heading.id);
+      modal.content.append(preview);
+      updateControls();
+      modal.dialog.addEventListener("close", function () {
+        largeDialog = null;
+        if (!active) return;
+        try {
+          guard();
+          // Restore before the shared dialog's close handler returns focus.
+          detail.panel.append(preview);
+          updateControls();
+          requestRender(true);
+        } catch (_) {}
+      }, { once: true, capture: true });
+      requestRender(true);
+    }, { signal: detail.controller.signal });
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(function () { requestRender(false); }) : null;
+    if (observer) observer.observe(scroll);
+    window.addEventListener("resize", function () { requestRender(false); }, { signal: detail.controller.signal });
+    detail.previewCleanup = function () {
+      active = false;
+      revision++;
+      clearTimeout(timer);
+      if (observer) observer.disconnect();
+      if (detail.renderTask) { try { detail.renderTask.cancel(); } catch (_) {} }
+      if (canvas) { canvas.width = canvas.height = 0; canvas = null; }
+      page = null;
+      if (largeDialog && largeDialog.open) largeDialog.close();
+      largeDialog = null;
+    };
+    return {
+      element: preview,
+      setPage: function (value) { page = value; updateControls(); requestRender(true); },
+      fail: function (message) {
+        previewStatus.textContent = message;
+        previewStatus.setAttribute("role", "alert");
+        scroll.setAttribute("aria-busy", "false");
+        for (const control of controls) control.disabled = true;
+      }
+    };
+  }
+
   function openDetail(view, record, officialName, opener) {
     assertView(view);
     disposeDetail(view, false);
@@ -1155,14 +1324,8 @@
       file.append(node("span", kind === "pdf" ? "PDF original" : "Libro de Excel", "audit-muted"), node("strong", kind === "pdf" ? record.pdf_name : record.excel_name, "traza-file-name"), documentButton(record, kind, kind === "pdf" ? "Guardar PDF" : "Guardar Excel", result, view, detail));
       panel.append(file);
     }
-    const preview = node("div", undefined, "traza-detail-preview");
-    const previewStatus = node("p", "Cargando la primera página del PDF…", "traza-preview-status");
-    previewStatus.setAttribute("role", "status");
-    const canvas = node("canvas");
-    canvas.setAttribute("aria-label", "Vista previa de la primera página del PDF");
-    canvas.dataset.testid = "pdf-preview";
-    preview.append(previewStatus, canvas);
-    panel.append(result, preview);
+    const preview = createPdfPreview(detail, record, guard);
+    panel.append(result, preview.element);
     view.layout.append(panel);
     view.layout.classList.add("has-detail");
     close.focus({ preventScroll: true });
@@ -1181,23 +1344,10 @@
         guard();
         const page = await detail.pdf.getPage(1);
         guard();
-        const raw = page.getViewport({ scale: 1 });
-        const width = Math.max(220, Math.min(650, preview.clientWidth || 500));
-        const ratio = Math.min(window.devicePixelRatio || 1, 2);
-        const viewport = page.getViewport({ scale: width / raw.width * ratio });
-        canvas.width = Math.round(viewport.width);
-        canvas.height = Math.round(viewport.height);
-        canvas.style.width = "100%";
-        canvas.style.height = "auto";
-        detail.renderTask = page.render({ canvasContext: canvas.getContext("2d"), viewport });
-        await detail.renderTask.promise;
-        guard();
-        previewStatus.textContent = "Página 1 de " + detail.pdf.numPages;
+        preview.setPage(page);
       } catch (error) {
         if (epoch === generation && archiveView === view && view.detail === detail) {
-          canvas.remove();
-          previewStatus.textContent = errorText(error);
-          previewStatus.setAttribute("role", "alert");
+          preview.fail(errorText(error));
         }
       } finally {
         if (clear) { clear.fill(0); detail.buffers.delete(clear); }

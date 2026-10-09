@@ -21,7 +21,7 @@ const OTHER = '22222222-2222-4222-8222-222222222222';
 const PASSWORD = 'Frase ficticia para TRAZA 2026!';
 let browser, server, origin, fixture;
 
-function fakePdf() {
+function fakePdf(options = {}) {
   const text = (value, x, y) => `BT /F1 9 Tf ${x} ${y} Td (${value.replace(/[()\\]/g, '\\$&')}) Tj ET`;
   const cells = [
     ['Codigo', 10], ['Descripcion', 110], ['Empaque', 350], ['Estilo', 430],
@@ -30,12 +30,14 @@ function fakePdf() {
   ];
   const product = ['0001234567890', 'Producto ficticio de descripcion completa', 'Caja', 'Estilo A', 'REF-001 COMPLETA', '7%', '10.00', '12.00', '2', '20.00', '0', '0.00'];
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
-  const content = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text('Numero: 00123', 10, 540), text('Fecha: 08/10/2026', 10, 520),
+  const textContent = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text('Numero: 00123', 10, 540), text('Fecha: 08/10/2026', 10, 520),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
     text('SubTotal: 35.00', 10, 400), text('Impuesto 1.40', 10, 380), text('Total Neto: 36.40', 10, 360)].join('\n');
+  const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
+  const mediaBox = options.portrait ? '595 842' : '1020 595';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1020 595] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${mediaBox}] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`
   ];
   let output = '%PDF-1.4\n';
@@ -93,7 +95,7 @@ before(async () => {
 after(async () => { if (browser) await browser.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 
 async function harness(options = {}) {
-  const context = await browser.newContext({ viewport: options.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }, acceptDownloads: true });
+  const context = await browser.newContext({ viewport: options.viewport || (options.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }), deviceScaleFactor: options.deviceScaleFactor || 1, acceptDownloads: true });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   const errors = [];
@@ -251,6 +253,230 @@ async function editArchived(page) {
   assert.match(await page.locator('#step-upload').innerText(), /PDF del Archivo/);
   assert.equal(await page.locator('#salida-number').inputValue(), '00123');
   assert.equal(await page.locator('#salida-number').evaluate(input => input.readOnly), true, 'An archived re-export must keep its original audit number');
+}
+
+async function usePortraitPreview(h) {
+  const row = h.state.records[0];
+  const location = `${WORKSPACE}/${row.created_by}/${row.id}/pdf.bin`;
+  h.state.storage.set(location, Buffer.from(await fixture.master.encrypt(new Uint8Array(fakePdf({ portrait: true })), `${row.id}|pdf`)));
+}
+
+async function openPreview(page) {
+  await page.getByRole('button', { name: /^Abrir detalle de salida / }).first().click();
+  await page.getByText('Página 1 de 1', { exact: true }).waitFor();
+  await page.locator('.traza-preview-scroll[aria-busy="false"] [data-testid="pdf-preview"]').waitFor({ state: 'visible' });
+}
+
+async function previewGeometry(page) {
+  return page.locator('[data-testid="pdf-preview"]').evaluate(canvas => {
+    const bounds = canvas.getBoundingClientRect(), scroll = canvas.closest('.traza-preview-scroll');
+    const style = getComputedStyle(canvas), scrollStyle = getComputedStyle(scroll);
+    return { width: bounds.width, height: bounds.height, bitmapWidth: canvas.width, bitmapHeight: canvas.height,
+      styleWidth: canvas.style.width, styleHeight: canvas.style.height, maxHeight: style.maxHeight,
+      available: scroll.clientWidth - parseFloat(scrollStyle.paddingLeft) - parseFloat(scrollStyle.paddingRight),
+      scrollWidth: scroll.scrollWidth, scrollClientWidth: scroll.clientWidth, busy: scroll.getAttribute('aria-busy') };
+  });
+}
+
+function assertCrispPortrait(geometry, density) {
+  assert.equal(geometry.busy, 'false');
+  assert.match(geometry.styleWidth, /^\d+(\.\d+)?px$/, 'Canvas has an explicit CSS width independent of its pixel buffer');
+  assert.match(geometry.styleHeight, /^\d+(\.\d+)?px$/, 'Canvas has an explicit CSS height independent of its pixel buffer');
+  assert.ok(Math.abs(geometry.width / geometry.height - 595 / 842) < 0.001, 'Displayed portrait preserves the PDF page aspect ratio');
+  assert.ok(Math.abs(geometry.bitmapWidth / geometry.bitmapHeight - 595 / 842) < 0.002, 'PDF.js raster preserves the PDF page aspect ratio');
+  assert.ok(geometry.bitmapWidth >= geometry.width * density - 1, `At least ${density} raster pixels per displayed horizontal pixel`);
+  assert.ok(geometry.bitmapHeight >= geometry.height * density - 1, `At least ${density} raster pixels per displayed vertical pixel`);
+  assert.ok(geometry.bitmapWidth * geometry.bitmapHeight <= 16000000, 'Raster fits the configured memory limit');
+  assert.ok(geometry.bitmapWidth <= 8192 && geometry.bitmapHeight <= 8192, 'Raster dimensions fit the configured canvas limit');
+}
+
+for (const density of [1, 3]) {
+  test(`PDF preview: crisp portrait at DPR ${density}, no 650 px height distortion, and actual-width rerender`, async () => {
+    const h = await harness({ viewport: { width: 950, height: 1000 }, deviceScaleFactor: density });
+    try {
+      await usePortraitPreview(h);
+      await login(h.page);
+      await openPreview(h.page);
+      const first = await previewGeometry(h.page);
+      assertCrispPortrait(first, Math.max(2, density));
+      assert.ok(first.height > 650, 'A stacked portrait preview must not be clamped to 650 CSS pixels');
+      assert.ok(Math.abs(first.width - first.available) <= 2, 'Fit-to-width uses the actual preview content width');
+      await checkNoOverflow(h.page);
+      const before = h.state.requests.filter(request => request.pathname.startsWith('/storage/') && request.method === 'GET').length;
+      await h.page.setViewportSize({ width: 1080, height: 1000 });
+      await h.page.waitForFunction(previous => {
+        const canvas = document.querySelector('[data-testid="pdf-preview"]');
+        return canvas && canvas.width > previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+      }, first.bitmapWidth);
+      const resized = await previewGeometry(h.page);
+      assertCrispPortrait(resized, Math.max(2, density));
+      assert.ok(Math.abs(resized.width - resized.available) <= 2);
+      assert.equal(h.state.requests.filter(request => request.pathname.startsWith('/storage/') && request.method === 'GET').length, before, 'Resizing rerenders the already decrypted PDF without fetching it again');
+      await checkNoOverflow(h.page);
+      if (density === 1) await h.page.locator('#traza-document-detail').screenshot({ path: path.join(OUTPUT, 'desktop-crisp-portrait.png') });
+    } finally { await h.close(); }
+  });
+}
+
+test('PDF preview: zoom, fit and enlarged dialog rerender locally, preserve aspect, and return keyboard focus', async () => {
+  const h = await harness({ viewport: { width: 950, height: 1000 } });
+  try {
+    await usePortraitPreview(h);
+    await login(h.page);
+    await openPreview(h.page);
+    const initial = await previewGeometry(h.page);
+    await h.page.getByRole('button', { name: 'Ampliar vista previa', exact: true }).click();
+    await h.page.waitForFunction(previous => {
+      const canvas = document.querySelector('[data-testid="pdf-preview"]');
+      return canvas && canvas.width > previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+    }, initial.bitmapWidth);
+    const zoomed = await previewGeometry(h.page);
+    assertCrispPortrait(zoomed, 2);
+    assert.ok(Math.abs(zoomed.width - initial.width * 1.25) < 2, 'Zoom increases the displayed page by 25 percent');
+    assert.ok(zoomed.scrollWidth > zoomed.scrollClientWidth, 'Only the local PDF viewport scrolls when zoomed');
+    await checkNoOverflow(h.page);
+    await h.page.getByRole('button', { name: 'Reducir vista previa', exact: true }).click();
+    await h.page.waitForFunction(previous => {
+      const canvas = document.querySelector('[data-testid="pdf-preview"]');
+      return canvas && Math.abs(canvas.width - previous) <= 2 && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+    }, initial.bitmapWidth);
+    await h.page.getByRole('button', { name: 'Ampliar vista previa', exact: true }).click();
+    await h.page.getByRole('button', { name: 'Ajustar a ancho', exact: true }).click();
+    await h.page.waitForFunction(previous => {
+      const canvas = document.querySelector('[data-testid="pdf-preview"]');
+      return canvas && Math.abs(canvas.width - previous) <= 2 && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+    }, initial.bitmapWidth);
+    assert.equal(await h.page.locator('.traza-preview-zoom').innerText(), '100%');
+    const opener = h.page.getByRole('button', { name: 'Ver PDF ampliado', exact: true });
+    await opener.click();
+    const dialog = h.page.getByRole('dialog', { name: /^Vista ampliada/ });
+    await dialog.waitFor({ state: 'visible' });
+    await h.page.waitForFunction(previous => {
+      const canvas = document.querySelector('dialog [data-testid="pdf-preview"]');
+      return canvas && canvas.width > previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+    }, initial.bitmapWidth);
+    assert.equal(await h.page.locator('[data-testid="pdf-preview"]').count(), 1, 'The enlarged view uses the same active PDF view');
+    assert.equal(await dialog.evaluate(element => element.contains(document.activeElement)), true);
+    const enlarged = await previewGeometry(h.page);
+    assertCrispPortrait(enlarged, 2);
+    await h.page.setViewportSize({ width: 1200, height: 1000 });
+    await h.page.waitForFunction(previous => {
+      const canvas = document.querySelector('dialog [data-testid="pdf-preview"]');
+      return canvas && canvas.width > previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+    }, enlarged.bitmapWidth);
+    assertCrispPortrait(await previewGeometry(h.page), 2);
+    await checkNoOverflow(h.page);
+    await dialog.screenshot({ path: path.join(OUTPUT, 'desktop-large-pdf.png') });
+    for (let step = 0; step < 8; step++) await dialog.getByRole('button', { name: 'Ampliar vista previa', exact: true }).click();
+    await dialog.locator('.traza-preview-scroll[aria-busy="false"]').waitFor();
+    assert.equal(await dialog.locator('.traza-preview-zoom').innerText(), '300%');
+    const capped = await previewGeometry(h.page);
+    assert.ok(capped.bitmapWidth * capped.bitmapHeight <= 16000000, 'Large 300% zoom respects the raster pixel limit');
+    assert.ok(capped.bitmapWidth <= 8192 && capped.bitmapHeight <= 8192, 'Large 300% zoom respects maximum canvas dimensions');
+    assert.ok(Math.abs(capped.width / capped.height - 595 / 842) < 0.001, 'Memory limits preserve the displayed PDF page aspect ratio');
+    await checkNoOverflow(h.page);
+    await dialog.getByRole('button', { name: 'Ajustar a ancho', exact: true }).click();
+    await dialog.locator('.traza-preview-scroll[aria-busy="false"]').waitFor();
+    await h.page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await opener.evaluate(element => element === document.activeElement), true, 'Escape returns focus to the enlarged-preview opener');
+    await h.page.locator('#traza-document-detail .traza-preview-scroll[aria-busy="false"] [data-testid="pdf-preview"]').waitFor({ state: 'visible' });
+    const restored = await previewGeometry(h.page);
+    assertCrispPortrait(restored, 2);
+    assert.ok(Math.abs(restored.width - restored.available) <= 2, 'Closing the dialog fits the current detail panel width');
+    assert.equal(await h.page.locator('.traza-preview-zoom').innerText(), '100%');
+    assert.equal(h.state.requests.filter(request => request.pathname.startsWith('/storage/') && request.method === 'GET').length, 1, 'Zoom, fit, modal and resize decrypt the original PDF only once');
+    assert.equal(h.state.recordCalls, 0, 'Preview never creates a new audit record');
+    await checkNoOverflow(h.page);
+  } finally { await h.close(); }
+});
+
+test('mobile 390 px PDF preview: crisp local zoom and enlarged view without page overflow', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    await usePortraitPreview(h);
+    await login(h.page);
+    await openPreview(h.page);
+    assertCrispPortrait(await previewGeometry(h.page), 2);
+    await h.page.getByRole('button', { name: 'Ampliar vista previa', exact: true }).click();
+    await h.page.locator('.traza-preview-scroll[aria-busy="false"]').waitFor();
+    await checkNoOverflow(h.page);
+    await h.page.locator('#traza-document-detail').screenshot({ path: path.join(OUTPUT, 'mobile-crisp-portrait.png') });
+    await h.page.getByRole('button', { name: 'Ver PDF ampliado', exact: true }).click();
+    const dialog = h.page.getByRole('dialog', { name: /^Vista ampliada/ });
+    await dialog.waitFor({ state: 'visible' });
+    await dialog.locator('.traza-preview-scroll[aria-busy="false"]').waitFor();
+    assertCrispPortrait(await previewGeometry(h.page), 2);
+    await checkNoOverflow(h.page);
+    await dialog.screenshot({ path: path.join(OUTPUT, 'mobile-large-pdf.png') });
+    await h.page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    assert.equal(await h.page.getByRole('button', { name: 'Ver PDF ampliado', exact: true }).evaluate(element => element === document.activeElement), true);
+    await checkNoOverflow(h.page);
+  } finally { await h.close(); }
+});
+
+for (const enlarge of [false, true]) {
+  test(`PDF preview: late ${enlarge ? 'enlarged' : 'zoom'} render is cancelled after logout and cannot restore a document`, async () => {
+    const h = await harness();
+    try {
+      await login(h.page);
+      await h.page.evaluate(() => {
+        window.__holdPreview = false;
+        window.__releasePreviews = [];
+        window.__previewCancels = 0;
+        const library = window.pdfjsLib, getDocument = library.getDocument;
+        function delayedGetDocument(...args) {
+          const loading = getDocument.apply(library, args);
+          const promise = loading.promise.then(pdf => {
+            const getPage = pdf.getPage.bind(pdf);
+            pdf.getPage = async function (...pageArgs) {
+              const page = await getPage(...pageArgs), render = page.render.bind(page);
+              page.render = function (...renderArgs) {
+                const task = render(...renderArgs);
+                return { promise: task.promise.then(async value => {
+                  if (window.__holdPreview) {
+                    window.__previewWaiting = true;
+                    await new Promise(resolve => window.__releasePreviews.push(resolve));
+                  }
+                  return value;
+                }), cancel() { window.__previewCancels++; task.cancel(); } };
+              };
+              return page;
+            };
+            return pdf;
+          });
+          return new Proxy(loading, { get(target, property) {
+            if (property === 'promise') return promise;
+            const value = Reflect.get(target, property, target);
+            return typeof value === 'function' ? value.bind(target) : value;
+          } });
+        }
+        window.pdfjsLib = new Proxy(library, { get(target, property) {
+          return property === 'getDocument' ? delayedGetDocument : Reflect.get(target, property, target);
+        } });
+      });
+      await openPreview(h.page);
+      await h.page.evaluate(() => { window.__holdPreview = true; });
+      await h.page.getByRole('button', { name: enlarge ? 'Ver PDF ampliado' : 'Ampliar vista previa', exact: true }).click();
+      await h.page.waitForFunction(() => window.__previewWaiting);
+      if (enlarge) await h.page.keyboard.press('Escape');
+      await profile(h.page);
+      await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+      assert.equal(await h.page.evaluate(() => window.AuditCloud.status().authenticated), false);
+      await h.page.evaluate(() => {
+        window.__holdPreview = false;
+        for (const release of window.__releasePreviews.splice(0)) release();
+      });
+      await h.page.waitForTimeout(200);
+      assert.ok(await h.page.evaluate(() => window.__previewCancels > 0), 'Leaving the document cancels pending PDF.js render tasks');
+      assert.equal(await h.page.locator('[data-testid="pdf-preview"]').count(), 0);
+      assert.equal(await h.page.locator('#traza-document-detail').count(), 0);
+      assert.equal(await h.page.locator('dialog[open]').count(), 0);
+      assert.equal(await h.page.evaluate(() => window.__blobUrls.size), 0);
+      assert.equal(await h.page.locator('.audit-table tbody tr').count(), 0);
+    } finally { await h.close(); }
+  });
 }
 
 test('desktop: real encrypted archive, official author, damaged records, count, preview and document bytes', async () => {

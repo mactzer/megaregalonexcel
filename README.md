@@ -14,6 +14,8 @@ La suma **Unidades en esta página** corresponde solo a los registros visibles, 
 
 Al abrir una salida, el detalle muestra sus documentos y una vista previa real de la primera página del PDF, renderizada localmente. Puedes guardar el PDF y el Excel por separado. En Chrome y Edge compatibles, el selector de archivos permite elegir carpeta y nombre antes de recuperar el documento. En otros navegadores se utiliza la configuración habitual de descargas. Cancelar el selector detiene la operación.
 
+La vista previa se renderiza con la resolución de la pantalla, mantiene las proporciones del PDF y se vuelve a dibujar al cambiar el tamaño de la ventana. **Ampliar**, **Reducir** y **Ajustar a ancho** permiten leer los detalles; **Ver PDF ampliado** abre un visor grande que se cierra con su botón o Escape. El zoom vuelve a renderizar el PDF localmente, sin descargarlo de nuevo. La resolución original del documento limita la nitidez de las imágenes escaneadas.
+
 Al guardar desde el convertidor, el nombre sugerido es **Salida [número].xlsx** y se puede editar. La auditoría se confirma antes de escribir el archivo o iniciar la descarga. Cancelar el selector no registra la salida; si una escritura local falla después de registrarla, reintentar no crea otro registro.
 
 **Editar Excel** recupera el PDF autorizado de una salida del Archivo y abre el convertidor con la misma sesión. Puedes elegir nuevamente las columnas (incluido el código de barras), cambiar sus encabezados y el nombre del Excel. El número de la salida se mantiene; al guardar se confirma de nuevo el acceso al registro existente. Esta copia no sube documentos ni crea otra salida: el PDF y el Excel originales permanecen en el Archivo. `audit.html` abre directamente el Archivo de la misma aplicación.
