@@ -104,6 +104,126 @@ before(async () => {
 
 after(async () => { if (browser) await browser.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 
+async function mobileLogin(h) {
+  await h.page.goto(`${origin}/movil.html`);
+  await h.page.locator('#login-button:not([disabled])').waitFor();
+  await h.page.locator('#username').fill('administrador');
+  await h.page.locator('#password').fill(PASSWORD);
+  await h.page.locator('#login-button').click();
+  await h.page.locator('#workspace').waitFor({ state: 'visible' });
+}
+
+test('mobile scanner: decrypts original PDF, preserves barcode, shows source price, and clears everything on logout', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    await mobileLogin(h);
+    await h.page.locator('#barcode').fill('0001234567890');
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('PRODUCTO ENCONTRADO'));
+    assert.match(await h.page.locator('#result').innerText(), /Producto ficticio de descripcion completa/);
+    assert.match(await h.page.locator('#result').innerText(), /12\.00/);
+    assert.match(await h.page.locator('#result').innerText(), /0001234567890/);
+    assert.match(await h.page.locator('#result').innerText(), /00123/);
+    assert.equal(h.state.recordCalls, 0, 'Mobile lookup never registers a new audit');
+    await checkNoOverflow(h.page);
+    await h.page.locator('#logout').click();
+    assert.equal(await h.page.locator('#result').textContent(), '');
+    assert.equal(await h.page.locator('#password').inputValue(), '');
+    assert.match(await h.page.locator('#history').innerText(), /Aún no/);
+    assert.equal(await h.page.locator('#workspace').isVisible(), false);
+  } finally { await h.close(); }
+});
+
+test('mobile scanner: complete absence and unreadable PDF have distinct outcomes; manual input survives camera denial', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    h.state.records = h.state.records.slice(0, 1);
+    await mobileLogin(h);
+    await h.page.locator('#barcode').fill('9999999999999');
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
+    assert.match(await h.page.locator('#result').innerText(), /1 PDF revisados/);
+    h.state.failStorage = 500;
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('CONSULTA INCOMPLETA'));
+    assert.doesNotMatch(await h.page.locator('#result').innerText(), /SIN COINCIDENCIA/);
+    await h.page.evaluate(() => { navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('Denied', 'NotAllowedError'); }; });
+    await h.page.locator('#scan').click();
+    await h.page.waitForFunction(() => document.querySelector('#status').textContent.includes('denegado'));
+    assert.equal(await h.page.locator('#camera').isVisible(), false);
+    assert.equal(await h.page.locator('#search').isEnabled(), true);
+  } finally { await h.close(); }
+});
+
+test('mobile scanner: authorization loss aborts lookup and removes previous product and session history', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    await mobileLogin(h);
+    await h.page.locator('#barcode').fill('0001234567890');
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('PRODUCTO ENCONTRADO'));
+    h.state.failList = 401;
+    await h.page.locator('#search').click();
+    await h.page.locator('#login-panel').waitFor({ state: 'visible' });
+    assert.equal(await h.page.locator('#result').textContent(), '');
+    assert.equal(await h.page.locator('#workspace').isVisible(), false);
+    assert.match(await h.page.locator('#history').innerText(), /Aún no/);
+  } finally { await h.close(); }
+});
+
+test('mobile scanner: ZXing reads an actual EAN-13 from a camera stream and stops tracks after one lookup', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    h.state.records = h.state.records.slice(0, 1);
+    await mobileLogin(h);
+    await h.page.evaluate(() => {
+      // A standards-encoded fictional EAN-13, rendered as real black/white bars.
+      const left = ['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+      const even = ['0100111','0110011','0011011','0100001','0011101','0111001','0000101','0010001','0001001','0010111'];
+      const code = '4006381333931', parity = 'LGLLGG';
+      let bits = '101';
+      for (let i = 1; i <= 6; i++) bits += (parity[i - 1] === 'L' ? left : even)[Number(code[i])];
+      bits += '01010';
+      for (let i = 7; i < 13; i++) bits += left[Number(code[i])].replace(/[01]/g, value => value === '0' ? '1' : '0');
+      bits += '101';
+      const canvas = document.createElement('canvas'); canvas.width = 700; canvas.height = 300;
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 700, 300); ctx.fillStyle = 'black';
+      [...bits].forEach((value, i) => { if (value === '1') ctx.fillRect(110 + i * 5, 40, 5, 220); });
+      window.__mobileStream = canvas.captureStream(10);
+      navigator.mediaDevices.getUserMedia = async () => window.__mobileStream;
+    });
+    await h.page.locator('#scan').click();
+    await h.page.waitForFunction(() => document.querySelector('#barcode').value === '4006381333931');
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
+    assert.equal(await h.page.evaluate(() => window.__mobileStream.getTracks().every(track => track.readyState === 'ended')), true);
+    assert.equal(await h.page.locator('#history li').count(), 1, 'Repeated video frames do not create repeated lookups');
+  } finally { await h.close(); }
+});
+
+test('mobile scanner: absence checks every page, and cancelling a late document cannot restore a result', async () => {
+  const h = await harness({ mobile: true });
+  let release;
+  try {
+    h.state.records = h.state.records.filter((_, i) => i !== 1);
+    await mobileLogin(h);
+    await h.page.locator('#barcode').fill('9999999999999');
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
+    assert.match(await h.page.locator('#result').innerText(), /27 PDF revisados/);
+    assert.ok(h.state.requests.some(r => r.pathname === '/rest/v1/mega_audit_records' && new URLSearchParams(r.search).get('offset') === '25'));
+    h.state.slowStorage = new Promise(resolve => { release = resolve; });
+    await h.page.locator('#barcode').fill('0001234567890');
+    await h.page.locator('#search').click();
+    await h.page.locator('#cancel').waitFor({ state: 'visible' });
+    await h.page.locator('#cancel').click();
+    await h.page.locator('#search:not([disabled])').waitFor();
+    release();
+    assert.equal(await h.page.locator('#result').textContent(), '');
+    assert.equal(await h.page.locator('#result').isVisible(), false);
+    assert.equal(await h.page.locator('#history li').count(), 1, 'A cancelled lookup adds no completed query');
+  } finally { if (release) release(); await h.close(); }
+});
+
 async function harness(options = {}) {
   const context = await browser.newContext({ viewport: options.viewport || (options.mobile ? { width: 390, height: 844 } : { width: 1440, height: 1000 }), deviceScaleFactor: options.deviceScaleFactor || 1, acceptDownloads: true });
   const page = await context.newPage();

@@ -1,0 +1,165 @@
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  let api, controller, scanControls, cameraGeneration = 0, busy = false;
+  let history = [];
+  const engine = $('engine');
+  const status = (message, error = false) => { $('status').textContent = message; $('status').className = error ? 'error' : ''; };
+  const element = (tag, text, className) => { const e = document.createElement(tag); e.textContent = text; if (className) e.className = className; return e; };
+  const time = date => new Intl.DateTimeFormat('es-PA', { timeZone: 'America/Panama', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(date));
+  function renderHistory() {
+    $('history').replaceChildren();
+    if (!history.length) $('history').append(element('li', 'Aún no has consultado productos.'));
+    for (const entry of history) {
+      const li = document.createElement('li');
+      const info = element('span', entry.code);
+      info.append(element('small', time(entry.date)));
+      li.append(info, element('span', entry.label)); $('history').append(li);
+    }
+  }
+  function stopCamera() {
+    cameraGeneration++;
+    if (scanControls) { scanControls.stop(); scanControls = null; }
+    const stream = $('video').srcObject;
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    $('video').srcObject = null;
+    $('camera').hidden = $('camera-controls').hidden = true;
+    $('scan').disabled = busy || !api || !api.status().authenticated;
+    $('torch').hidden = true;
+  }
+  function clear() {
+    if (controller) controller.abort();
+    stopCamera(); history = []; renderHistory();
+    $('result').replaceChildren(); $('result').hidden = true;
+    $('barcode').value = $('password').value = '';
+    $('workspace').hidden = true; $('login-panel').hidden = false;
+    $('cancel').hidden = true;
+    status('Inicia sesión para consultar tus documentos.');
+  }
+  engine.addEventListener('load', async () => {
+    try {
+      api = engine.contentWindow.AuditCloud;
+      if (!api || !api.mobile || !engine.contentWindow.TrazaConverter) throw new Error('No se pudo cargar el acceso. Actualiza la página.');
+      await api.ready();
+      engine.contentWindow.addEventListener('traza:session-cleared', clear);
+      $('login-button').disabled = false;
+      status('Acceso seguro listo. Inicia sesión.');
+    } catch (e) { status(e.message, true); }
+  });
+  $('login-form').addEventListener('submit', async event => {
+    event.preventDefault(); $('login-button').disabled = true;
+    status('Verificando tu cuenta y desbloqueando el historial…');
+    try {
+      await api.mobile.login($('username').value, $('password').value);
+      $('password').value = '';
+      if (!api.status().authenticated) throw new Error('No se pudo verificar el acceso.');
+      $('identity').textContent = '@' + api.status().user.username;
+      $('login-panel').hidden = true; $('workspace').hidden = false;
+      $('scan').disabled = false;
+      status('Escanea o escribe un código. La consulta lee los PDF autorizados, del más reciente al más antiguo.');
+    } catch (e) { $('password').value = ''; status(e.message, true); }
+    finally { $('login-button').disabled = false; }
+  });
+  $('logout').addEventListener('click', () => { clear(); api.mobile.logout(); });
+  $('clear-history').addEventListener('click', () => { history = []; renderHistory(); });
+  function showProduct(product, doc, failed) {
+    const result = $('result'); result.className = 'card'; result.replaceChildren(); result.hidden = false;
+    result.append(element('p', 'PRODUCTO ENCONTRADO EN EL ARCHIVO', 'result-label'), element('h2', product.descripcion || 'Sin descripción en el PDF', 'product-name'));
+    result.append(element('div', Number.isFinite(product.pventa) ? new Intl.NumberFormat('es-PA', { style: 'currency', currency: 'USD' }).format(product.pventa) : 'Precio no disponible', 'price'));
+    result.append(element('p', 'Precio de venta registrado en el PDF; no confirma el precio vigente.', 'note'));
+    const dl = document.createElement('dl');
+    for (const [name, value] of [['Código de barras', product.codigo], ['Empaque', product.empaque], ['Referencia', product.ref], ['Salida de origen', doc.salida], ['Registrado', time(doc.date)]]) {
+      dl.append(element('dt', name), element('dd', value || 'No disponible en el documento'));
+    }
+    result.append(dl);
+    if (failed) result.append(element('p', 'No se pudieron leer ' + failed + ' documentos más recientes. Este resultado podría tener una versión posterior.', 'note missing'));
+  }
+  // UPC-A and its EAN-13 representation identify the same barcode.
+  const equivalent = (left, right) => left === right || (/^\d{12}$/.test(left) && '0' + left === right) || (/^\d{12}$/.test(right) && left === '0' + right);
+  async function lookup(raw) {
+    const code = String(raw).trim();
+    if (!code || code.length > 80 || /[\x00-\x1f]/.test(code)) { status('Escribe un código válido.', true); return; }
+    if (busy) return;
+    if (!api || !api.status().authenticated) { status('Inicia sesión para consultar productos.', true); return; }
+    stopCamera(); busy = true;
+    controller = new AbortController();
+    const current = controller, epoch = api.status().generation;
+    const assertCurrent = () => { if (current.signal.aborted || !api.status().authenticated || api.status().generation !== epoch) throw new Error('Consulta cancelada.'); };
+    $('barcode').value = code; $('search').disabled = $('scan').disabled = true;
+    $('result').hidden = true; $('result').replaceChildren();
+    $('cancel').hidden = false;
+    let count = 0, failed = 0, match;
+    try {
+      for (let offset = 0; !match; offset += 25) {
+        assertCurrent();
+        const documents = await api.mobile.documents(offset, current.signal);
+        assertCurrent();
+        for (const document of documents) {
+          assertCurrent(); count++;
+          status('Buscando ' + code + ' · revisando documento ' + count + '…');
+          try {
+            const doc = await api.mobile.products(document.id, current.signal);
+            assertCurrent();
+            const product = doc.products.find(item => equivalent(String(item.codigo), code));
+            if (product) { match = { product, doc }; break; }
+          } catch (e) { assertCurrent(); failed++; }
+        }
+        if (documents.length < 25) break;
+      }
+      assertCurrent();
+      let label;
+      if (match) {
+        showProduct(match.product, match.doc, failed); label = 'Encontrado';
+        status('Producto leído del PDF original. ' + count + ' documentos revisados.');
+      } else {
+        const result = $('result'); result.hidden = false; result.className = 'card warning';
+        label = failed ? 'Consulta incompleta' : 'Sin coincidencia';
+        result.append(element('p', failed ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
+        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos. No podemos confirmar si este producto está en el archivo. Reintenta la consulta.' : 'Este código no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
+        status(failed ? 'La consulta terminó con documentos sin verificar.' : 'Consulta del archivo completada.', Boolean(failed));
+      }
+      history.unshift({ code, label, date: new Date().toISOString() }); history = history.slice(0, 20); renderHistory();
+      $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (e) { if (!current.signal.aborted && api.status().authenticated) status(e.message, true); }
+    finally { busy = false; $('search').disabled = false; $('scan').disabled = !api.status().authenticated; $('cancel').hidden = true; if (controller === current) controller = null; }
+  }
+  $('lookup-form').addEventListener('submit', event => { event.preventDefault(); lookup($('barcode').value); });
+  $('cancel').addEventListener('click', () => { if (controller) controller.abort(); status('Consulta cancelada. Puedes intentar otro código.'); });
+  $('scan').addEventListener('click', async () => {
+    if (busy || !api || !api.status().authenticated) return;
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('La cámara requiere HTTPS. Puedes escribir el código manualmente.', true); return; }
+    const sequence = ++cameraGeneration;
+    $('scan').disabled = true;
+    $('camera').hidden = $('camera-controls').hidden = false;
+    status('Permite el acceso a la cámara trasera y apunta al código.');
+    try {
+      const reader = new ZXingBrowser.BrowserMultiFormatReader();
+      const controls = await reader.decodeFromConstraints({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } }, $('video'), (result, error, controls) => {
+        if (sequence !== cameraGeneration) { controls.stop(); return; }
+        if (result && !busy) {
+          const text = result.getText(); controls.stop();
+          if (navigator.vibrate) navigator.vibrate(60);
+          lookup(text);
+        }
+      });
+      if (sequence !== cameraGeneration) { controls.stop(); return; }
+      scanControls = controls;
+      const stream = $('video').srcObject;
+      const track = stream && stream.getVideoTracks()[0];
+      const capabilities = track && track.getCapabilities ? track.getCapabilities() : {};
+      if (capabilities.torch && track.applyConstraints) { $('torch').hidden = false; $('torch').textContent = 'Encender linterna'; }
+    } catch (e) {
+      if (sequence !== cameraGeneration) return;
+      stopCamera(); status(e.name === 'NotAllowedError' ? 'Permiso de cámara denegado. Actívalo en el navegador o escribe el código.' : 'No se pudo iniciar la cámara. Cierra otras aplicaciones que la usen o escribe el código.', true);
+    }
+  });
+  $('stop').addEventListener('click', stopCamera);
+  $('torch').addEventListener('click', async () => {
+    const stream = $('video').srcObject, track = stream && stream.getVideoTracks()[0];
+    if (!track) return;
+    try { const next = !track.getSettings().torch; await track.applyConstraints({ advanced: [{ torch: next }] }); $('torch').textContent = next ? 'Apagar linterna' : 'Encender linterna'; }
+    catch (_) { status('Este dispositivo no permite controlar la linterna.', true); }
+  });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopCamera(); });
+  window.addEventListener('pagehide', () => { clear(); if (api) api.mobile.logout(); });
+})();

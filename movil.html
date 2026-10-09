@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#102e2a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="MegaControl">
+  <title>Escáner · MegaControl</title>
+  <link rel="icon" href="megacontrol-logo.png">
+  <link rel="apple-touch-icon" href="megacontrol-logo.png">
+  <link rel="manifest" href="movil.webmanifest">
+  <link rel="stylesheet" href="movil.css">
+  <script defer src="vendor/zxing-browser.min.js"></script>
+  <script defer src="movil.js"></script>
+</head>
+<body>
+  <header class="top"><a href="index.html" aria-label="MegaControl, página principal"><img src="megacontrol-logo.png" alt=""><span>MegaControl<small>CONSULTA DE PRODUCTOS</small></span></a><span class="live">● Acceso seguro</span></header>
+  <main>
+    <div class="heading"><p class="eyebrow">MEGA REGALÓN · MÓVIL</p><h1>Tu catálogo,<br>en un escaneo.</h1><p>Consulta los productos de tus documentos guardados, desde donde estés.</p></div>
+    <section id="login-panel" class="card">
+      <h2>Entra con tu cuenta</h2><p>Usa el mismo usuario y contraseña de MegaControl.</p>
+      <form id="login-form"><label for="username">Usuario</label><input id="username" autocomplete="username" required maxlength="32" autocapitalize="none" spellcheck="false"><label for="password">Contraseña</label><input id="password" type="password" autocomplete="current-password" required><button id="login-button" disabled>Iniciar sesión</button></form>
+    </section>
+    <section id="workspace" hidden>
+      <div class="account"><span id="identity"></span><button id="logout" class="quiet">Cerrar sesión</button></div>
+      <section class="card scanner-card"><div class="section-title"><h2>Consultar producto</h2><span class="pill">PDF originales</span></div>
+        <div id="camera" hidden><video id="video" autoplay muted playsinline aria-label="Cámara para escanear códigos"></video><div class="scan-frame" aria-hidden="true"></div><p>Coloca el código dentro del marco</p></div>
+        <button id="scan" class="scan-button"><span aria-hidden="true">▥</span> ESCANEAR PRODUCTO</button>
+        <div id="camera-controls" hidden><button id="stop" class="quiet">Detener cámara</button><button id="torch" class="quiet" hidden>Encender linterna</button></div>
+        <div class="divider">O ESCRIBE EL CÓDIGO</div>
+        <form id="lookup-form"><label for="barcode">Código de barras</label><div class="input-row"><input id="barcode" inputmode="numeric" autocomplete="off" placeholder="Ej. 7451234567890" maxlength="80" required><button id="search">Buscar</button></div></form>
+        <p class="note">Los ceros iniciales se conservan. Compatible con EAN, UPC y Code 128.</p>
+      </section>
+      <section id="result" class="card" hidden aria-live="polite"></section>
+      <section class="card history-card"><div class="section-title"><h2>Últimas consultas</h2><button id="clear-history" class="quiet">Limpiar</button></div><p class="note">Solo en esta sesión; se borran al salir.</p><ul id="history"><li>Aún no has consultado productos.</li></ul></section>
+    </section>
+    <p id="status" role="status" aria-live="polite">Preparando acceso seguro…</p>
+    <button id="cancel" class="quiet" hidden>Cancelar consulta</button>
+    <footer>Información extraída de los PDF autorizados. El precio corresponde al documento; confirma su vigencia antes de vender.<br><a href="index.html#archivo">Abrir archivo de salidas</a></footer>
+  </main>
+  <nav class="bottom" aria-label="Navegación"><a href="movil.html" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo">▤<span>Archivo</span></a><a href="index.html">＋<span>Nueva salida</span></a></nav>
+  <iframe id="engine" src="index.html#nueva-salida" title="Motor de acceso y lectura de documentos" hidden></iframe>
+  <noscript>Activa JavaScript para usar la cámara y consultar los documentos.</noscript>
+</body>
+</html>

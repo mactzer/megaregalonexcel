@@ -1,0 +1,12 @@
+{
+  "id": "./movil.html",
+  "name": "MegaControl · Productos",
+  "short_name": "MegaControl",
+  "lang": "es",
+  "start_url": "./movil.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f6f4",
+  "theme_color": "#102e2a",
+  "icons": [{ "src": "./megacontrol-logo.png", "sizes": "1254x1254", "type": "image/png", "purpose": "any" }]
+}

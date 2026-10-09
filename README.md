@@ -28,6 +28,22 @@ La descarga del Excel muestra una confirmación visible con su nombre y aparece 
 
 ## Desarrollo y validación
 
+### Escáner para celulares
+
+Abre `movil.html` desde el sitio servido por HTTPS. Entra con la misma cuenta aprobada y contraseña de MegaControl. **Escanear producto** utiliza la cámara trasera y ZXing local, compatible con EAN-13, EAN-8, UPC-A y Code 128, incluyendo navegadores sin BarcodeDetector. También puedes escribir el código. La cámara se detiene tras reconocer un código, al ocultar la página y al cerrar sesión. La linterna aparece únicamente cuando el dispositivo permite controlarla.
+
+La consulta recorre el historial autorizado del más reciente al más antiguo, con páginas de 25 registros. Descifra y analiza los PDF originales con el mismo parser del convertidor; no usa un catálogo ficticio ni crea otra base. Conserva los códigos como texto y reconoce la equivalencia estándar de UPC-A con su EAN-13 precedido de cero. Los PDF actuales contienen códigos numéricos de 5 a 14 dígitos; reconocer un Code 128 alfanumérico con la cámara no amplía lo que el parser del documento puede extraer.
+
+La ficha identifica la salida y su fecha oficial. **El precio es P/Venta del PDF, no un precio vigente confirmado de inventario.** Los documentos no contienen necesariamente categorías, imágenes ni estado de inventario. La búsqueda se realiza de nuevo para cada consulta; un historial grande puede tardar. No encontrar coincidencias en los PDF no confirma que el producto falte en otro sistema de inventario. Si un documento no se puede leer, se muestra una consulta incompleta; si se encuentra un producto después de un documento ilegible más reciente, se avisa que podría existir una versión posterior.
+
+El motor interno carga `index.html` en un iframe del mismo origen para reutilizar la sesión, el cifrado y el parser existentes. No se exportan tokens ni claves al código móvil. Los resultados y las últimas 20 consultas solo viven en memoria y se borran al salir; no se escriben datos comerciales ni contraseñas en almacenamiento del navegador. Se requiere Internet para Auth y documentos. Puedes agregar la página a la pantalla de inicio desde Safari (**Compartir → Agregar a inicio**) o mediante la opción de instalación disponible en tu navegador Android. El manifiesto no implica funcionamiento sin conexión.
+
+Para probarla en desarrollo, sirve el repositorio con `python3 -m http.server 8000`. La cámara en un teléfono requiere un sitio HTTPS: una dirección HTTP de la red local no permite usarla. La publicación de GitHub Pages incluye los archivos móviles. Una vez publicado el cambio, la ruta será `https://mactzer.github.io/megaregalonexcel/movil.html`; no está desplegada por el solo hecho de editar el checkout. No ejecutes SQL de instalación sobre el historial existente para usar esta consulta.
+
+Las pruebas móviles integradas cubren descifrado real con documentos ficticios, conservación de códigos, precio y procedencia, ausencia frente a consulta incompleta, cámara denegada, revocación de acceso y lectura efectiva de EAN-13 con ZXing mediante un stream de cámara generado para la prueba. Ejecuta `NODE_PATH=/workspace/mega-audit-tools/node_modules node --test --test-name-pattern='mobile scanner:' tests/traza.browser.cjs` o la suite de navegador completa.
+
+Esta página implementa escaneo y consulta del archivo. No implementa todavía las incidencias compartidas, chat, push/SMS ni edición de un catálogo independiente descritos en la propuesta de aplicación completa; requieren desarrollo y tablas con permisos adicionales. No muestra confirmaciones de alertas enviadas ni notificaciones simuladas.
+
 La interfaz utiliza `traza.css` y `traza.js`, con iconos locales y bibliotecas incluidas en `vendor`. No requiere compilación. Sirve la carpeta con `python3 -m http.server 8000`. Las dos modalidades de auditoría conservan su almacenamiento independiente: Supabase con cifrado en el navegador e intranet con el servidor Python y SQLite. Abrir un HTML directamente no sustituye la instalación del servicio de auditoría.
 
 Las pruebas de conversión, cifrado y SQL se ejecutan así (la dependencia de PGlite se instala fuera del repositorio):

@@ -1824,7 +1824,43 @@
     catch (error) { const bar = document.getElementById("audit-bar"); if (bar) feedback(bar, errorText(error), true); }
   }
 
-  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey });
+  // The mobile view reuses this session and parser without exposing tokens or keys.
+  async function mobileDocuments(offset, signal) {
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Página inválida.");
+    const epoch = generation;
+    assertAccount(epoch);
+    if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
+    const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at&order=created_at.desc,id.desc&limit=25&offset=" + offset, { signal });
+    assertAccount(epoch);
+    if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id))) throw new Error("El historial recibido no es válido.");
+    return rows;
+  }
+
+  async function mobileProducts(id, signal) {
+    if (!UUID.test(String(id))) throw new Error("Documento inválido.");
+    const epoch = generation;
+    const key = master;
+    const guard = function () {
+      assertAccount(epoch);
+      if (!status().authenticated || master !== key || (signal && signal.aborted)) throw new Error("Consulta cancelada.");
+    };
+    guard();
+    const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&id=eq." + id + "&select=*&limit=2", { signal });
+    guard();
+    if (!Array.isArray(rows) || rows.length !== 1) throw new Error("No tienes acceso a este documento.");
+    const meta = await decryptedRecord(rows[0], key);
+    guard();
+    let data;
+    try {
+      data = await getDocument(rows[0], "pdf", key, guard, signal);
+      const result = await window.TrazaConverter.analyzeUnits({ data, expectedNumber: meta.salida_numero, assertCurrent: guard, signal, includeProducts: true });
+      guard();
+      return { products: result.products, salida: meta.salida_numero, date: rows[0].created_at };
+    } finally { if (data) data.fill(0); }
+  }
+
+  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,
+    mobile: Object.freeze({ login, logout: clearSession, documents: mobileDocuments, products: mobileProducts }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {
     for (const dialog of openDialogs) dialog.close();

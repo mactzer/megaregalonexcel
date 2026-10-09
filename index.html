@@ -376,6 +376,7 @@
     <nav class="traza-nav" aria-label="Secciones">
       <a id="converter-tab" class="traza-nav-link" href="#nueva-salida" data-traza-section="converter" aria-controls="converter-view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 14h8M12 10v8"/></svg><span>Nueva salida</span></a>
       <a id="audit-tab" class="traza-nav-link" href="#archivo" data-traza-section="archive" aria-controls="audit-page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h18v12H3zM2 4h20v4H2zM9 12h6"/></svg><span>Archivo de salidas</span></a>
+      <a class="traza-nav-link" href="movil.html"><span>Escáner de productos</span></a>
     </nav>
     <div class="traza-sidebar-bottom">
       <button class="traza-help-button" type="button" data-traza-help><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01"/></svg>Ayuda</button>
@@ -1532,6 +1533,7 @@
           const documentNumber = String(parsed.documentInfo.numero || "");
           return {
             rowCount: parsed.rows.length,
+            products: options.includeProducts ? parsed.rows.map(row => ({ codigo: row.codigo, descripcion: row.descripcion, pventa: row.pventa, empaque: row.empaque, ref: row.ref })) : undefined,
             totalUnits,
             missingUnits,
             documentNumber,
