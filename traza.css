@@ -22,7 +22,7 @@ a { color: var(--green); }
 .traza-skip-link:focus { transform: translateY(0); }
 .traza-sidebar { position: fixed; z-index: 30; inset: 0 auto 0 0; width: var(--traza-sidebar); padding: 29px 16px 22px; color: #e3eceb; background: #1c2a31; display: flex; flex-direction: column; }
 .traza-brand { display: flex; gap: 10px; align-items: center; padding: 0 9px; color: #fff; text-decoration: none; }
-.traza-brand-symbol { flex: 0 0 40px; }
+.traza-brand-symbol { display: block; flex: 0 0 40px; width: 40px; height: 40px; object-fit: contain; }
 .traza-brand strong { display: block; font-size: 18px; letter-spacing: -.02em; font-weight: 760; line-height: 1.2; white-space: nowrap; }
 .traza-brand small { display: block; font-size: 10px; color: #a9bbbd; margin-top: 4px; line-height: 1.45; max-width: 130px; }
 .traza-nav { display: grid; gap: 7px; margin-top: 39px; }

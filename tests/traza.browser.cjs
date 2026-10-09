@@ -81,7 +81,7 @@ before(async () => {
     if (!filename.startsWith(ROOT + path.sep)) { response.writeHead(403); response.end(); return; }
     fs.readFile(filename, (error, contents) => {
       if (error) { response.writeHead(404); response.end(); return; }
-      const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+      const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
       response.writeHead(200, { 'Content-Type': types[path.extname(filename)] || 'application/octet-stream' }); response.end(contents);
     });
   });
@@ -202,6 +202,22 @@ test('desktop: real encrypted archive, official author, damaged records, count, 
     await login(h.page);
     await checkNoOverflow(h.page);
     assert.equal(await h.page.title(), 'MegaControl | Control de salidas');
+    const logo = h.page.locator('.traza-brand-symbol');
+    const logoUrl = 'megacontrol-logo.png?v=megacontrol-logo-1';
+    assert.equal(await logo.getAttribute('src'), logoUrl);
+    assert.equal(await logo.evaluate(async image => {
+      await image.decode();
+      return image.complete && image.naturalWidth > 0 && image.naturalHeight > 0;
+    }), true, 'The header logo must decode as an image');
+    const favicon = await h.page.locator('link[rel="icon"]').getAttribute('href');
+    assert.equal(favicon, logoUrl);
+    assert.equal(await h.page.evaluate(async href => {
+      const image = new Image();
+      image.src = href;
+      await image.decode();
+      return image.naturalWidth > 0 && image.naturalHeight > 0;
+    }, favicon), true, 'The favicon must decode as an image');
+    await h.page.locator('#traza-sidebar').screenshot({ path: path.join(OUTPUT, 'desktop-sidebar.png') });
     assert.equal(await h.page.locator('.audit-table tbody tr').count(), 25);
     assert.match(await h.page.locator('#audit-page').innerText(), /28 salidas|28 coincidencias|28/);
     assert.match(await h.page.locator('#audit-page').innerText(), /Unidades verificadas en esta página: 120/);
@@ -419,6 +435,7 @@ test('mobile 390 px: cards, no overflow, menu focus trap, Escape and focus retur
     const menu = h.page.locator('#traza-menu-button');
     await menu.click();
     assert.equal(await menu.getAttribute('aria-expanded'), 'true');
+    await h.page.locator('#traza-sidebar').screenshot({ path: path.join(OUTPUT, 'mobile-sidebar.png') });
     assert.equal(await h.page.locator('#app-main').getAttribute('inert'), '');
     await h.page.keyboard.press('Shift+Tab');
     assert.equal(await h.page.evaluate(() => document.querySelector('.traza-sidebar').contains(document.activeElement)), true);
