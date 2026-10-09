@@ -26,6 +26,7 @@
     $('camera').hidden = $('camera-controls').hidden = true;
     $('scan').disabled = busy || !catalogReady || !api || !api.status().authenticated;
     $('torch').hidden = true;
+    $('zoom-control').hidden = true;
   }
   function clear() {
     if (controller) controller.abort();
@@ -163,14 +164,10 @@
     $('camera').hidden = $('camera-controls').hidden = false;
     status('Permite el acceso a la cámara trasera y apunta al código.');
     try {
-      const reader = new ZXingBrowser.BrowserMultiFormatReader();
-      const controls = await reader.decodeFromConstraints({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } } }, $('video'), (result, error, controls) => {
-        if (sequence !== cameraGeneration) { controls.stop(); return; }
-        if (result && !busy) {
-          const text = result.getText(); controls.stop();
-          if (navigator.vibrate) navigator.vibrate(60);
-          lookup(text);
-        }
+      const controls = await MobileScanner.start($('video'), text => {
+        if (sequence !== cameraGeneration || busy) return;
+        if (navigator.vibrate) navigator.vibrate(60);
+        lookup(text);
       });
       if (sequence !== cameraGeneration) { controls.stop(); return; }
       scanControls = controls;
@@ -178,12 +175,23 @@
       const track = stream && stream.getVideoTracks()[0];
       const capabilities = track && track.getCapabilities ? track.getCapabilities() : {};
       if (capabilities.torch && track.applyConstraints) { $('torch').hidden = false; $('torch').textContent = 'Encender linterna'; }
+      if (capabilities.zoom && Number.isFinite(capabilities.zoom.min) && Number.isFinite(capabilities.zoom.max) && capabilities.zoom.max > capabilities.zoom.min) {
+        const zoom = $('camera-zoom'); zoom.min = capabilities.zoom.min; zoom.max = Math.min(capabilities.zoom.max, 6);
+        zoom.step = capabilities.zoom.step || .1; zoom.value = track.getSettings().zoom || capabilities.zoom.min;
+        $('zoom-control').hidden = false;
+      }
     } catch (e) {
       if (sequence !== cameraGeneration) return;
       stopCamera(); status(e.name === 'NotAllowedError' ? 'Permiso de cámara denegado. Actívalo en el navegador o escribe el código.' : 'No se pudo iniciar la cámara. Cierra otras aplicaciones que la usen o escribe el código.', true);
     }
   });
   $('stop').addEventListener('click', stopCamera);
+  $('camera-zoom').addEventListener('input', async () => {
+    const stream = $('video').srcObject, track = stream && stream.getVideoTracks()[0];
+    if (!track) return;
+    try { await track.applyConstraints({ advanced: [{ zoom: Number($('camera-zoom').value) }] }); }
+    catch (_) { status('Este dispositivo no permite ajustar el zoom. Acerca la etiqueta manteniendo el enfoque.', true); }
+  });
   $('torch').addEventListener('click', async () => {
     const stream = $('video').srcObject, track = stream && stream.getVideoTracks()[0];
     if (!track) return;

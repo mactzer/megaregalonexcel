@@ -114,6 +114,68 @@ async function mobileLogin(h) {
   await h.page.locator('#scan:not([disabled])').waitFor();
 }
 
+test('mobile scanner: reads the label number as a small tilted Code 128 and releases the camera', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    h.state.records = h.state.records.slice(0, 1);
+    await mobileLogin(h);
+    await h.page.evaluate(() => {
+      // Code 128 B: start 104, thirteen characters, checksum 68, stop 106.
+      // This validates the same printed number; it is not the supplied photograph.
+      const patterns = [[2,1,1,2,1,4],[2,2,3,1,1,2],[3,2,1,1,2,2],[2,1,3,2,1,2],[2,2,3,2,1,1],[2,2,3,1,1,2],[3,1,1,2,2,2],[2,2,3,2,1,1],[1,2,3,1,2,2],[2,2,1,1,3,2],[1,2,3,1,2,2],[3,2,1,1,2,2],[3,1,1,2,2,2],[3,1,1,2,2,2],[1,4,1,2,2,1],[2,3,3,1,1,1,2]];
+      const canvas = document.createElement('canvas'); canvas.width = 1000; canvas.height = 600;
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 1000, 600);
+      ctx.translate(500, 300); ctx.rotate(12 * Math.PI / 180); ctx.fillStyle = 'black';
+      let x = -178;
+      for (const pattern of patterns) for (let i = 0; i < pattern.length; i++) {
+        const width = pattern[i] * 2; if (i % 2 === 0) ctx.fillRect(x, -30, width, 60); x += width;
+      }
+      window.__label = canvas;
+      window.__mobileStream = canvas.captureStream(10);
+      navigator.mediaDevices.getUserMedia = async () => window.__mobileStream;
+    });
+    const decoded = await h.page.evaluate(() => {
+      for (let attempt = 0; attempt < 7; attempt++) {
+        try { return MobileScanner.decode(window.__label, undefined, attempt); } catch (_) {}
+      }
+      return null;
+    });
+    assert.equal(decoded, '6952682030988');
+    await h.page.locator('#scan').click();
+    await h.page.waitForFunction(() => document.querySelector('#barcode').value === '6952682030988');
+    await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
+    assert.equal(await h.page.evaluate(() => window.__mobileStream.getTracks().every(track => track.readyState === 'ended')), true);
+    assert.equal(await h.page.locator('#history li').count(), 1);
+  } finally { await h.close(); }
+});
+
+test('mobile scanner: requests continuous focus and applies zoom only on capable cameras', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    h.state.records = h.state.records.slice(0, 1);
+    await mobileLogin(h);
+    await h.page.evaluate(() => {
+      const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 360;
+      const ctx = canvas.getContext('2d'); ctx.fillStyle = 'white'; ctx.fillRect(0, 0, 640, 360);
+      window.__mobileStream = canvas.captureStream(10);
+      window.__cameraConstraints = [];
+      const track = window.__mobileStream.getVideoTracks()[0];
+      track.getCapabilities = () => ({ focusMode: ['continuous'], zoom: { min: 1, max: 4, step: .1 } });
+      track.getSettings = () => ({ zoom: 1 });
+      track.applyConstraints = async value => { window.__cameraConstraints.push(value); };
+      navigator.mediaDevices.getUserMedia = async () => window.__mobileStream;
+    });
+    await h.page.locator('#scan').click();
+    await h.page.locator('#zoom-control').waitFor({ state: 'visible' });
+    assert.equal(await h.page.evaluate(() => window.__cameraConstraints.some(value => value.advanced[0].focusMode === 'continuous')), true);
+    await h.page.locator('#camera-zoom').evaluate(input => { input.value = '2'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+    await h.page.waitForFunction(() => window.__cameraConstraints.some(value => value.advanced[0].zoom === 2));
+    await h.page.locator('#stop').click();
+    assert.equal(await h.page.locator('#zoom-control').isVisible(), false);
+    assert.equal(await h.page.evaluate(() => window.__mobileStream.getTracks().every(track => track.readyState === 'ended')), true);
+  } finally { await h.close(); }
+});
+
 test('mobile scanner: encrypted index survives reload, queries have no PDF requests, and slow access fails in five seconds', async () => {
   const h = await harness({ mobile: true });
   let release;
