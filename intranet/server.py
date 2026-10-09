@@ -57,6 +57,7 @@ STATIC_PATHS = {
     "/audit.js": "audit.js",
     "/audit.css": "audit.css",
     "/audit-cloud.js": "audit-cloud.js",
+    "/mobile-catalog.js": "mobile-catalog.js",
     "/audit-cloud.css": "audit-cloud.css",
     "/traza.css": "traza.css",
     "/traza.js": "traza.js",

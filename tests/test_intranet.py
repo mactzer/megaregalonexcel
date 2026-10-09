@@ -142,7 +142,7 @@ class IntranetAuditTests(unittest.TestCase):
         return body.get("user", body)
 
     def test_traza_assets_are_available_without_exposing_private_storage(self):
-        for name, mime in (("traza.css", "text/css"), ("traza.js", "javascript"),
+        for name, mime in (("traza.css", "text/css"), ("traza.js", "javascript"), ("mobile-catalog.js", "javascript"),
                            ("megacontrol-logo.png", "image/png")):
             content = ((Path(__file__).resolve().parents[1] / name).read_bytes()
                        if name.endswith(".png") else ("/* local " + name + " */").encode("utf-8"))

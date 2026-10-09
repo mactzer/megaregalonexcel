@@ -16,6 +16,7 @@
   const ALIAS_DOMAIN = "usuarios.megaregalonexcel.invalid";
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   let session = null;
+  let mobileCatalog = null;
   let member = null;
   let username = "";
   let master = null;
@@ -146,6 +147,8 @@
 
   function clearSession() {
     generation++;
+    if (mobileCatalog) mobileCatalog.clear();
+    mobileCatalog = null;
     for (const controller of requests) controller.abort();
     requests.clear();
     disposeArchive();
@@ -1825,15 +1828,52 @@
   }
 
   // The mobile view reuses this session and parser without exposing tokens or keys.
-  async function mobileDocuments(offset, signal) {
-    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Página inválida.");
+  async function mobileSnapshot(signal) {
     const epoch = generation;
     assertAccount(epoch);
     if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
-    const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at&order=created_at.desc,id.desc&limit=25&offset=" + offset, { signal });
-    assertAccount(epoch);
-    if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id))) throw new Error("El historial recibido no es válido.");
-    return rows;
+    const result = [];
+    for (let offset = 0; ; offset += 500) {
+      const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at,encrypted_metadata&order=created_at.desc,id.desc&limit=500&offset=" + offset, { signal });
+      assertAccount(epoch);
+      if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id) || typeof row.encrypted_metadata !== "string")) throw new Error("El historial recibido no es válido.");
+      result.push(...rows);
+      if (rows.length < 500) return result;
+    }
+  }
+
+  function getMobileCatalog() {
+    if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
+    if (mobileCatalog) return mobileCatalog;
+    if (!window.MobileCatalog) throw new Error("Actualiza la página para cargar el índice de productos.");
+    const key = master, epoch = generation;
+    const guard = function () { assertAccount(epoch); if (!status().authenticated || master !== key) throw new Error("La sesión cambió."); };
+    mobileCatalog = window.MobileCatalog.create({
+      cache: window.MobileCatalog.cache(CONFIG.workspace + "|" + key.fingerprint),
+      snapshot: mobileSnapshot,
+      document: mobileProducts,
+      async seal(value) {
+        guard();
+        const data = new TextEncoder().encode(JSON.stringify(value));
+        try { const ciphertext = await key.encrypt(data, "mobile-catalog-v1"); guard(); return base64(ciphertext); }
+        finally { data.fill(0); }
+      },
+      async unseal(value) {
+        guard();
+        const data = await key.decrypt(unbase64(value), "mobile-catalog-v1");
+        try { guard(); return JSON.parse(new TextDecoder().decode(data)); }
+        finally { data.fill(0); }
+      },
+      async verifyAccess(signal) {
+        guard();
+        const rows = await request(ownQuery("mega_audit_members", "role"), { signal });
+        guard();
+        if (!Array.isArray(rows) || rows.length !== 1 || !["admin", "user"].includes(rows[0].role)) {
+          clearSession(); throw new Error("Tu cuenta ya no tiene acceso al historial.");
+        }
+      }
+    });
+    return mobileCatalog;
   }
 
   async function mobileProducts(id, signal) {
@@ -1860,7 +1900,7 @@
   }
 
   window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,
-    mobile: Object.freeze({ login, logout: clearSession, documents: mobileDocuments, products: mobileProducts }) });
+    mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: (code, signal) => getMobileCatalog().lookup(code, signal), hasUpdates: signal => getMobileCatalog().hasUpdates(signal) }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {
     for (const dialog of openDialogs) dialog.close();

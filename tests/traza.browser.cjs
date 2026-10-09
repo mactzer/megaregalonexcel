@@ -111,7 +111,44 @@ async function mobileLogin(h) {
   await h.page.locator('#password').fill(PASSWORD);
   await h.page.locator('#login-button').click();
   await h.page.locator('#workspace').waitFor({ state: 'visible' });
+  await h.page.locator('#scan:not([disabled])').waitFor();
 }
+
+test('mobile scanner: encrypted index survives reload, queries have no PDF requests, and slow access fails in five seconds', async () => {
+  const h = await harness({ mobile: true });
+  let release;
+  try {
+    h.state.records = h.state.records.slice(0, 1);
+    await mobileLogin(h);
+    const firstDownloads = h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length;
+    assert.equal(firstDownloads, 1);
+    const ciphertext = await h.page.evaluate(async () => {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('megacontrol-encrypted-catalog', 1);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const db = request.result, transaction = db.transaction('catalogs');
+          const entries = transaction.objectStore('catalogs').getAll();
+          transaction.oncomplete = () => { resolve(entries.result); db.close(); };
+        };
+      });
+    });
+    assert.equal(typeof ciphertext[0], 'string');
+    assert.doesNotMatch(ciphertext[0], /Producto ficticio|0001234567890/);
+    await mobileLogin(h);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length, firstDownloads, 'Reopening the page reuses authenticated encrypted data');
+    const delay = new Promise(resolve => { release = resolve; });
+    await h.context.route('**/rest/v1/mega_audit_members?*', async route => { await delay; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ role: 'admin' }]) }); });
+    await h.page.locator('#barcode').fill('0001234567890');
+    const started = performance.now();
+    await h.page.locator('#search').click();
+    await h.page.waitForFunction(() => document.querySelector('#status').textContent.includes('cinco segundos'));
+    assert.ok(performance.now() - started < 5500, 'A stalled service cannot keep verification running indefinitely');
+    assert.equal(await h.page.locator('#result').isVisible(), false);
+    release();
+    assert.match(await h.page.locator('#history').textContent(), /Aún no/);
+  } finally { if (release) release(); await h.close(); }
+});
 
 test('mobile scanner: decrypts original PDF, preserves barcode, shows source price, and clears everything on logout', async () => {
   const h = await harness({ mobile: true });
@@ -143,7 +180,10 @@ test('mobile scanner: complete absence and unreadable PDF have distinct outcomes
     await h.page.locator('#search').click();
     await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
     assert.match(await h.page.locator('#result').innerText(), /1 PDF revisados/);
+    await setArchivedPdf(h, 0, {}, { total_units: 6 });
     h.state.failStorage = 500;
+    await h.page.locator('#refresh-catalog').click();
+    await h.page.locator('#scan:not([disabled])').waitFor();
     await h.page.locator('#search').click();
     await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('CONSULTA INCOMPLETA'));
     assert.doesNotMatch(await h.page.locator('#result').innerText(), /SIN COINCIDENCIA/);
@@ -162,7 +202,7 @@ test('mobile scanner: authorization loss aborts lookup and removes previous prod
     await h.page.locator('#barcode').fill('0001234567890');
     await h.page.locator('#search').click();
     await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('PRODUCTO ENCONTRADO'));
-    h.state.failList = 401;
+    await h.context.route('**/rest/v1/mega_audit_members?*', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'unauthorized' }) }));
     await h.page.locator('#search').click();
     await h.page.locator('#login-panel').waitFor({ state: 'visible' });
     assert.equal(await h.page.locator('#result').textContent(), '');
@@ -200,18 +240,22 @@ test('mobile scanner: ZXing reads an actual EAN-13 from a camera stream and stop
   } finally { await h.close(); }
 });
 
-test('mobile scanner: absence checks every page, and cancelling a late document cannot restore a result', async () => {
+test('mobile scanner: indexed absence makes no PDF requests, and cancelling access verification cannot restore a result', async () => {
   const h = await harness({ mobile: true });
   let release;
   try {
     h.state.records = h.state.records.filter((_, i) => i !== 1);
     await mobileLogin(h);
+    const downloads = h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length;
     await h.page.locator('#barcode').fill('9999999999999');
+    const started = performance.now();
     await h.page.locator('#search').click();
     await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('SIN COINCIDENCIA'));
+    assert.ok(performance.now() - started < 5000, 'Indexed query completes within five seconds');
     assert.match(await h.page.locator('#result').innerText(), /27 PDF revisados/);
-    assert.ok(h.state.requests.some(r => r.pathname === '/rest/v1/mega_audit_records' && new URLSearchParams(r.search).get('offset') === '25'));
-    h.state.slowStorage = new Promise(resolve => { release = resolve; });
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length, downloads);
+    const delay = new Promise(resolve => { release = resolve; });
+    await h.context.route('**/rest/v1/mega_audit_members?*', async route => { await delay; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ role: 'admin' }]) }); });
     await h.page.locator('#barcode').fill('0001234567890');
     await h.page.locator('#search').click();
     await h.page.locator('#cancel').waitFor({ state: 'visible' });
