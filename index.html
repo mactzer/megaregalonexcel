@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PDF a Excel | Selector de columnas</title>
-  <link rel="stylesheet" href="audit.css?v=2">
-  <link rel="stylesheet" href="audit-cloud.css">
+  <title>TRAZA | Centro documental</title>
+  <link rel="stylesheet" href="audit.css?v=traza-1">
+  <link rel="stylesheet" href="audit-cloud.css?v=traza-1">
   <style>
     :root {
       --ink: #191b22;
@@ -361,31 +361,39 @@
       .export-actions { margin-top: 12px; }
     }
   </style>
+  <link rel="stylesheet" href="traza.css?v=traza-1">
 </head>
 <body>
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="brand">
-        <div class="brand-mark">P→X</div>
-        <div>
-          <h1>PDF a Excel</h1>
-          <p>Selecciona solo la información que necesitas</p>
-        </div>
-      </div>
-      <div class="privacy-note"><span class="privacy-dot"></span>Procesamiento local en tu computadora</div>
-    </div>
-  </header>
-
-  <main class="page">
-    <nav class="app-tabs" aria-label="Secciones de la aplicación">
-      <button class="app-tab" id="converter-tab" type="button" aria-selected="true" aria-controls="converter-content">Convertir PDF a Excel</button>
-      <button class="app-tab" id="audit-tab" type="button" aria-selected="false" aria-controls="audit-bar">Auditoría</button>
+  <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
+  <div class="traza-menu-overlay" id="traza-menu-overlay" hidden></div>
+  <aside class="traza-sidebar" id="traza-sidebar" aria-label="Navegación principal">
+    <a class="traza-brand" href="#nueva-salida" data-traza-section="converter" aria-label="TRAZA, Nueva salida">
+      <svg class="traza-brand-symbol" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="10" fill="#2b494a"/><path d="M12 12h16M20 12v18M12 21h8M20 30l8-9" fill="none" stroke="#91d2ba" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span><strong>TRAZA</strong><small>Centro documental</small></span>
+    </a>
+    <button class="traza-menu-close" id="traza-menu-close" type="button" aria-label="Cerrar menú">×</button>
+    <nav class="traza-nav" aria-label="Secciones">
+      <a id="converter-tab" class="traza-nav-link" href="#nueva-salida" data-traza-section="converter" aria-controls="converter-view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 14h8M12 10v8"/></svg><span>Nueva salida</span></a>
+      <a id="audit-tab" class="traza-nav-link" href="#archivo" data-traza-section="archive" aria-controls="audit-page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h18v12H3zM2 4h20v4H2zM9 12h6"/></svg><span>Archivo de salidas</span></a>
     </nav>
-    <div id="audit-bar" aria-live="polite"></div>
+    <div class="traza-sidebar-bottom">
+      <button class="traza-help-button" type="button" data-traza-help><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01"/></svg>Ayuda</button>
+      <p>Creado por Eddie Rivera<br><span>© 2026 · Derechos reservados</span></p>
+    </div>
+  </aside>
+  <header class="traza-topbar" id="traza-topbar">
+    <div class="traza-topbar-location"><button class="traza-menu-button" id="traza-menu-button" type="button" aria-controls="traza-sidebar" aria-expanded="false" aria-label="Abrir menú"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="traza-location-prefix">Centro documental <span aria-hidden="true">/</span></span><strong id="traza-section-name">Nueva salida</strong></div>
+    <div id="app-profile" class="traza-app-profile"></div>
+  </header>
+  <main class="page traza-main" id="app-main" tabindex="-1">
+    <div id="audit-bar" aria-live="polite" hidden></div>
+    <div id="audit-page" hidden></div>
+    <div id="converter-view">
+      <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1>Nueva salida</h1><p>Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
     <div id="converter-content" class="steps" aria-label="Pasos">
       <div class="step active" id="step-upload"><strong>1</strong><span>Cargar PDF</span></div>
-      <div class="step" id="step-select"><strong>2</strong><span>Escoger columnas</span></div>
-      <div class="step" id="step-export"><strong>3</strong><span>Descargar Excel</span></div>
+      <div class="step" id="step-select"><strong>2</strong><span>Revisar información</span></div>
+      <div class="step" id="step-export"><strong>3</strong><span>Guardar Excel</span></div>
     </div>
 
     <section class="card upload-card">
@@ -430,7 +438,7 @@
           <div class="table-wrap" id="table-wrap">
             <div class="empty-preview">Carga un PDF para ver los datos.</div>
           </div>
-          <div style="margin-top:20px;padding:20px;background:#fff8e0;border:1px solid #eed080;border-radius:14px">
+          <div class="traza-totals">
             <h2>Totales calculados</h2>
             <p id="calculated-totals" aria-live="polite"></p>
             <p id="tax-breakdown" class="panel-subtitle"></p>
@@ -445,9 +453,9 @@
           </div>
           <div class="rename-row">
             <label for="excel-file-name">Nombre del archivo Excel</label>
-            <input id="excel-file-name" type="text" readonly aria-describedby="excel-file-name-help">
+            <input id="excel-file-name" type="text" maxlength="200" aria-describedby="excel-file-name-help">
           </div>
-          <p class="panel-subtitle" id="excel-file-name-help">Ingresa solo el número. Pulsa «Guardar Excel…» para escoger el nombre y la carpeta (Chrome o Edge). Si el navegador no lo permite, usará su carpeta de descargas.</p>
+          <p class="panel-subtitle" id="excel-file-name-help">Puedes editar el número y el nombre. «Guardar Excel…» permite elegir una carpeta en Chrome y Edge. En otros navegadores se usará la configuración de descargas.</p>
           <div class="export-bar">
             <div class="export-hint" id="export-hint">Selecciona por lo menos una columna para exportar.</div>
             <div class="export-actions">
@@ -460,15 +468,18 @@
       <p class="footer-note">Los códigos se guardan como texto para no perder dígitos ni ceros iniciales. Además, el Excel incluye las hojas “Información” y “Respaldo original” para conservar el contenido detectado del PDF.</p>
     </section>
     <footer class="footer-note">Creado por Eddie Rivera.<br>© 2026 Eddie Rivera. Todos los derechos reservados.</footer>
+    </div>
   </main>
+  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de TRAZA</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel.</p><p>Elige la carpeta de destino en los navegadores compatibles. En los demás, revisa la configuración de descargas de tu navegador.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
 
-  <script src="vendor/pdf.min.js"></script>
-  <script src="vendor/xlsx.full.min.js"></script>
-  <script src="excel-table.js"></script>
-  <script src="supabase-config.js"></script>
-  <script src="audit-crypto.js"></script>
-  <script src="audit-cloud.js?v=7"></script>
-  <script src="audit.js"></script>
+  <script src="vendor/pdf.min.js?v=traza-1"></script>
+  <script src="vendor/xlsx.full.min.js?v=traza-1"></script>
+  <script src="excel-table.js?v=traza-1"></script>
+  <script src="supabase-config.js?v=traza-1"></script>
+  <script src="audit-crypto.js?v=traza-1"></script>
+  <script src="traza.js?v=traza-1"></script>
+  <script src="audit-cloud.js?v=traza-1"></script>
+  <script src="audit.js?v=traza-1"></script>
   <script>
     "use strict";
 
@@ -502,8 +513,14 @@
       originalFile: null,
       salidaNumero: "",
       exporting: false,
-      pendingAudit: null
+      pendingAudit: null,
+      excelNameEdited: false
     };
+
+    function clearPendingAudit() {
+      if (state.pendingAudit && state.pendingAudit.excelBytes && typeof state.pendingAudit.excelBytes.fill === "function") state.pendingAudit.excelBytes.fill(0);
+      state.pendingAudit = null;
+    }
 
     const $ = (selector) => document.querySelector(selector);
     const dropZone = $("#drop-zone");
@@ -747,25 +764,63 @@
       return row;
     }
 
-    async function getDocument(data) {
-      try {
-        return await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
-      } catch (workerError) {
-        return await pdfjsLib.getDocument({ data, disableWorker: true, isEvalSupported: false }).promise;
+    let converterParseGeneration = 0;
+    let activeParse = null;
+
+    function assertParseCurrent(context) {
+      if (context && context.generation !== converterParseGeneration) {
+        const error = new Error("La lectura del PDF se canceló.");
+        error.trazaStale = true;
+        throw error;
       }
     }
 
-    async function parsePdf(file) {
-      const data = new Uint8Array(await file.arrayBuffer());
-      const pdf = await getDocument(data);
+    function cancelConverterParse() {
+      converterParseGeneration++;
+      if (!activeParse) return;
+      if (activeParse.buffer && activeParse.buffer.byteLength) activeParse.buffer.fill(0);
+      if (activeParse.task) activeParse.task.destroy().catch(() => {});
+      activeParse = null;
+    }
+
+    async function getDocument(data, context) {
+      let task;
+      try {
+        task = pdfjsLib.getDocument({ data: data.slice(), isEvalSupported: false });
+        if (context) context.task = task;
+        const pdf = await task.promise;
+        assertParseCurrent(context);
+        return pdf;
+      } catch (workerError) {
+        if (task) await task.destroy();
+        assertParseCurrent(context);
+        task = pdfjsLib.getDocument({ data: data.slice(), disableWorker: true, isEvalSupported: false });
+        if (context) context.task = task;
+        const pdf = await task.promise;
+        assertParseCurrent(context);
+        return pdf;
+      }
+    }
+
+    async function parsePdf(file, context) {
+      let data;
+      let pdf;
+      try {
+        data = new Uint8Array(await file.arrayBuffer());
+        if (context) context.buffer = data;
+        assertParseCurrent(context);
+        pdf = await getDocument(data, context);
+        assertParseCurrent(context);
       const rows = [];
       const rawLines = [];
       let pagesWithTables = 0;
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         const page = await pdf.getPage(pageNumber);
+        assertParseCurrent(context);
         const viewport = page.getViewport({ scale: 1 });
         const content = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
+        assertParseCurrent(context);
         const items = content.items.flatMap(item => {
           const transform = item.transform || [1, 0, 0, 1, 0, 0];
           const raw = { str: item.str, x: transform[4], y: viewport.height - transform[5], width: item.width || 0 };
@@ -774,19 +829,26 @@
         const lines = groupLines(items);
         lines.forEach((line, index) => rawLines.push({ pagina: pageNumber, linea: index + 1, texto: line.text }));
         const headerIndex = findHeader(lines);
-        if (headerIndex < 0) continue;
+        if (headerIndex < 0) { page.cleanup(); continue; }
         pagesWithTables++;
         const geometry = buildGeometry(lines, headerIndex);
         for (const line of lines.slice(headerIndex + 1)) {
           const row = parseRow(line, geometry);
           if (row) rows.push(row);
         }
+        page.cleanup();
       }
 
       if (!pagesWithTables || !rows.length) {
         throw new Error("No se encontró una tabla de texto. Si el PDF es una imagen escaneada, necesitará OCR.");
       }
       return { rows, rawLines, documentInfo: extractDocumentInfo(rawLines) };
+      } finally {
+        if (data && data.byteLength) data.fill(0);
+        if (pdf) await pdf.destroy();
+        else if (context && context.task) await context.task.destroy();
+        if (context) { context.buffer = null; context.task = null; }
+      }
     }
 
     function hasValue(row, key) {
@@ -973,30 +1035,38 @@
         if (error && error.name === "AbortError") throw new Error("Guardado cancelado. No se registró ni se descargó el Excel.");
         throw new Error("No se pudo abrir el selector de carpeta. Inténtalo nuevamente o usa la carpeta de descargas del navegador.");
       }
-      return async function (bytes) {
+      return async function (bytes, assertCurrent) {
         let writable;
         try {
+          if (assertCurrent) assertCurrent();
           writable = await handle.createWritable();
+          if (assertCurrent) assertCurrent();
           await writable.write(bytes);
+          if (assertCurrent) assertCurrent();
           await writable.close();
+          if (assertCurrent) assertCurrent();
         } catch (error) {
           try { if (writable) await writable.abort(); } catch (_) {}
-          throw new Error("No se pudo guardar el Excel en la carpeta elegida. Comprueba que tengas permisos y vuelve a intentarlo.");
+          if (error && error.trazaStale) throw error;
+          throw new Error("No se pudo guardar el Excel en la carpeta elegida. Comprueba que tengas permisos y vuelve a intentarlo. La salida ya está registrada y el reintento conservará ese mismo registro.");
         }
       };
     }
+
+    const converterBlobUrls = new Set();
 
     function downloadExcelToBrowser(bytes, fileName) {
       const url = URL.createObjectURL(new Blob([bytes], {
         type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
       }));
+      converterBlobUrls.add(url);
       const downloadLink = document.createElement("a");
       downloadLink.href = url;
       downloadLink.download = fileName;
       document.body.appendChild(downloadLink);
       downloadLink.click();
       downloadLink.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30000);
+      setTimeout(() => { URL.revokeObjectURL(url); converterBlobUrls.delete(url); }, 30000);
     }
 
     async function exportExcel() {
@@ -1008,6 +1078,30 @@
         $("#salida-number").focus();
         return;
       }
+      const fileName = safeFileName($("#excel-file-name").value || defaultExcelName());
+      $("#excel-file-name").value = fileName;
+      const uiGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
+      const authSnapshot = window.AuditClient && typeof window.AuditClient.status === "function" ? window.AuditClient.status() : null;
+      function assertExportCurrent() {
+        const viewChanged = window.TrazaUI && (window.TrazaUI.currentSection !== "converter" || window.TrazaUI.generation !== uiGeneration);
+        const current = authSnapshot && window.AuditClient.status();
+        const sessionChanged = authSnapshot && authSnapshot.mode === "supabase" && (!current.authenticated || !authSnapshot.authenticated || current.generation !== authSnapshot.generation || current.user.id !== authSnapshot.user.id);
+        if (viewChanged || sessionChanged) {
+          const error = new Error(sessionChanged ? "La sesión cambió. Inicia sesión y vuelve a guardar el Excel." : "La sección cambió. Vuelve a Nueva salida para guardar el Excel.");
+          error.trazaStale = true;
+          throw error;
+        }
+      }
+      let fileBytes;
+      let auditRecord = null;
+      state.exporting = true;
+      $("#export-button").disabled = true;
+      $("#export-button").textContent = "Preparando Excel…";
+      try {
+        // Open the picker in the original click, before encryption or network work.
+        const saveWriter = await chooseExcelWriter(fileName);
+        assertExportCurrent();
+        if (!window.AuditClient) throw new Error("No se pudo cargar la función de auditoría. Actualiza la página antes de guardar.");
       const headers = [];
       const usedHeaders = new Set();
       for (const def of defs) {
@@ -1140,25 +1234,17 @@
       backupWorksheet["!freeze"] = { xSplit: 0, ySplit: 1 };
       backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
-      const fileName = safeFileName(defaultExcelName());
-      $("#excel-file-name").value = fileName;
-      let fileBytes;
-      let auditRecord = null;
-      let saveWriter = null;
-      state.exporting = true;
-      $("#export-button").disabled = true;
-      $("#export-button").textContent = "Preparando Excel…";
-      try {
-        if (!window.AuditClient) throw new Error("No se pudo cargar la función de auditoría. Actualiza la página antes de descargar.");
-        const signature = JSON.stringify({ salida: state.salidaNumero, columns: defs.map(def => def.key), headers, rows: state.rows, info: state.documentInfo });
+        const signature = JSON.stringify({ salida: state.salidaNumero, excelName: fileName, columns: defs.map(def => def.key), headers, rows: state.rows, info: state.documentInfo });
         const cached = state.pendingAudit;
         if (cached && cached.signature === signature && cached.pdfFile === state.originalFile) {
           fileBytes = cached.excelBytes;
         } else {
+          clearPendingAudit();
           fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
           state.pendingAudit = {
             signature,
             salidaNumero: state.salidaNumero,
+            excelName: fileName,
             pdfFile: state.originalFile,
             excelBytes: fileBytes,
             rowCount: state.rows.length,
@@ -1166,16 +1252,22 @@
             idempotencyKey: window.AuditClient.newIdempotencyKey()
           };
         }
-        // Must run directly from the button gesture, before the first network
-        // await, so Chrome/Edge can display their native save-folder dialog.
-        saveWriter = await chooseExcelWriter(fileName);
-        $("#export-button").textContent = "Guardando y descargando…";
+        $("#export-button").textContent = "Registrando salida…";
         auditRecord = await window.AuditClient.record(state.pendingAudit);
-        if (saveWriter) await saveWriter(fileBytes);
-        else downloadExcelToBrowser(fileBytes, fileName);
+        assertExportCurrent();
+        $("#export-button").textContent = "Guardando Excel…";
+        if (saveWriter) {
+          await saveWriter(fileBytes, assertExportCurrent);
+          assertExportCurrent();
+        } else {
+          assertExportCurrent();
+          downloadExcelToBrowser(fileBytes, fileName);
+        }
         updateStep(4);
         state.pendingAudit = null;
-        if (auditRecord) showMessage(`Salida ${auditRecord.salida_numero} guardada en el historial compartido. Excel preparado para descargar.`, "info");
+        const destination = saveWriter ? "Excel guardado en la carpeta elegida." : "Se inició la descarga del Excel usando la configuración de descargas del navegador.";
+        showMessage((auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination, "info");
+        if (fileBytes && typeof fileBytes.fill === "function") fileBytes.fill(0);
       } catch (error) {
         showMessage(error.message || "No se pudo guardar la salida. Intenta descargar de nuevo.", "error");
       } finally {
@@ -1195,10 +1287,14 @@
         return;
       }
       hideMessage();
+      cancelConverterParse();
+      const parseContext = { generation: converterParseGeneration, task: null, buffer: null };
+      activeParse = parseContext;
       state.originalFile = null;
-      state.pendingAudit = null;
+      clearPendingAudit();
       state.originalName = file.name;
       state.salidaNumero = "";
+      state.excelNameEdited = false;
       $("#salida-number").value = "";
       $("#excel-file-name").value = "";
       fileStatus.classList.add("show");
@@ -1208,7 +1304,8 @@
       results.classList.remove("show");
       updateStep(1);
       try {
-        const parsed = await parsePdf(file);
+        const parsed = await parsePdf(file, parseContext);
+        assertParseCurrent(parseContext);
         state.rows = parsed.rows;
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
@@ -1233,23 +1330,30 @@
         results.classList.add("show");
         updateStep(3);
       } catch (error) {
+        if (error.trazaStale || parseContext.generation !== converterParseGeneration) return;
         console.error(error);
         $("#file-detail").textContent = "No se pudo leer el archivo";
         showMessage(error.message || "Ocurrió un error al leer el PDF.", "error");
       } finally {
-        setLoading(false);
+        if (parseContext.generation === converterParseGeneration) {
+          activeParse = null;
+          setLoading(false);
+        }
       }
     }
 
     function resetApp() {
       if (state.exporting) return;
+      cancelConverterParse();
+      setLoading(false);
       state.rows = [];
       state.rawLines = [];
       state.documentInfo = {};
       state.originalName = "documento.pdf";
       state.originalFile = null;
-      state.pendingAudit = null;
+      clearPendingAudit();
       state.salidaNumero = "";
+      state.excelNameEdited = false;
       $("#salida-number").value = "";
       $("#excel-file-name").value = "";
       $("#manual-tax").checked = false;
@@ -1273,9 +1377,10 @@
     $("#export-button").addEventListener("click", exportExcel);
     $("#salida-number").addEventListener("input", event => {
       state.salidaNumero = event.target.value.trim();
-      $("#excel-file-name").value = safeFileName(defaultExcelName());
+      if (!state.excelNameEdited) $("#excel-file-name").value = safeFileName(defaultExcelName());
       hideMessage();
     });
+    $("#excel-file-name").addEventListener("input", () => { state.excelNameEdited = true; hideMessage(); });
     $("#manual-tax").addEventListener("change", event => {
       const automaticTax = calculateTotals().impuestoCalculado;
       state.documentInfo.impuestoManual = event.target.checked;
@@ -1293,23 +1398,16 @@
       renderPreview();
     });
     $("#reset-button").addEventListener("click", resetApp);
-
-    // The conversion helpers are also evaluated in small Node test contexts
-    // without a DOM. Only wire the visual tabs when the page has a real DOM.
-    if (typeof document.getElementById === "function") {
-      const appPage = document.querySelector("main.page");
-      const converterTab = document.getElementById("converter-tab");
-      const auditTab = document.getElementById("audit-tab");
-      function selectAppSection(audit) {
-        if (!appPage || !converterTab || !auditTab) return;
-        appPage.classList.toggle("audit-mode", audit);
-        converterTab.setAttribute("aria-selected", audit ? "false" : "true");
-        auditTab.setAttribute("aria-selected", audit ? "true" : "false");
-        if (audit) window.scrollTo({ top: 0, behavior: "smooth" });
-      }
-      converterTab.addEventListener("click", () => selectAppSection(false));
-      auditTab.addEventListener("click", () => selectAppSection(true));
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("traza:session-cleared", () => {
+        for (const url of converterBlobUrls) URL.revokeObjectURL(url);
+        converterBlobUrls.clear();
+        clearPendingAudit();
+        cancelConverterParse();
+        setLoading(false);
+      });
     }
+
   </script>
 </body>
 </html>

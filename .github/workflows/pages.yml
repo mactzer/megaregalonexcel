@@ -31,12 +31,21 @@ jobs:
         run: |
           node --test tests/*.test.cjs
           python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Preparar pruebas de navegador
+        run: |
+          npm install --prefix "$RUNNER_TEMP/traza-browser-tools" --ignore-scripts --no-audit --no-fund playwright@1.58.2
+          "$RUNNER_TEMP/traza-browser-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verificar TRAZA con documentos ficticios
+        env:
+          NODE_PATH: ${{ runner.temp }}/traza-browser-tools/node_modules
+          TRAZA_BROWSER_OUTPUT: ${{ runner.temp }}/traza-browser-results
+        run: node --test tests/traza.browser.cjs
       - name: Configurar Pages
         uses: actions/configure-pages@v5
       - name: Preparar sitio
         run: |
           mkdir _site
-          cp index.html excel-table.js audit.html audit.js audit.css audit-cloud.js audit-cloud.css audit-crypto.js supabase-config.js supabase-setup.html .nojekyll _site/
+          cp index.html traza.css traza.js excel-table.js audit.html audit.js audit.css audit-cloud.js audit-cloud.css audit-crypto.js supabase-config.js supabase-setup.html .nojekyll _site/
           cp -R supabase _site/
           cp -R vendor _site/
       - name: Subir sitio

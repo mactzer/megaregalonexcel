@@ -24,6 +24,12 @@
   let busyLogin = false;
   let pageGeneration = 0;
   let generation = 0;
+  let archiveView = null;
+  let profileCleanup = null;
+  const openDialogs = new Set();
+  const requests = new Set();
+  const blobUrls = new Map();
+  const archiveFilters = { query: "", from: "", to: "", author: "", page: 1 };
   const pending = new Map();
   const pendingMembers = new Map();
 
@@ -126,6 +132,7 @@
   function status() {
     return {
       mode: "supabase",
+      generation,
       authenticated: Boolean(session && member && master),
       user: session && member && master ? { id: session.user.id, username, display_name: username, role: member.role } : null
     };
@@ -138,14 +145,23 @@
 
   function clearSession() {
     generation++;
+    for (const controller of requests) controller.abort();
+    requests.clear();
+    disposeArchive();
+    for (const dialog of openDialogs) dialog.close();
+    for (const [url, timer] of blobUrls) { clearTimeout(timer); URL.revokeObjectURL(url); }
+    blobUrls.clear();
     session = null;
     member = null;
     username = "";
     master = null;
     recoveryKey = null;
     refreshPromise = null;
-    pending.clear();
+    clearPending();
     pendingMembers.clear();
+    Object.assign(archiveFilters, { query: "", from: "", to: "", author: "", page: 1 });
+    window.dispatchEvent(new CustomEvent("audit:logout"));
+    window.dispatchEvent(new CustomEvent("traza:session-cleared"));
     renderAccountBar();
     renderAuditPage();
   }
@@ -172,16 +188,22 @@
       }).catch(function (error) {
         if (epoch === generation) clearSession();
         throw error;
-      }).finally(function () { refreshPromise = null; });
+      }).finally(function () { if (epoch === generation) refreshPromise = null; });
     }
     await refreshPromise;
   }
 
   async function request(path, options) {
     options = options || {};
+    const epoch = generation;
+    function current() {
+      if (epoch !== generation || (!options.anonymous && !session)) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+      if (options.signal && options.signal.aborted) throw new Error("La vista cambió.");
+    }
     if (!options.anonymous) {
       if (!session) throw new Error("Inicia sesión en la auditoría antes de continuar.");
       await refreshIfNeeded();
+      current();
     }
     const headers = new Headers(options.headers || {});
     headers.set("apikey", CONFIG.key);
@@ -198,19 +220,36 @@
       }
     }
     const controller = new AbortController();
-    const timeout = setTimeout(function () { controller.abort(); }, 30000);
+    requests.add(controller);
+    const abort = function () { controller.abort(); };
+    if (options.signal) {
+      if (options.signal.aborted) controller.abort();
+      else options.signal.addEventListener("abort", abort, { once: true });
+    }
+    const timeout = setTimeout(function () { controller.abort(); release(); }, 30000);
+    function release() {
+      clearTimeout(timeout);
+      requests.delete(controller);
+      if (options.signal) options.signal.removeEventListener("abort", abort);
+    }
     let response;
     try {
       response = await fetch(CONFIG.url + path, {
         method: options.method || "GET", headers, body, signal: controller.signal,
         credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer"
       });
+      current();
     } catch (error) {
+      release();
+      if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+      if (options.signal && options.signal.aborted) throw new Error("La vista cambió.");
       throw new Error("No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo nuevamente; el Excel aún no se ha descargado.");
-    } finally { clearTimeout(timeout); }
+    }
     if (!response.ok) {
       let detail = {};
       try { detail = await response.json(); } catch (error) {}
+      finally { release(); }
+      current();
       const error = new Error("No se pudo completar la operación con Supabase.");
       error.status = response.status;
       error.code = detail.code || detail.error_code || detail.error;
@@ -254,10 +293,26 @@
       }
       throw error;
     }
-    if (options.raw) return response;
-    if (response.status === 204) return null;
-    try { return await response.json(); }
+    if (options.raw) {
+      // Keep timeout and cancellation through the body, not just the headers.
+      for (const method of ["arrayBuffer", "json", "blob", "text"]) {
+        const read = response[method].bind(response);
+        response[method] = async function () {
+          try {
+            const value = await read();
+            try { current(); }
+            catch (error) { if (method === "arrayBuffer") new Uint8Array(value).fill(0); throw error; }
+            return value;
+          }
+          finally { release(); }
+        };
+      }
+      return response;
+    }
+    if (response.status === 204) { release(); return null; }
+    try { const result = await response.json(); current(); return result; }
     catch (error) { throw new Error("Supabase devolvió una respuesta inválida. Inténtalo nuevamente."); }
+    finally { release(); }
   }
 
   function rpc(name, args) {
@@ -270,8 +325,10 @@
 
   async function login(rawUsername, password) {
     validateConfiguration();
+    const startingEpoch = generation;
     const normalized = window.AuditCrypto.normalizeUsername(rawUsername);
     const userUnlock = await window.AuditCrypto.unlockUser(normalized, password, CONFIG.workspace);
+    if (startingEpoch !== generation) throw new Error("La sesión cambió. Inténtalo nuevamente.");
     const result = await request("/auth/v1/token?grant_type=password", {
       method: "POST", anonymous: true,
       body: { email: normalized + "@" + ALIAS_DOMAIN, password: userUnlock.authPassword }
@@ -283,31 +340,39 @@
     const epoch = ++generation;
     try {
       const membership = await request(ownQuery("mega_audit_members", "role"));
+      assertAccount(epoch);
       if (!Array.isArray(membership) || membership.length !== 1 || !["admin", "user"].includes(membership[0].role)) {
         throw new Error("Tu cuenta está creada, pero aún no tiene acceso al historial. El administrador debe autorizarla; para la primera cuenta, sigue la guía de Supabase.");
       }
       member = membership[0];
       const workspaces = await request("/rest/v1/mega_audit_workspace?id=eq." + CONFIG.workspace + "&select=key_fingerprint");
+      assertAccount(epoch);
       if (!Array.isArray(workspaces) || workspaces.length !== 1) throw new Error("No se encontró la auditoría configurada. Revisa la guía de Supabase.");
       let fingerprint = workspaces[0].key_fingerprint;
       if (!fingerprint) {
         if (member.role !== "admin") throw new Error("El administrador debe iniciar sesión una vez para preparar el cifrado del historial.");
         const key = window.AuditCrypto.createRecoveryKey();
         const unlocked = await window.AuditCrypto.unlock(key, CONFIG.workspace);
+        assertAccount(epoch, true);
         const wrapped = await userUnlock.wrapRecoveryKey(key);
+        assertAccount(epoch, true);
         await rpc("mega_audit_initialize_key", {
           p_workspace_id: CONFIG.workspace, p_key_fingerprint: unlocked.fingerprint, p_wrapped_key: base64(wrapped)
         });
+        assertAccount(epoch, true);
         fingerprint = unlocked.fingerprint;
       }
       const keys = await request(ownQuery("mega_audit_user_keys", "wrapped_key"));
+      assertAccount(epoch);
       if (!Array.isArray(keys) || keys.length !== 1) {
         throw new Error("Tu cuenta todavía no tiene la clave cifrada del historial. Solicita al administrador que complete tu acceso.");
       }
       let key;
       try { key = await userUnlock.unwrapRecoveryKey(unbase64(keys[0].wrapped_key)); }
       catch (error) { throw new Error("No se pudo desbloquear la clave cifrada de tu cuenta. Solicita ayuda al administrador; el historial se conserva."); }
+      assertAccount(epoch);
       const unlocked = await window.AuditCrypto.unlock(key, CONFIG.workspace);
+      assertAccount(epoch);
       if (unlocked.fingerprint !== fingerprint) throw new Error("La clave de esta cuenta no coincide con la auditoría. Solicita ayuda al administrador.");
       if (epoch !== generation || !session) throw new Error("La sesión cambió. Inténtalo nuevamente.");
       master = unlocked;
@@ -321,10 +386,16 @@
     }
   }
 
-  async function signup(rawUsername, password) {
+  async function signup(rawUsername, password, viewGuard) {
     validateConfiguration();
+    const epoch = generation;
+    const guard = function () {
+      if (epoch !== generation) throw new Error("La sesión cambió. Inténtalo nuevamente.");
+      if (viewGuard) viewGuard();
+    };
     const normalized = window.AuditCrypto.normalizeUsername(rawUsername);
     const unlock = await window.AuditCrypto.unlockUser(normalized, password, CONFIG.workspace);
+    guard();
     // Supabase exposes these settings without an authenticated session. Check
     // them before deriving/sending the signup request so an installation error
     // is actionable instead of appearing as a generic provider failure.
@@ -336,6 +407,7 @@
       // still returns a specific provider error, so preserve compatibility.
       if (error.status !== 404) throw error;
     }
+    guard();
     if (settings && settings.external && settings.external.email === false) {
       throw new Error("Supabase tiene desactivado el proveedor Email. Actívalo en Authentication → Sign In / Providers → Email.");
     }
@@ -349,6 +421,7 @@
       method: "POST", anonymous: true,
       body: { email: normalized + "@" + ALIAS_DOMAIN, password: unlock.authPassword }
     });
+    guard();
     if (result && result.user && !result.access_token) {
       throw new Error("Supabase creó la cuenta, pero exige confirmar un correo. Desactiva «Confirm email» en Authentication y después inicia sesión con el usuario y la contraseña que acabas de crear.");
     }
@@ -357,21 +430,26 @@
     return { username: normalized, unlock, userId: verified.user.id };
   }
 
-  async function createMember(rawUsername, password, role) {
+  async function createMember(rawUsername, password, role, viewGuard) {
     if (!status().authenticated || member.role !== "admin") throw new Error("Inicia sesión como administrador para crear usuarios.");
     const epoch = generation;
+    const guard = function () { assertAccount(epoch, true); if (viewGuard) viewGuard(); };
+    await requireAdmin(epoch);
+    guard();
     let created;
-    try { created = await signup(rawUsername, password); }
+    try { created = await signup(rawUsername, password, guard); }
     catch (error) {
       if (!["user_already_exists", "email_exists"].includes(error.code)) throw error;
       const normalized = window.AuditCrypto.normalizeUsername(rawUsername);
       created = { username: normalized, unlock: await window.AuditCrypto.unlockUser(normalized, password, CONFIG.workspace) };
     }
+    guard();
     // Verifica la contraseña del usuario sin reemplazar la sesión administradora.
     const targetResult = await request("/auth/v1/token?grant_type=password", {
       method: "POST", anonymous: true,
       body: { email: created.username + "@" + ALIAS_DOMAIN, password: created.unlock.authPassword }
     });
+    guard();
     const target = acceptSession(targetResult);
     if (target.user.email !== created.username + "@" + ALIAS_DOMAIN ||
         (created.userId && target.user.id !== created.userId)) {
@@ -388,13 +466,16 @@
         authPassword: created.unlock.authPassword, role: roleValue, userId: target.user.id,
         wrapped: base64(await created.unlock.wrapRecoveryKey(recoveryKey))
       };
+      guard();
       pendingMembers.set(created.username, previous);
     }
-    if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+    await requireAdmin(epoch);
+    guard();
     const added = await rpc("mega_audit_add_member", {
       p_workspace_id: CONFIG.workspace, p_username: created.username,
       p_wrapped_key: previous.wrapped, p_role: roleValue
     });
+    guard();
     if (!added || added.user_id !== target.user.id || added.username !== created.username || added.role !== roleValue) {
       throw new Error("No se pudo confirmar el acceso del usuario. Repite el intento con la misma contraseña y permisos.");
     }
@@ -425,6 +506,7 @@
     let metadata;
     try { metadata = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(clear)); }
     catch (error) { throw new Error("No se pudo leer la información de una salida cifrada."); }
+    finally { clear.fill(0); }
     if (!metadata || !/^\d{1,60}$/.test(String(metadata.salida_numero)) || !Number.isInteger(metadata.row_count) ||
         metadata.row_count < 0 || !Number.isFinite(metadata.total_units) || metadata.total_units < 0 ||
         typeof metadata.username !== "string" || typeof metadata.pdf_name !== "string" || typeof metadata.excel_name !== "string") {
@@ -433,15 +515,23 @@
     return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id });
   }
 
-  async function getDocument(record, kind, key) {
+  async function getDocument(record, kind, key, guard, signal) {
     if (!["pdf", "excel"].includes(kind)) throw new Error("Documento no válido.");
-    const response = await request("/storage/v1/object/authenticated/" + BUCKET + "/" + recordPath(record, kind), { raw: true });
+    const response = await request("/storage/v1/object/authenticated/" + BUCKET + "/" + recordPath(record, kind), { raw: true, signal });
+    if (guard) guard();
     const length = Number(response.headers.get("Content-Length"));
     if (length > FILE_LIMIT + 64) throw new Error("El documento guardado excede el tamaño permitido.");
     const encrypted = new Uint8Array(await response.arrayBuffer());
+    if (guard) guard();
     if (encrypted.length > FILE_LIMIT + 64) throw new Error("El documento guardado excede el tamaño permitido.");
-    try { return await (key || master).decrypt(encrypted, record.id + "|" + kind); }
+    let clear;
+    try {
+      clear = await (key || master).decrypt(encrypted, record.id + "|" + kind);
+      if (guard) guard();
+      return clear;
+    }
     catch (error) { throw new Error("No se pudo verificar ni descifrar este documento. Solicita al administrador que revise el archivo guardado."); }
+    finally { encrypted.fill(0); if (clear && guard) { try { guard(); } catch (_) { clear.fill(0); } } }
   }
 
   function equalBytes(left, right) {
@@ -451,18 +541,24 @@
     return difference === 0;
   }
 
-  async function putDocument(path, ciphertext) {
+  async function putDocument(path, ciphertext, guard) {
     try {
       await request("/storage/v1/object/" + BUCKET + "/" + path, { method: "POST", binary: true, body: ciphertext });
+      guard();
     } catch (error) {
+      guard();
       if (error.status !== 409 && error.code !== "Duplicate" && error.code !== "ResourceAlreadyExists") throw error;
       const response = await request("/storage/v1/object/authenticated/" + BUCKET + "/" + path, { raw: true });
+      guard();
       const existing = new Uint8Array(await response.arrayBuffer());
-      if (!equalBytes(existing, ciphertext)) throw new Error("Ya existe otro documento para este intento. No se ha sobrescrito; vuelve a cargar el PDF para generar una salida nueva.");
+      try {
+        guard();
+        if (!equalBytes(existing, ciphertext)) throw new Error("Ya existe otro documento para este intento. No se ha sobrescrito; vuelve a cargar el PDF para generar una salida nueva.");
+      } finally { existing.fill(0); }
     }
   }
 
-  async function prepareRecord(options, id, key, owner) {
+  async function prepareRecord(options, id, key, owner, guard) {
     const number = String(options.salidaNumero);
     if (!/^\d{1,60}$/.test(number)) throw new Error("Ingresa un número de salida válido antes de descargar.");
     if (!options.pdfFile || typeof options.pdfFile.arrayBuffer !== "function") throw new Error("Vuelve a cargar el PDF original antes de descargar.");
@@ -472,19 +568,38 @@
       throw new Error("Las cantidades de esta salida no son válidas.");
     }
     const pdf = new Uint8Array(await options.pdfFile.arrayBuffer());
+    let payload;
+    let encrypted;
+    let retained = false;
+    try {
+    guard();
     if (pdf.length > FILE_LIMIT) throw new Error("La auditoría admite hasta 25 MB por documento.");
     const metadata = {
-      salida_numero: number, pdf_name: String(options.pdfFile.name || "Documento.pdf"), excel_name: "Salida " + number + ".xlsx",
+      salida_numero: number, pdf_name: String(options.pdfFile.name || "Documento.pdf"), excel_name: String(options.excelName || "Salida " + number + ".xlsx"),
       row_count: options.rowCount, total_units: options.totalUnits, username, user_display_name: username
     };
-    const payload = new TextEncoder().encode(JSON.stringify(metadata));
-    const encrypted = await Promise.all([
+    payload = new TextEncoder().encode(JSON.stringify(metadata));
+    const outcomes = await Promise.allSettled([
       key.encrypt(payload, id + "|metadata"), key.encrypt(pdf, id + "|pdf"), key.encrypt(excel, id + "|excel"), key.blindIndex(number)
     ]);
+    encrypted = outcomes.map(function (outcome) { return outcome.status === "fulfilled" ? outcome.value : null; });
+    guard();
+    const failed = outcomes.find(function (outcome) { return outcome.status === "rejected"; });
+    if (failed) throw failed.reason;
+    retained = true;
     return { id, owner, metadata, pdf, excel: new Uint8Array(excel), encryptedMetadata: base64(encrypted[0]), encryptedPdf: encrypted[1], encryptedExcel: encrypted[2], tag: encrypted[3] };
+    } finally {
+      if (payload) payload.fill(0);
+      if (encrypted && encrypted[0]) encrypted[0].fill(0);
+      if (!retained) {
+        pdf.fill(0);
+        if (encrypted) for (const value of encrypted) if (value && typeof value.fill === "function") value.fill(0);
+      }
+    }
   }
 
   async function record(options) {
+    const viewGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
     const account = await ready();
     if (!account.authenticated) {
       const input = document.getElementById("audit-cloud-login-username");
@@ -496,50 +611,110 @@
     const epoch = generation;
     const key = master;
     const owner = session.user.id;
+    const guard = function () {
+      assertAccount(epoch);
+      if (!master || key !== master || account.generation !== epoch ||
+          (window.TrazaUI && window.TrazaUI.generation !== viewGeneration)) {
+        throw new Error("La sesión o la sección cambió. Vuelve a guardar desde Nueva salida.");
+      }
+    };
     let snapshot = pending.get(id);
+    try {
+    guard();
     if (!snapshot) {
-      pending.clear();
-      snapshot = await prepareRecord(options, id, key, owner);
-      if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+      clearPending();
+      snapshot = await prepareRecord(options, id, key, owner, guard);
+      guard();
       pending.set(id, snapshot);
     } else if (snapshot.owner !== owner || snapshot.metadata.salida_numero !== String(options.salidaNumero)) {
       throw new Error("Este intento corresponde a otra cuenta o salida. Vuelve a cargar el PDF.");
+    } else {
+      snapshot.pdf = new Uint8Array(await options.pdfFile.arrayBuffer());
+      guard();
+      snapshot.excel = new Uint8Array(bytes(options.excelBytes));
     }
     const previous = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&id=eq." + id + "&select=*");
+    guard();
     if (!Array.isArray(previous)) throw new Error("Supabase devolvió un registro inválido.");
     let saved;
     if (previous.length) {
       if (previous.length !== 1 || previous[0].created_by !== owner) throw new Error("Este identificador ya pertenece a otro registro. Vuelve a cargar el PDF.");
       saved = await decryptedRecord(previous[0], key);
+      guard();
       for (const name of ["salida_numero", "pdf_name", "excel_name", "row_count", "total_units", "username"]) {
         if (saved[name] !== snapshot.metadata[name]) throw new Error("Este intento ya contiene otra salida. No se ha sobrescrito.");
       }
-      const documents = await Promise.all([getDocument(previous[0], "pdf", key), getDocument(previous[0], "excel", key)]);
-      if (!equalBytes(documents[0], snapshot.pdf) || !equalBytes(documents[1], snapshot.excel)) {
-        throw new Error("Los documentos de este intento ya son distintos. No se han sobrescrito.");
-      }
+      const outcomes = await Promise.allSettled([getDocument(previous[0], "pdf", key, guard), getDocument(previous[0], "excel", key, guard)]);
+      try {
+        guard();
+        const failed = outcomes.find(function (outcome) { return outcome.status === "rejected"; });
+        if (failed) throw failed.reason;
+        if (!equalBytes(outcomes[0].value, snapshot.pdf) || !equalBytes(outcomes[1].value, snapshot.excel)) {
+          throw new Error("Los documentos de este intento ya son distintos. No se han sobrescrito.");
+        }
+      } finally { for (const outcome of outcomes) if (outcome.status === "fulfilled") outcome.value.fill(0); }
     } else {
       const row = { id, created_by: owner };
-      await putDocument(recordPath(row, "pdf"), snapshot.encryptedPdf);
-      if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
-      await putDocument(recordPath(row, "excel"), snapshot.encryptedExcel);
-      if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+      await putDocument(recordPath(row, "pdf"), snapshot.encryptedPdf, guard);
+      guard();
+      await putDocument(recordPath(row, "excel"), snapshot.encryptedExcel, guard);
+      guard();
       let result = await rpc("mega_audit_record", {
         p_id: id, p_workspace_id: CONFIG.workspace, p_salida_tag: snapshot.tag,
         p_encrypted_metadata: snapshot.encryptedMetadata, p_idempotency_key: id
       });
+      guard();
       if (Array.isArray(result) && result.length === 1) result = result[0];
       if (!result || result.id !== id || result.created_by !== owner || result.encrypted_metadata !== snapshot.encryptedMetadata) {
         throw new Error("No se pudo confirmar esta salida. Reintenta la descarga; no se creará un duplicado.");
       }
       saved = await decryptedRecord(result, key);
     }
-    if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
+    guard();
     saved.username = username;
     saved.user_display_name = username;
-    pending.delete(id);
+    clearPending();
     window.dispatchEvent(new CustomEvent("audit:recorded", { detail: saved }));
     return saved;
+    } finally {
+      // Retain encrypted upload bytes for safe retries; keep clear copies only
+      // while comparing the operation's documents.
+      if (snapshot) {
+        if (snapshot.pdf) snapshot.pdf.fill(0);
+        if (snapshot.excel) snapshot.excel.fill(0);
+        snapshot.pdf = snapshot.excel = null;
+      }
+    }
+  }
+
+  function clearPending() {
+    for (const snapshot of pending.values()) {
+      for (const name of ["pdf", "excel", "encryptedPdf", "encryptedExcel"]) {
+        if (snapshot[name] && typeof snapshot[name].fill === "function") snapshot[name].fill(0);
+      }
+    }
+    pending.clear();
+  }
+
+  function assertAccount(epoch, admin) {
+    if (epoch !== generation || !session || (admin && (!member || member.role !== "admin"))) {
+      throw new Error(admin ? "La sesión o los permisos cambiaron. Inicia sesión como administrador." : "La sesión cambió. Inicia sesión nuevamente.");
+    }
+  }
+
+  async function requireAdmin(epoch) {
+    assertAccount(epoch, true);
+    if (!master || !recoveryKey) throw new Error("Inicia sesión como administrador para continuar.");
+    const memberships = await request(ownQuery("mega_audit_members", "role"));
+    assertAccount(epoch, true);
+    if (!Array.isArray(memberships) || memberships.length !== 1 || memberships[0].role !== "admin") {
+      if (Array.isArray(memberships) && memberships.length === 1 && memberships[0].role === "user") {
+        member = memberships[0];
+        for (const dialog of openDialogs) dialog.close();
+        renderAccountBar();
+      } else clearSession();
+      throw new Error("Tu cuenta ya no tiene permisos de administración.");
+    }
   }
 
   function saveBlob(data, name, mime) {
@@ -550,143 +725,214 @@
     document.body.append(link);
     link.click();
     link.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+    const timer = setTimeout(function () { URL.revokeObjectURL(url); blobUrls.delete(url); }, 30000);
+    blobUrls.set(url, timer);
+  }
+
+  function picker(name, kind) {
+    if (typeof window.showSaveFilePicker !== "function") return null;
+    const types = kind === "pdf" ? [{ description: "Documento PDF", accept: { "application/pdf": [".pdf"] } }] :
+      kind === "excel" ? [{ description: "Libro de Excel", accept: { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"] } }] :
+      [{ description: "Archivo privado de recuperación", accept: { "text/plain": [".txt"] } }];
+    // Called synchronously from the original click, before any await.
+    try { return window.showSaveFilePicker({ suggestedName: name, types }); }
+    catch (error) { return Promise.reject(error); }
+  }
+
+  async function writeDownload(clear, handle, name, mime, guard) {
+    guard();
+    if (!handle) { saveBlob(clear, name, mime); return "Se inició la descarga. Se usará la configuración de descargas del navegador."; }
+    let stream;
+    try {
+      stream = await handle.createWritable();
+      guard();
+      await stream.write(new Blob([clear], { type: mime }));
+      guard();
+      await stream.close();
+      guard();
+      return "Archivo guardado en la carpeta elegida.";
+    } catch (error) {
+      if (stream) { try { await stream.abort(); } catch (_) {} }
+      throw error;
+    }
+  }
+
+  function navigateArchive(focusLogin) {
+    if (window.TrazaUI) window.TrazaUI.navigate("archive");
+    else location.hash = "archivo";
+    if (focusLogin) requestAnimationFrame(function () {
+      const input = document.getElementById("audit-cloud-login-username");
+      if (input) input.focus();
+    });
+  }
+
+  function createDialog(title, opener) {
+    const dialog = node("dialog", undefined, "traza-dialog");
+    const header = node("div", undefined, "traza-dialog-header");
+    const heading = node("h2", title);
+    heading.id = "traza-dialog-title";
+    dialog.setAttribute("aria-labelledby", heading.id);
+    const close = button("Cerrar", true);
+    close.setAttribute("aria-label", "Cerrar " + title);
+    close.addEventListener("click", function () { dialog.close(); });
+    header.append(heading, close);
+    dialog.append(header);
+    const content = node("div", undefined, "traza-dialog-body");
+    dialog.append(content);
+    document.body.append(dialog);
+    openDialogs.add(dialog);
+    dialog.addEventListener("close", function () {
+      openDialogs.delete(dialog);
+      dialog.replaceChildren();
+      dialog.remove();
+      if (opener && opener.isConnected && !opener.closest("[hidden], [inert]")) opener.focus();
+      else {
+        const profile = document.querySelector("#app-profile button");
+        if (profile) profile.focus();
+      }
+    }, { once: true });
+    dialog.showModal();
+    return { dialog, content };
   }
 
   function renderAccountBar() {
+    if (profileCleanup) profileCleanup();
+    const profile = document.getElementById("app-profile");
     const bar = document.getElementById("audit-bar");
-    if (!bar) return;
-    const panel = node("section", undefined, "audit-panel audit-cloud-panel");
-    if (status().authenticated) {
-      const account = node("div", undefined, "audit-account");
-      const text = node("div");
-      text.append(node("strong", "@" + username + (member.role === "admin" ? " · Administrador" : ""), "audit-account-name"));
-      text.append(node("span", "Auditoría compartida · los documentos se cifran en este navegador antes de subirse.", "audit-muted"));
-      const actions = node("div", undefined, "audit-actions");
-      if (!document.body.classList.contains("audit-document")) {
-        // El historial compartido forma parte de la pestaña Auditoría y queda
-        // visible automáticamente al iniciar sesión. Solo se oculta mediante
-        // el selector de pestañas, no con un botón adicional del perfil.
-        let page = document.getElementById("audit-page");
-        if (!page) {
-          page = node("div");
-          page.id = "audit-page";
-          bar.after(page);
-        }
-        page.hidden = false;
-      }
-      let adminToggle = null;
-      if (member.role === "admin") {
-        adminToggle = button("Administrar usuarios", true);
-        adminToggle.setAttribute("aria-expanded", "false");
-        adminToggle.setAttribute("aria-controls", "audit-admin-panel");
-        actions.append(adminToggle);
-      }
-      const logout = button("Cerrar sesión", true);
-      logout.addEventListener("click", async function () {
-        logout.disabled = true;
-        try { await request("/auth/v1/logout", { method: "POST", body: {} }); }
-        catch (error) { /* Las claves y la sesión local se eliminan incluso sin conexión. */ }
-        finally { clearSession(); }
-      });
-      actions.append(logout);
-      account.append(text, actions);
-      panel.append(account);
-      if (member.role === "admin") {
-        const note = node("div", undefined, "audit-cloud-recovery");
-        note.append(node("span", "Guarda una copia privada de la clave de recuperación fuera de la nube. Permite descifrar todo el historial.", "audit-muted"));
-        const download = button("Guardar clave de recuperación", true);
-        download.addEventListener("click", function () {
-          if (!status().authenticated || member.role !== "admin" || !recoveryKey) return;
-          saveBlob("CLAVE PRIVADA DE RECUPERACIÓN — AUDITORÍA\nNo la compartas ni la subas a GitHub o Supabase. Permite descifrar el historial completo.\n\nAuditoría: " + CONFIG.workspace + "\n\n" + recoveryKey + "\n", "Clave de recuperación auditoría.txt", "text/plain;charset=utf-8");
+    if (bar) bar.replaceChildren();
+    if (profile) {
+      profile.replaceChildren();
+      if (!status().authenticated) {
+        const signIn = button("Iniciar sesión");
+        signIn.addEventListener("click", function () { navigateArchive(true); });
+        profile.append(signIn);
+      } else {
+        const trigger = button("", true);
+        trigger.className = "traza-profile-trigger";
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.setAttribute("aria-controls", "traza-profile-menu");
+        trigger.setAttribute("aria-label", "Perfil de @" + username);
+        const initials = username.split(/[._-]+/).map(function (part) { return part[0]; }).join("").slice(0, 2).toUpperCase();
+        const avatar = node("span", initials, "traza-profile-avatar");
+        avatar.setAttribute("aria-hidden", "true");
+        const identity = node("span", undefined, "traza-profile-name");
+        identity.append(node("strong", "@" + username), node("span", member.role === "admin" ? "Administrador" : "Usuario", "traza-profile-role"));
+        trigger.append(avatar, identity, node("span", "⌄"));
+        const menu = node("div", undefined, "traza-profile-menu");
+        menu.id = "traza-profile-menu";
+        menu.hidden = true;
+        const controller = new AbortController();
+        profileCleanup = function () { controller.abort(); profileCleanup = null; };
+        function closeMenu(restore) { menu.hidden = true; trigger.setAttribute("aria-expanded", "false"); if (restore) trigger.focus(); }
+        trigger.addEventListener("click", function () {
+          const open = menu.hidden;
+          menu.hidden = !open;
+          trigger.setAttribute("aria-expanded", String(open));
+          if (open) menu.querySelector("button").focus();
         });
-        note.append(download);
-        panel.append(note);
-        const adminDetails = renderUserManagement(panel);
-        adminDetails.id = "audit-admin-panel";
-        adminDetails.hidden = true;
-        adminToggle.addEventListener("click", function () {
-          const open = adminDetails.hidden;
-          adminDetails.hidden = !open;
-          adminDetails.open = open;
-          adminToggle.setAttribute("aria-expanded", open ? "true" : "false");
-          adminToggle.textContent = open ? "Ocultar usuarios" : "Administrar usuarios";
-          if (open) adminDetails.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        document.addEventListener("click", function (event) { if (!profile.contains(event.target)) closeMenu(false); }, { signal: controller.signal });
+        document.addEventListener("keydown", function (event) {
+          if (menu.hidden) return;
+          if (event.key === "Escape") { event.preventDefault(); closeMenu(true); }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            const choices = Array.from(menu.querySelectorAll("button"));
+            const index = choices.indexOf(document.activeElement);
+            choices[(index + (event.key === "ArrowDown" ? 1 : -1) + choices.length) % choices.length].focus();
+          }
+        }, { signal: controller.signal });
+        if (member.role === "admin") {
+          const users = button("Usuarios y permisos", true);
+          const security = button("Seguridad", true);
+          users.addEventListener("click", function () { closeMenu(false); openUsersDialog(users); });
+          security.addEventListener("click", function () { closeMenu(false); openSecurityDialog(security); });
+          menu.append(users, security);
+        }
+        const logout = button("Cerrar sesión", true);
+        logout.addEventListener("click", function () {
+          // Remove local secrets and documents immediately, even if Auth stalls.
+          const token = session && session.access_token;
+          clearSession();
+          if (!token) return;
+          const controller = new AbortController();
+          const timer = setTimeout(function () { controller.abort(); }, 4000);
+          fetch(CONFIG.url + "/auth/v1/logout?scope=local", {
+            method: "POST", headers: { apikey: CONFIG.key, Authorization: "Bearer " + token, "Content-Type": "application/json" },
+            body: "{}", signal: controller.signal, credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer"
+          }).catch(function () {}).finally(function () { clearTimeout(timer); });
         });
+        menu.append(logout);
+        profile.append(trigger, menu);
       }
-    } else {
-      panel.append(node("h2", "Inicia sesión en la auditoría"));
-      panel.append(node("p", "Acceso con usuario y contraseña. No necesitas correo. Al recargar la página, inicia sesión otra vez para desbloquear tus documentos.", "audit-muted"));
-      const form = node("form", undefined, "audit-form audit-cloud-form");
-      const name = field(form, "Usuario", "login-username", "text", { minLength: 3 });
-      const password = field(form, "Contraseña", "login-password", "password");
-      const submit = button("Iniciar sesión");
-      submit.type = "submit";
-      form.append(submit);
-      passwordToggle(form, [password]);
-      const result = node("div");
-      form.addEventListener("submit", async function (event) {
-        event.preventDefault();
-        if (busyLogin) return;
-        busyLogin = true;
-        submit.disabled = true;
-        feedback(result, "Comprobando acceso y desbloqueando el historial…", false);
-        try { await login(name.value, password.value); }
-        catch (error) {
-          feedback(result, errorText(error), true);
-          // clearSession reconstruye el formulario; conserva el aviso en el formulario visible.
-          const visible = document.querySelector("#audit-bar .audit-cloud-login-feedback");
-          if (visible && visible !== result) feedback(visible, errorText(error), true);
-          const visibleName = document.getElementById("audit-cloud-login-username");
-          if (visibleName && visibleName !== name) visibleName.value = name.value;
-        } finally {
-          password.value = "";
-          busyLogin = false;
-          submit.disabled = false;
-        }
-      });
-      result.className = "audit-cloud-login-feedback";
-      panel.append(form, result);
-      const signupDetails = node("details", undefined, "audit-cloud-signup");
-      signupDetails.append(node("summary", "Crear mi cuenta"));
-      const createForm = node("form", undefined, "audit-form audit-cloud-form");
-      const newUsername = field(createForm, "Usuario nuevo", "signup-username", "text", { minLength: 3, autocomplete: "off" });
-      const newPassword = field(createForm, "Contraseña nueva", "signup-password", "password", { minLength: 12, autocomplete: "new-password" });
-      const repeatPassword = field(createForm, "Repite la contraseña", "signup-repeat", "password", { minLength: 12, autocomplete: "new-password" });
-      const create = button("Crear cuenta");
-      create.type = "submit";
-      createForm.append(create);
-      passwordToggle(createForm, [newPassword, repeatPassword]);
-      const createFeedback = node("div");
-      createForm.addEventListener("submit", async function (event) {
-        event.preventDefault();
-        if (newPassword.value !== repeatPassword.value) {
-          feedback(createFeedback, "Las contraseñas no coinciden. Usa «Mostrar contraseña» para revisarlas.", true);
-          return;
-        }
-        create.disabled = true;
-        feedback(createFeedback, "Creando la cuenta…", false);
-        try {
-          const created = await signup(newUsername.value, newPassword.value);
-          name.value = created.username;
-          createForm.reset();
-          feedback(createFeedback, "Cuenta @" + created.username + " creada. El administrador debe darle acceso al historial. Si es la primera cuenta, sigue el paso «Administrador inicial» de la guía de Supabase.", false);
-          const setup = node("a", "Configurar la primera cuenta administradora", "audit-cloud-setup-link");
-          setup.href = "supabase-setup.html?user=" + encodeURIComponent(created.userId) + "&username=" + encodeURIComponent(created.username);
-          createFeedback.append(setup, node("p", "Este paso requiere acceso al panel del proyecto Supabase y solo corresponde al propietario que realiza la instalación inicial.", "audit-muted"));
-        } catch (error) { feedback(createFeedback, errorText(error), true); }
-        finally { create.disabled = false; }
-      });
-      signupDetails.append(node("p", "Usa de 3 a 32 caracteres: letras sin acentos, números, punto, guion o guion bajo. La contraseña debe tener al menos 12 caracteres.", "audit-muted"), createForm, createFeedback);
-      panel.append(signupDetails);
     }
-    bar.replaceChildren(panel);
+    if (!status().authenticated && bar) renderLoginForm(bar);
     const privacy = document.querySelector(".privacy-note");
     if (privacy) {
       const dot = node("span", undefined, "privacy-dot");
       dot.setAttribute("aria-hidden", "true");
-      privacy.replaceChildren(dot, document.createTextNode("Conversión local · auditoría cifrada en Supabase"));
+      privacy.replaceChildren(dot, document.createTextNode("Conversión local · documentos protegidos"));
     }
+  }
+
+  function renderLoginForm(bar) {
+    const panel = node("section", undefined, "audit-panel audit-cloud-panel");
+    panel.append(node("h2", "Iniciar sesión"), node("p", "Accede con tu usuario y contraseña para consultar y guardar salidas.", "audit-muted"));
+    const form = node("form", undefined, "audit-form audit-cloud-form");
+    const name = field(form, "Usuario", "login-username", "text", { minLength: 3 });
+    const password = field(form, "Contraseña", "login-password", "password");
+    const submit = button("Iniciar sesión");
+    submit.type = "submit";
+    form.append(submit);
+    passwordToggle(form, [password]);
+    const result = node("div", undefined, "audit-cloud-login-feedback");
+    form.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (busyLogin) return;
+      busyLogin = true;
+      submit.disabled = true;
+      feedback(result, "Comprobando acceso…", false);
+      const attemptedName = name.value;
+      try { await login(attemptedName, password.value); }
+      catch (error) {
+        const visible = document.querySelector("#audit-bar .audit-cloud-login-feedback");
+        if (visible) feedback(visible, errorText(error), true);
+        const visibleName = document.getElementById("audit-cloud-login-username");
+        if (visibleName) visibleName.value = attemptedName;
+      } finally { password.value = ""; busyLogin = false; submit.disabled = false; }
+    });
+    panel.append(form, result);
+    const details = node("details", undefined, "audit-cloud-signup");
+    details.append(node("summary", "Crear mi cuenta"));
+    const createForm = node("form", undefined, "audit-form audit-cloud-form");
+    const newName = field(createForm, "Usuario nuevo", "signup-username", "text", { minLength: 3, autocomplete: "off" });
+    const newPassword = field(createForm, "Contraseña nueva", "signup-password", "password", { minLength: 12, autocomplete: "new-password" });
+    const repeat = field(createForm, "Repite la contraseña", "signup-repeat", "password", { minLength: 12, autocomplete: "new-password" });
+    const create = button("Crear cuenta");
+    create.type = "submit";
+    createForm.append(create);
+    passwordToggle(createForm, [newPassword, repeat]);
+    const createFeedback = node("div");
+    createForm.addEventListener("submit", async function (event) {
+      event.preventDefault();
+      if (newPassword.value !== repeat.value) { feedback(createFeedback, "Las contraseñas no coinciden.", true); return; }
+      const epoch = generation;
+      create.disabled = true;
+      feedback(createFeedback, "Creando cuenta…", false);
+      try {
+        const created = await signup(newName.value, newPassword.value);
+        if (epoch !== generation || !createForm.isConnected) return;
+        name.value = created.username;
+        createForm.reset();
+        feedback(createFeedback, "Cuenta @" + created.username + " creada. El administrador debe autorizar su acceso.", false);
+        const setup = node("a", "Configurar la primera cuenta administradora", "audit-cloud-setup-link");
+        setup.href = "supabase-setup.html?user=" + encodeURIComponent(created.userId) + "&username=" + encodeURIComponent(created.username);
+        createFeedback.append(setup);
+      } catch (error) { if (epoch === generation && createForm.isConnected) feedback(createFeedback, errorText(error), true); }
+      finally { newPassword.value = repeat.value = ""; create.disabled = false; }
+    });
+    details.append(node("p", "Usuario de 3 a 32 caracteres. Contraseña de al menos 12 caracteres.", "audit-muted"), createForm, createFeedback);
+    panel.append(details);
+    bar.append(panel);
   }
 
   function formatWhen(value) {
@@ -701,206 +947,446 @@
     };
   }
 
-  function documentButton(record, kind, label, result) {
+  function validDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const date = new Date(value + "T00:00:00.000Z");
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  }
+
+  function panamaToday() {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en", {
+      timeZone: "America/Panama", year: "numeric", month: "2-digit", day: "2-digit"
+    }).formatToParts(new Date()).map(function (part) { return [part.type, part.value]; }));
+    return parts.year + "-" + parts.month + "-" + parts.day;
+  }
+
+  function disposeDetail(view, restore) {
+    if (!view || !view.detail) return;
+    const detail = view.detail;
+    view.detail = null;
+    detail.controller.abort();
+    if (detail.renderTask) { try { detail.renderTask.cancel(); } catch (_) {} }
+    if (detail.loadingTask) { try { Promise.resolve(detail.loadingTask.destroy()).catch(function () {}); } catch (_) {} }
+    if (detail.pdf) { try { Promise.resolve(detail.pdf.destroy()).catch(function () {}); } catch (_) {} }
+    for (const clear of detail.buffers) { try { clear.fill(0); } catch (_) {} }
+    detail.buffers.clear();
+    detail.panel.replaceChildren();
+    detail.panel.remove();
+    view.layout.classList.remove("has-detail");
+    if (restore && detail.opener.isConnected) detail.opener.focus();
+  }
+
+  function disposeArchive() {
+    if (!archiveView) return;
+    disposeDetail(archiveView, false);
+    for (const clear of archiveView.buffers) { try { clear.fill(0); } catch (_) {} }
+    archiveView.buffers.clear();
+    archiveView.controller.abort();
+    archiveView.disposed = true;
+    archiveView = null;
+  }
+
+  function assertView(view, load) {
+    assertAccount(view.epoch);
+    if (view.disposed || archiveView !== view || view.pageEpoch !== pageGeneration ||
+        view.page.hidden || view.page.closest("[hidden]") || (load !== undefined && load !== view.load)) {
+      throw new Error("La vista cambió.");
+    }
+  }
+
+  function documentButton(record, kind, label, result, view, detail) {
     const download = button(label, true);
     download.classList.add("audit-button-small");
     download.addEventListener("click", async function () {
-      download.disabled = true;
-      result.replaceChildren();
       const epoch = generation;
       const key = master;
+      const name = kind === "pdf" ? record.pdf_name : record.excel_name;
+      const selected = detail || view.detail;
+      const load = view.load;
+      const guard = function () { assertView(view, load); if (view.detail !== selected) throw new Error("La vista cambió."); };
+      let destination;
+      let clear;
+      // No network, decryption or async session check precedes the picker.
+      const selection = picker(name, kind);
+      download.disabled = true;
+      result.replaceChildren();
+      if (!selection) feedback(result, "Se usará la configuración de descargas del navegador.", false);
       try {
-        if (!status().authenticated) throw new Error("Inicia sesión nuevamente para abrir los documentos.");
-        const clear = await getDocument(record, kind, key);
-        if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
-        saveBlob(clear, kind === "pdf" ? record.pdf_name : record.excel_name, kind === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      } catch (error) { feedback(result, errorText(error), true); }
-      finally { download.disabled = false; }
+        destination = selection ? await selection : null;
+        guard();
+        if (epoch !== generation || !status().authenticated) throw new Error("Inicia sesión nuevamente para abrir los documentos.");
+        clear = await getDocument(record, kind, key, guard, selected ? selected.controller.signal : view.loadController.signal);
+        guard();
+        view.buffers.add(clear);
+        if (selected) selected.buffers.add(clear);
+        const message = await writeDownload(clear, destination, name, kind === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", guard);
+        guard();
+        feedback(result, message, false);
+      } catch (error) {
+        if (epoch === generation && archiveView === view && load === view.load && view.detail === selected) {
+          if (error && error.name === "AbortError") feedback(result, "Guardado cancelado. No se recuperó el documento.", false);
+          else feedback(result, errorText(error), true);
+        }
+      } finally {
+        if (clear) clear.fill(0);
+        if (clear) view.buffers.delete(clear);
+        if (clear && selected) selected.buffers.delete(clear);
+        download.disabled = false;
+      }
     });
     return download;
+  }
+
+  function openDetail(view, record, officialName, opener) {
+    assertView(view);
+    disposeDetail(view, false);
+    const panel = node("aside", undefined, "traza-detail audit-panel");
+    panel.id = "traza-document-detail";
+    panel.setAttribute("aria-labelledby", "traza-document-title");
+    const detail = { panel, opener, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null };
+    view.detail = detail;
+    const guard = function () { assertView(view); if (view.detail !== detail || detail.controller.signal.aborted) throw new Error("La vista cambió."); };
+    const header = node("div", undefined, "traza-detail-header");
+    const title = node("h3", "Salida " + record.salida_numero);
+    title.id = "traza-document-title";
+    const close = button("Cerrar detalle", true);
+    close.addEventListener("click", function () { disposeDetail(view, true); });
+    header.append(title, close);
+    panel.append(header);
+    const when = formatWhen(record.created_at);
+    const facts = node("dl", undefined, "traza-detail-facts");
+    for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 })]]) {
+      facts.append(node("dt", pair[0]), node("dd", pair[1]));
+    }
+    panel.append(facts);
+    const result = node("div");
+    for (const kind of ["pdf", "excel"]) {
+      const file = node("div", undefined, "traza-document-name");
+      file.append(node("span", kind === "pdf" ? "PDF original" : "Libro de Excel", "audit-muted"), node("strong", kind === "pdf" ? record.pdf_name : record.excel_name, "traza-file-name"), documentButton(record, kind, kind === "pdf" ? "Guardar PDF" : "Guardar Excel", result, view, detail));
+      panel.append(file);
+    }
+    const preview = node("div", undefined, "traza-detail-preview");
+    const previewStatus = node("p", "Cargando la primera página del PDF…", "traza-preview-status");
+    previewStatus.setAttribute("role", "status");
+    const canvas = node("canvas");
+    canvas.setAttribute("aria-label", "Vista previa de la primera página del PDF");
+    canvas.dataset.testid = "pdf-preview";
+    preview.append(previewStatus, canvas);
+    panel.append(result, preview);
+    view.layout.append(panel);
+    view.layout.classList.add("has-detail");
+    close.focus({ preventScroll: true });
+    const epoch = generation;
+    const key = master;
+    (async function () {
+      let clear;
+      try {
+        clear = await getDocument(record, "pdf", key, guard, detail.controller.signal);
+        guard();
+        detail.buffers.add(clear);
+        if (!window.pdfjsLib) throw new Error("No se pudo cargar el visor local de PDF.");
+        if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) window.pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+        detail.loadingTask = window.pdfjsLib.getDocument({ data: clear.slice(), isEvalSupported: false });
+        detail.pdf = await detail.loadingTask.promise;
+        guard();
+        const page = await detail.pdf.getPage(1);
+        guard();
+        const raw = page.getViewport({ scale: 1 });
+        const width = Math.max(220, Math.min(650, preview.clientWidth || 500));
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const viewport = page.getViewport({ scale: width / raw.width * ratio });
+        canvas.width = Math.round(viewport.width);
+        canvas.height = Math.round(viewport.height);
+        canvas.style.width = "100%";
+        canvas.style.height = "auto";
+        detail.renderTask = page.render({ canvasContext: canvas.getContext("2d"), viewport });
+        await detail.renderTask.promise;
+        guard();
+        previewStatus.textContent = "Página 1 de " + detail.pdf.numPages;
+      } catch (error) {
+        if (epoch === generation && archiveView === view && view.detail === detail) {
+          canvas.remove();
+          previewStatus.textContent = errorText(error);
+          previewStatus.setAttribute("role", "alert");
+        }
+      } finally {
+        if (clear) { clear.fill(0); detail.buffers.delete(clear); }
+        if (view.detail !== detail && detail.pdf) { try { await detail.pdf.destroy(); } catch (_) {} }
+      }
+    })();
   }
 
   function renderAuditPage() {
     const page = document.getElementById("audit-page");
     if (!page) return;
+    disposeArchive();
     const pageEpoch = ++pageGeneration;
     page.replaceChildren();
-    if (!status().authenticated || page.hidden) return;
-    const panel = node("section", undefined, "audit-panel");
-    panel.append(node("h2", "Historial de salidas"));
-    panel.append(node("p", "Busca por número, filtra por fecha y abre el PDF o el Excel original. La fecha y la hora las registra Supabase; los documentos se descifran únicamente en tu navegador.", "audit-muted"));
-    const overview = node("div", undefined, "audit-stats");
-    function stat(label, value) {
-      const card = node("div", undefined, "audit-stat");
-      const number = node("strong", value, "audit-stat-value");
-      card.append(number, node("span", label, "audit-stat-label"));
-      overview.append(card);
-      return number;
-    }
-    const totalStat = stat("Salidas encontradas", "—");
-    const unitsStat = stat("Unidades visibles", "—");
-    const latestStat = stat("Última fecha", "—");
-    panel.append(overview);
+    if (!status().authenticated || page.hidden || page.closest("[hidden]")) return;
+    const view = { page, pageEpoch, epoch: generation, load: 0, disposed: false, controller: new AbortController(), detail: null, buffers: new Set() };
+    archiveView = view;
+    const panel = node("section", undefined, "audit-panel traza-archive-panel");
+    const header = node("div", undefined, "traza-archive-header");
+    const heading = node("div");
+    heading.append(node("h2", "Archivo de salidas"), node("p", "Consulta las salidas compartidas y guarda sus documentos originales.", "audit-muted"));
+    const newOutput = button("Nueva salida");
+    newOutput.addEventListener("click", function () { if (window.TrazaUI) window.TrazaUI.navigate("converter"); else location.href = "index.html#nueva-salida"; });
+    header.append(heading, newOutput);
+    panel.append(header);
     const form = node("form", undefined, "audit-form audit-search");
-    const search = field(form, "Número de salida", "search", "search", { required: false, maxLength: 60, placeholder: "Ejemplo: 29307", autocomplete: "off" });
-    search.parentElement.classList.add("audit-field-wide");
+    const search = field(form, "Número exacto de salida", "search", "search", { required: false, maxLength: 60, placeholder: "Ejemplo: 0029307", autocomplete: "off" });
     const from = field(form, "Desde", "from", "date", { required: false, autocomplete: "off" });
     const to = field(form, "Hasta", "to", "date", { required: false, autocomplete: "off" });
+    const authorWrapper = node("div", undefined, "audit-field");
+    const authorLabel = node("label", "Responsable");
+    const author = node("select");
+    author.id = "audit-cloud-author";
+    authorLabel.htmlFor = author.id;
+    const allAuthors = node("option", "Todos los responsables");
+    allAuthors.value = "";
+    author.append(allAuthors);
+    authorWrapper.append(authorLabel, author);
+    search.value = archiveFilters.query;
+    from.value = archiveFilters.from;
+    to.value = archiveFilters.to;
     const submit = button("Buscar");
     submit.type = "submit";
-    const clear = button("Ver todas", true);
+    const clear = button("Limpiar", true);
     const refresh = button("Actualizar", true);
-    form.append(submit, clear, refresh);
+    form.append(authorWrapper, submit, clear, refresh);
+    const quick = node("div", undefined, "traza-quick-filters");
+    quick.setAttribute("aria-label", "Accesos rápidos por fecha");
     const result = node("div");
-    const recordsArea = node("div");
-    panel.append(form, result, recordsArea);
+    result.setAttribute("aria-live", "polite");
+    const summary = node("div", undefined, "traza-archive-summary");
+    const totalText = node("span", "", "traza-total-count");
+    const unitsText = node("span", "", "traza-units-count");
+    summary.append(totalText, unitsText);
+    const layout = node("div", undefined, "traza-archive-layout");
+    view.layout = layout;
+    const recordsArea = node("div", undefined, "traza-records");
+    layout.append(recordsArea);
+    panel.append(form, quick, result, summary, layout);
     page.append(panel);
-    let query = "";
-    let fromValue = "";
-    let toValue = "";
-    let pageNumber = 1;
-    let loadGeneration = 0;
+    let authorNames = new Map();
+    let authorsLoaded = false;
+    let pageController = null;
+
+    function applyFilters() {
+      const value = search.value.trim();
+      if (value && !/^\d{1,60}$/.test(value)) { feedback(result, "Ingresa solo el número exacto de la salida, incluidos sus ceros iniciales.", true); return false; }
+      if ((from.value && !validDate(from.value)) || (to.value && !validDate(to.value))) { feedback(result, "Selecciona fechas reales y completas.", true); return false; }
+      if (from.value && to.value && from.value > to.value) { feedback(result, "La fecha «Desde» no puede ser posterior a «Hasta».", true); return false; }
+      if (author.value && !UUID.test(author.value)) { feedback(result, "Selecciona un responsable válido.", true); return false; }
+      Object.assign(archiveFilters, { query: value, from: from.value, to: to.value, author: author.value, page: 1 });
+      loadRecords();
+      return true;
+    }
+
     async function loadRecords() {
-      const sequence = ++loadGeneration;
-      const epoch = generation;
+      disposeDetail(view, false);
+      for (const clear of view.buffers) { try { clear.fill(0); } catch (_) {} }
+      view.buffers.clear();
+      if (pageController) pageController.abort();
+      pageController = new AbortController();
+      view.loadController = pageController;
+      const controller = pageController;
+      const stop = function () { controller.abort(); };
+      view.controller.signal.addEventListener("abort", stop, { once: true });
+      const sequence = ++view.load;
       const key = master;
+      const guard = function () { assertView(view, sequence); if (controller.signal.aborted) throw new Error("La vista cambió."); };
       result.replaceChildren();
-      recordsArea.replaceChildren(node("p", "Cargando y descifrando el historial…", "audit-state"));
-      totalStat.textContent = unitsStat.textContent = latestStat.textContent = "—";
+      recordsArea.replaceChildren(node("p", "Cargando el archivo…", "audit-state"));
+      recordsArea.setAttribute("aria-busy", "true");
+      totalText.textContent = unitsText.textContent = "";
       submit.disabled = clear.disabled = refresh.disabled = true;
       try {
-        let path = "/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=*&order=created_at.desc,id.desc&limit=" + PAGE_SIZE + "&offset=" + ((pageNumber - 1) * PAGE_SIZE);
-        if (query) path += "&salida_tag=eq." + await key.blindIndex(query);
-        if (fromValue) path += "&created_at=gte." + encodeURIComponent(fromValue + "T00:00:00-05:00");
-        if (toValue) {
-          const end = new Date(toValue + "T00:00:00-05:00");
+        let path = "/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=*&order=created_at.desc,id.desc&limit=" + PAGE_SIZE + "&offset=" + ((archiveFilters.page - 1) * PAGE_SIZE);
+        if (archiveFilters.query) {
+          const tag = await key.blindIndex(archiveFilters.query);
+          guard();
+          path += "&salida_tag=eq." + tag;
+        }
+        if (archiveFilters.author) path += "&created_by=eq." + archiveFilters.author;
+        if (archiveFilters.from) path += "&created_at=gte." + encodeURIComponent(archiveFilters.from + "T00:00:00-05:00");
+        if (archiveFilters.to) {
+          const end = new Date(archiveFilters.to + "T00:00:00-05:00");
           end.setUTCDate(end.getUTCDate() + 1);
           path += "&created_at=lt." + encodeURIComponent(end.toISOString());
         }
         const responses = await Promise.all([
-          request(path, { headers: { Prefer: "count=exact" }, raw: true }),
-          rpc("mega_audit_authors", { p_workspace_id: CONFIG.workspace })
+          request(path, { headers: { Prefer: "count=exact" }, raw: true, signal: controller.signal }),
+          request("/rest/v1/rpc/mega_audit_authors", { method: "POST", body: { p_workspace_id: CONFIG.workspace }, signal: controller.signal })
         ]);
-        const response = responses[0];
+        guard();
         const authors = responses[1];
         if (!Array.isArray(authors)) throw new Error("No se pudo verificar quién generó cada salida.");
-        const authorNames = new Map(authors.filter(function (author) {
-          return author && UUID.test(author.user_id) && typeof author.username === "string";
-        }).map(function (author) { return [author.user_id, author.username]; }));
-        const rows = await response.json();
-        if (!Array.isArray(rows)) throw new Error("El historial recibido no es válido.");
-        const outcomes = await Promise.allSettled(rows.map(function (record) { return decryptedRecord(record, key); }));
-        if (epoch !== generation || pageEpoch !== pageGeneration || sequence !== loadGeneration) return;
-        const decoded = outcomes.filter(function (outcome) { return outcome.status === "fulfilled"; }).map(function (outcome) { return outcome.value; });
-        const range = response.headers.get("Content-Range") || "";
-        const count = /\/(\d+)$/.exec(range);
-        const total = count ? Number(count[1]) : rows.length;
-        totalStat.textContent = String(total);
-        unitsStat.textContent = decoded.reduce(function (sum, record) { return sum + (Number(record.total_units) || 0); }, 0).toLocaleString("es-PA", { maximumFractionDigits: 2 });
-        latestStat.textContent = decoded.length ? formatWhen(decoded[0].created_at).date : "—";
+        authorNames = new Map(authors.filter(function (entry) { return entry && UUID.test(entry.user_id) && typeof entry.username === "string"; }).map(function (entry) { return [entry.user_id, entry.username]; }));
+        const desiredAuthor = authorsLoaded ? author.value : archiveFilters.author;
+        author.replaceChildren(allAuthors);
+        for (const [id, name] of authorNames) { const option = node("option", "@" + name); option.value = id; author.append(option); }
+        author.value = desiredAuthor;
+        authorsLoaded = true;
+        const rows = await responses[0].json();
+        guard();
+        if (!Array.isArray(rows)) throw new Error("El archivo recibido no es válido.");
+        const outcomes = await Promise.allSettled(rows.map(async function (entry) { const decoded = await decryptedRecord(entry, key); guard(); return decoded; }));
+        guard();
+        const verified = outcomes.filter(function (outcome) { return outcome.status === "fulfilled"; }).map(function (outcome) { return outcome.value; });
+        const damaged = rows.length - verified.length;
+        const count = /\/(\d+)$/.exec(responses[0].headers.get("Content-Range") || "");
+        const total = count ? Number(count[1]) : null;
+        totalText.textContent = total === null ? rows.length + " salidas en esta página" : total + (total === 1 ? " salida encontrada" : " salidas encontradas");
+        unitsText.textContent = (damaged ? "Unidades verificadas en esta página: " : "Unidades en esta página: ") + verified.reduce(function (sum, entry) { return sum + entry.total_units; }, 0).toLocaleString("es-PA", { maximumFractionDigits: 2 });
         recordsArea.replaceChildren();
         if (!rows.length) {
-          const filtered = query || fromValue || toValue;
-          recordsArea.append(node("p", filtered ? "No hay salidas con los filtros indicados." : "Todavía no hay salidas registradas. Descarga un Excel en el conversor para crear el primer registro.", "audit-empty"));
+          const filtered = archiveFilters.query || archiveFilters.from || archiveFilters.to || archiveFilters.author;
+          recordsArea.append(node("p", filtered ? "No hay salidas que coincidan con los filtros." : "El archivo está vacío. Crea una nueva salida para comenzar.", "audit-empty"));
         } else {
           const wrap = node("div", undefined, "audit-table-wrap");
           const table = node("table", undefined, "audit-table");
+          table.setAttribute("aria-label", "Archivo de salidas");
           const head = node("thead");
-          const header = node("tr");
-          for (const title of ["Salida", "Generada por", "Fecha y hora (Panamá)", "Productos / unidades", "Documentos"]) {
-            const cell = node("th", title);
-            cell.scope = "col";
-            header.append(cell);
-          }
-          head.append(header);
+          const headings = node("tr");
+          const titles = ["Salida", "Responsable", "Fecha y hora", "Unidades", "Documentos", "Detalle"];
+          for (const title of titles) { const th = node("th", title); th.scope = "col"; headings.append(th); }
+          head.append(headings);
           const body = node("tbody");
-          let failedRows = 0;
           for (let index = 0; index < outcomes.length; index++) {
             const outcome = outcomes[index];
+            const official = rows[index] || {};
+            const officialName = authorNames.get(official.created_by);
+            const when = formatWhen(official.created_at);
+            const row = node("tr", undefined, outcome.status === "fulfilled" ? "" : "audit-cloud-unreadable");
+            const cells = titles.map(function (title) { const td = node("td"); td.dataset.label = title; return td; });
+            cells[1].textContent = officialName ? "@" + officialName : "Responsable no disponible";
+            cells[2].append(node("span", when.date), node("span", when.time, "audit-muted"));
             if (outcome.status !== "fulfilled") {
-              failedRows++;
-              const opaque = rows[index] || {};
-              const row = node("tr", undefined, "audit-cloud-unreadable");
-              const label = node("td", "No se pudo descifrar esta salida");
-              label.append(node("span", String(opaque.id || "Identificador no válido"), "audit-muted"));
-              const officialName = authorNames.get(opaque.created_by);
-              const when = formatWhen(opaque.created_at);
-              row.append(label, node("td", officialName ? "@" + officialName : String(opaque.created_by || "Autor no disponible")), node("td", when.date + " " + when.time), node("td", "No disponible"), node("td", "Documento no verificado"));
-              body.append(row);
-              continue;
+              cells[0].append(node("strong", "Salida no verificable"), node("span", String(official.id || "Identificador no disponible"), "audit-muted"));
+              cells[3].textContent = "No disponibles";
+              const docs = node("div", undefined, "audit-documents");
+              for (const label of ["Guardar PDF", "Guardar Excel"]) { const disabled = button(label, true); disabled.disabled = true; docs.append(disabled); }
+              cells[4].append(docs);
+              cells[5].textContent = "No se pudo descifrar";
+            } else {
+              const record = outcome.value;
+              cells[0].append(node("strong", "Salida " + record.salida_numero));
+              cells[3].textContent = record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 });
+              const docs = node("div", undefined, "audit-documents");
+              docs.append(documentButton(record, "pdf", "Guardar PDF", result, view), documentButton(record, "excel", "Guardar Excel", result, view));
+              cells[4].append(docs);
+              const open = button("Detalle", true);
+              open.setAttribute("aria-label", "Abrir detalle de salida " + record.salida_numero);
+              open.addEventListener("click", function () { openDetail(view, record, officialName, open); });
+              cells[5].append(open);
             }
-            const record = outcome.value;
-            const row = node("tr");
-            const salida = node("td");
-            salida.append(node("strong", "Salida " + record.salida_numero));
-            const officialName = authorNames.get(record.created_by);
-            const user = node("td", officialName ? "@" + officialName : record.created_by);
-            user.title = "Autor registrado por Supabase: " + record.created_by;
-            const when = formatWhen(record.created_at);
-            const time = node("td", when.date, "audit-number");
-            time.append(node("span", when.time, "audit-muted"));
-            const quantities = node("td", record.row_count + " productos", "audit-number");
-            quantities.append(node("span", record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 }) + " unidades", "audit-muted"));
-            const docs = node("td");
-            const actions = node("div", undefined, "audit-documents");
-            actions.append(documentButton(record, "pdf", "PDF original", result), documentButton(record, "excel", "Excel", result));
-            docs.append(actions);
-            row.append(salida, user, time, quantities, docs);
+            row.append.apply(row, cells);
             body.append(row);
           }
           table.append(head, body);
           wrap.append(table);
           recordsArea.append(wrap);
-          if (failedRows) feedback(result, failedRows + (failedRows === 1 ? " salida no pudo descifrarse" : " salidas no pudieron descifrarse") + ". Las demás se muestran. Solicita al administrador que revise los registros indicados.", true);
+          if (damaged) feedback(result, damaged + (damaged === 1 ? " salida no pudo descifrarse." : " salidas no pudieron descifrarse.") + " Sus filas permanecen visibles; los documentos y unidades no verificables están desactivados.", true);
         }
         const pagination = node("div", undefined, "audit-pagination");
-        pagination.append(node("span", total + (total === 1 ? " salida" : " salidas") + " · Página " + pageNumber + " de " + Math.max(1, Math.ceil(total / PAGE_SIZE)), "audit-muted"));
+        const pages = total === null ? "" : " de " + Math.max(1, Math.ceil(total / PAGE_SIZE));
+        pagination.append(node("span", "Página " + archiveFilters.page + pages, "audit-muted"));
         const actions = node("div", undefined, "audit-actions");
         const previous = button("Anterior", true);
         const next = button("Siguiente", true);
-        previous.disabled = pageNumber <= 1;
-        next.disabled = pageNumber * PAGE_SIZE >= total;
-        previous.addEventListener("click", function () { pageNumber--; loadRecords(); });
-        next.addEventListener("click", function () { pageNumber++; loadRecords(); });
+        previous.disabled = archiveFilters.page <= 1;
+        next.disabled = total === null ? rows.length < PAGE_SIZE : archiveFilters.page * PAGE_SIZE >= total;
+        previous.addEventListener("click", function () { archiveFilters.page--; loadRecords(); });
+        next.addEventListener("click", function () { archiveFilters.page++; loadRecords(); });
         actions.append(previous, next);
         pagination.append(actions);
         recordsArea.append(pagination);
       } catch (error) {
-        if (epoch !== generation || pageEpoch !== pageGeneration || sequence !== loadGeneration) return;
-        recordsArea.replaceChildren();
+        if (archiveView !== view || view.disposed || sequence !== view.load || view.epoch !== generation) return;
+        recordsArea.replaceChildren(node("p", "No se pudo cargar el archivo. Usa Actualizar para intentarlo nuevamente.", "audit-state"));
         feedback(result, errorText(error), true);
       } finally {
-        if (pageEpoch === pageGeneration && sequence === loadGeneration) submit.disabled = clear.disabled = refresh.disabled = false;
+        view.controller.signal.removeEventListener("abort", stop);
+        if (archiveView === view && sequence === view.load) {
+          submit.disabled = clear.disabled = refresh.disabled = false;
+          recordsArea.setAttribute("aria-busy", "false");
+        }
       }
     }
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
-      const value = search.value.trim();
-      if (value && !/^\d{1,60}$/.test(value)) {
-        feedback(result, "Ingresa solo el número exacto de la salida.", true);
-        return;
-      }
-      if (from.value && to.value && from.value > to.value) {
-        feedback(result, "La fecha «Desde» no puede ser posterior a «Hasta».", true);
-        return;
-      }
-      query = value;
-      fromValue = from.value;
-      toValue = to.value;
-      pageNumber = 1;
-      loadRecords();
-    });
-    clear.addEventListener("click", function () { search.value = ""; from.value = ""; to.value = ""; query = ""; fromValue = ""; toValue = ""; pageNumber = 1; loadRecords(); });
+    form.addEventListener("submit", function (event) { event.preventDefault(); applyFilters(); });
+    clear.addEventListener("click", function () { search.value = from.value = to.value = author.value = ""; applyFilters(); });
     refresh.addEventListener("click", function () { loadRecords(); });
+    for (const label of ["Todo", "Hoy", "Esta semana", "Este mes"]) {
+      const shortcut = button(label, true);
+      shortcut.addEventListener("click", function () {
+        if (label === "Todo") from.value = to.value = "";
+        else {
+          const today = panamaToday();
+          to.value = today;
+          const date = new Date(today + "T00:00:00Z");
+          if (label === "Esta semana") date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
+          if (label === "Este mes") date.setUTCDate(1);
+          from.value = date.toISOString().slice(0, 10);
+        }
+        applyFilters();
+      });
+      quick.append(shortcut);
+    }
     loadRecords();
   }
 
-  function renderUserManagement(parent) {
-    const userGeneration = generation;
-    const details = node("details", undefined, "audit-admin");
-    details.append(node("summary", "Administrar usuarios"));
-    const body = node("div", undefined, "audit-admin-body");
-    body.append(node("p", "Crea una cuenta por compañero. Su contraseña desbloquea una copia cifrada de la clave del equipo; nunca se envía a Supabase tal como la escribes.", "audit-muted"));
+  async function openUsersDialog(opener) {
+    const epoch = generation;
+    let modal;
+    try {
+      assertAccount(epoch, true);
+      modal = createDialog("Usuarios y permisos", opener);
+      modal.content.append(node("p", "Comprobando permisos…", "audit-state"));
+      await requireAdmin(epoch);
+      if (!modal.dialog.open) return;
+      renderUserManagement(modal.content, modal.dialog, epoch);
+    } catch (error) { if (modal && modal.dialog.open && epoch === generation) feedback(modal.content, errorText(error), true); }
+  }
+
+  async function openSecurityDialog(opener) {
+    const epoch = generation;
+    let modal;
+    try {
+      assertAccount(epoch, true);
+      modal = createDialog("Seguridad", opener);
+      modal.content.append(node("p", "Comprobando permisos…", "audit-state"));
+      await requireAdmin(epoch);
+      if (!modal.dialog.open) return;
+      const explanation = node("p", "Guarda una copia privada de la clave de recuperación. Permite recuperar el archivo completo; consérvala en un lugar seguro y no la compartas.", "audit-muted");
+      const download = button("Guardar clave de recuperación");
+      const result = node("div");
+      modal.content.replaceChildren(explanation, download, result);
+      download.addEventListener("click", async function () {
+        const selection = picker("TRAZA — Clave privada de recuperación.txt", "text");
+        let clear;
+        const wipe = function () { if (clear) clear.fill(0); };
+        modal.dialog.addEventListener("close", wipe, { once: true });
+        const guard = function () { assertAccount(epoch, true); if (!modal.dialog.open || !recoveryKey) throw new Error("La vista cambió."); };
+        download.disabled = true;
+        try {
+          const handle = selection ? await selection : null;
+          guard();
+          await requireAdmin(epoch);
+          guard();
+          clear = new TextEncoder().encode("TRAZA — CLAVE PRIVADA DE RECUPERACIÓN\nNo la compartas ni la subas a GitHub o Supabase. Permite descifrar todo el archivo.\n\nAuditoría: " + CONFIG.workspace + "\n\n" + recoveryKey + "\n");
+          const message = await writeDownload(clear, handle, "TRAZA — Clave privada de recuperación.txt", "text/plain;charset=utf-8", guard);
+          guard();
+          feedback(result, message, false);
+        } catch (error) {
+          if (epoch === generation && modal.dialog.open) feedback(result, error.name === "AbortError" ? "Guardado cancelado." : errorText(error), error.name !== "AbortError");
+        } finally { wipe(); modal.dialog.removeEventListener("close", wipe); download.disabled = false; }
+      });
+    } catch (error) { if (modal && modal.dialog.open && epoch === generation) feedback(modal.content, errorText(error), true); }
+  }
+
+  function renderUserManagement(parent, dialog, userGeneration) {
+    parent.replaceChildren(node("p", "Crea una cuenta para cada compañero y selecciona sus permisos.", "audit-muted"));
     const form = node("form", undefined, "audit-form audit-cloud-form");
     const name = field(form, "Usuario", "user-username", "text", { minLength: 3, autocomplete: "off" });
     const password = field(form, "Contraseña inicial o actual", "user-password", "password", { minLength: 12, autocomplete: "new-password" });
@@ -910,11 +1396,7 @@
     const role = node("select");
     role.id = "audit-cloud-user-role";
     roleLabel.htmlFor = role.id;
-    const user = node("option", "Usuario");
-    user.value = "user";
-    const admin = node("option", "Administrador");
-    admin.value = "admin";
-    role.append(user, admin);
+    for (const pair of [["user", "Usuario"], ["admin", "Administrador"]]) { const option = node("option", pair[1]); option.value = pair[0]; role.append(option); }
     roleWrapper.append(roleLabel, role);
     const submit = button("Crear usuario");
     submit.type = "submit";
@@ -922,80 +1404,61 @@
     passwordToggle(form, [password, repeat]);
     const result = node("div");
     const usersArea = node("div");
-    body.append(form, result, usersArea);
-    details.append(body);
-    parent.append(details);
-    let loaded = false;
+    parent.append(form, result, usersArea);
+    const guard = function () { assertAccount(userGeneration, true); if (!dialog.open) throw new Error("La vista cambió."); };
     async function loadUsers() {
       usersArea.replaceChildren(node("p", "Cargando usuarios…", "audit-state"));
       try {
+        guard();
         const users = await rpc("mega_audit_list_members", { p_workspace_id: CONFIG.workspace });
-        if (userGeneration !== generation) return;
+        guard();
         if (!Array.isArray(users)) throw new Error("La lista de usuarios no es válida.");
-        const wrap = node("div", undefined, "audit-table-wrap");
         const table = node("table", undefined, "audit-table");
         const head = node("thead");
         const headings = node("tr");
-        for (const label of ["Usuario", "Permisos", "Creado (Panamá)"]) {
-          const cell = node("th", label);
-          cell.scope = "col";
-          headings.append(cell);
-        }
+        for (const label of ["Usuario", "Permisos", "Creado · Panamá"]) { const cell = node("th", label); cell.scope = "col"; headings.append(cell); }
         head.append(headings);
-        const tbody = node("tbody");
+        const body = node("tbody");
         for (const user of users) {
           const row = node("tr");
           const when = formatWhen(user.created_at);
-          row.append(node("td", "@" + user.username), node("td", user.role === "admin" ? "Administrador" : "Usuario"), node("td", when.date + " " + when.time));
-          tbody.append(row);
+          for (const pair of [["Usuario", "@" + user.username], ["Permisos", user.role === "admin" ? "Administrador" : "Usuario"], ["Creado", when.date + " " + when.time]]) { const cell = node("td", pair[1]); cell.dataset.label = pair[0]; row.append(cell); }
+          body.append(row);
         }
-        table.append(head, tbody);
-        wrap.append(table);
-        usersArea.replaceChildren(wrap);
-      } catch (error) {
-        if (userGeneration !== generation) return;
-        usersArea.replaceChildren();
-        feedback(result, errorText(error), true);
-      }
+        table.append(head, body);
+        usersArea.replaceChildren(table);
+      } catch (error) { if (userGeneration === generation && dialog.open) { usersArea.replaceChildren(); feedback(result, errorText(error), true); } }
     }
-    details.addEventListener("toggle", function () {
-      if (details.open && !loaded) { loaded = true; loadUsers(); }
-    });
     form.addEventListener("submit", async function (event) {
       event.preventDefault();
-      if (password.value !== repeat.value) {
-        feedback(result, "Las contraseñas no coinciden. Revisa ambas con «Mostrar contraseña».", true);
-        return;
-      }
+      if (password.value !== repeat.value) { feedback(result, "Las contraseñas no coinciden. Revisa ambas con «Mostrar contraseña».", true); return; }
       submit.disabled = true;
-      feedback(result, "Creando usuario y cifrando su acceso…", false);
+      feedback(result, "Creando usuario…", false);
       try {
-        await createMember(name.value, password.value, role.value);
-        if (userGeneration !== generation) return;
+        guard();
+        await createMember(name.value, password.value, role.value, guard);
+        guard();
         form.reset();
-        feedback(result, "Usuario creado. Ya puede iniciar sesión con su usuario y contraseña.", false);
-        loaded = true;
+        feedback(result, "Usuario creado. Ya puede iniciar sesión.", false);
         await loadUsers();
-      } catch (error) {
-        if (userGeneration === generation) feedback(result, errorText(error), true);
-      } finally { submit.disabled = false; }
+        guard();
+      } catch (error) { if (userGeneration === generation && dialog.open) feedback(result, errorText(error), true); }
+      finally { password.value = repeat.value = ""; submit.disabled = false; }
     });
-    return details;
+    loadUsers();
   }
 
   function initialise() {
-    try {
-      validateConfiguration();
-      renderAccountBar();
-      renderAuditPage();
-    } catch (error) {
-      const bar = document.getElementById("audit-bar");
-      if (bar) feedback(bar, errorText(error), true);
-    }
+    try { validateConfiguration(); renderAccountBar(); renderAuditPage(); }
+    catch (error) { const bar = document.getElementById("audit-bar"); if (bar) feedback(bar, errorText(error), true); }
   }
 
-  window.AuditCloud = Object.freeze({ ready, record, newIdempotencyKey });
+  window.AuditCloud = Object.freeze({ ready, status, record, newIdempotencyKey });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
+  window.addEventListener("traza-ui:navigated", function () {
+    for (const dialog of openDialogs) dialog.close();
+    renderAuditPage();
+  });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialise, { once: true });
   else initialise();
 })();

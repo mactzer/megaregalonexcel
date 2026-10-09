@@ -1,4 +1,25 @@
-PDF A EXCEL - SELECTOR DE COLUMNAS
+TRAZA | CENTRO DOCUMENTAL
+
+NAVEGACION Y PERFIL
+Nueva salida: Cargar PDF -> Revisar informacion -> Guardar Excel.
+Archivo de salidas: historial automatico al iniciar sesion, sin perder el PDF
+cargado al cambiar de seccion en la misma pagina.
+El perfil superior permite iniciar/cerrar sesion. Para administradores,
+Usuarios y permisos y Seguridad se abren en dialogos. Guarda la clave de
+recuperacion en un archivo privado y protegido; no se muestra en el historial.
+
+ARCHIVO Y DESCARGAS
+Filtra por numero exacto (incluye ceros iniciales), responsable y fechas de
+Panama. Accesos rapidos: Todo, Hoy, Esta semana (desde lunes) y Este mes.
+Actualizar conserva los filtros; Limpiar los elimina. Unidades en esta pagina
+suma solo los registros visibles. Los registros dañados siguen visibles, con
+aviso y documentos desactivados: se suman Unidades verificadas en esta pagina.
+El detalle muestra el responsable oficial, fecha, productos, unidades,
+nombres de documentos y vista previa local de la primera pagina del PDF.
+Chrome y Edge compatibles permiten elegir carpeta y nombre antes de guardar.
+Otros navegadores usan su configuracion de descargas. Cancelar el selector
+detiene la operacion. El convertidor confirma la auditoria antes de escribir
+el Excel; reintentar una escritura local fallida no duplica el registro.
 
 AUDITORIA CON SUPABASE
 La version publicada usa usuario y contraseña y guarda una auditoria compartida.

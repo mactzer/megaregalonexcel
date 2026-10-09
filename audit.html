@@ -3,27 +3,44 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Auditoría de salidas | PDF a Excel</title>
-  <link rel="stylesheet" href="audit.css?v=2">
-  <link rel="stylesheet" href="audit-cloud.css">
-  <script src="supabase-config.js" defer></script>
-  <script src="audit-crypto.js" defer></script>
-  <script src="audit-cloud.js?v=7" defer></script>
-  <script src="audit.js" defer></script>
+  <title>TRAZA | Centro documental</title>
+  <link rel="stylesheet" href="audit.css?v=traza-1">
+  <link rel="stylesheet" href="audit-cloud.css?v=traza-1">
+  <link rel="stylesheet" href="traza.css?v=traza-1">
+  <script src="vendor/pdf.min.js?v=traza-1" defer></script>
+  <script src="supabase-config.js?v=traza-1" defer></script>
+  <script src="audit-crypto.js?v=traza-1" defer></script>
+  <script src="traza.js?v=traza-1" defer></script>
+  <script src="audit-cloud.js?v=traza-1" defer></script>
+  <script src="audit.js?v=traza-1" defer></script>
 </head>
-<body class="audit-document">
-  <header class="audit-header">
-    <div class="audit-shell">
-      <a class="audit-back" href="index.html">← PDF a Excel</a>
-      <h1>Auditoría de salidas</h1>
-      <p>Historial compartido: quién generó cada salida, cuándo y sus documentos.</p>
+<body class="audit-document" data-traza-initial="archive">
+  <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
+  <div class="traza-menu-overlay" id="traza-menu-overlay" hidden></div>
+  <aside class="traza-sidebar" id="traza-sidebar" aria-label="Navegación principal">
+    <a class="traza-brand" href="index.html#nueva-salida" data-traza-section="converter" aria-label="TRAZA, Nueva salida">
+      <svg class="traza-brand-symbol" viewBox="0 0 40 40" width="40" height="40" aria-hidden="true"><rect x="3" y="3" width="34" height="34" rx="10" fill="#2b494a"/><path d="M12 12h16M20 12v18M12 21h8M20 30l8-9" fill="none" stroke="#91d2ba" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span><strong>TRAZA</strong><small>Centro documental</small></span>
+    </a>
+    <button class="traza-menu-close" id="traza-menu-close" type="button" aria-label="Cerrar menú">×</button>
+    <nav class="traza-nav" aria-label="Secciones">
+      <a id="converter-tab" class="traza-nav-link" href="index.html#nueva-salida" data-traza-section="converter" aria-controls="converter-view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 14h8M12 10v8"/></svg><span>Nueva salida</span></a>
+      <a id="audit-tab" class="traza-nav-link" href="#archivo" data-traza-section="archive" aria-controls="audit-page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h18v12H3zM2 4h20v4H2zM9 12h6"/></svg><span>Archivo de salidas</span></a>
+    </nav>
+    <div class="traza-sidebar-bottom">
+      <button class="traza-help-button" type="button" data-traza-help><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01"/></svg>Ayuda</button>
+      <p>Creado por Eddie Rivera<br><span>© 2026 · Derechos reservados</span></p>
     </div>
+  </aside>
+  <header class="traza-topbar" id="traza-topbar">
+    <div class="traza-topbar-location"><button class="traza-menu-button" id="traza-menu-button" type="button" aria-controls="traza-sidebar" aria-expanded="false" aria-label="Abrir menú"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button><span class="traza-location-prefix">Centro documental <span aria-hidden="true">/</span></span><strong id="traza-section-name">Archivo de salidas</strong></div>
+    <div id="app-profile" class="traza-app-profile"></div>
   </header>
-  <main class="audit-shell audit-main">
+  <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite"></div>
     <div id="audit-page"></div>
-    <noscript><p class="audit-message audit-error">Activa JavaScript para consultar el historial.</p></noscript>
+    <noscript><p class="audit-message audit-error">Activa JavaScript para consultar el archivo de salidas.</p></noscript>
   </main>
-  <footer class="audit-footer audit-shell">Creado por Eddie Rivera. © 2026 Eddie Rivera. Todos los derechos reservados.</footer>
+  <dialog id="traza-help-dialog" class="traza-dialog" aria-labelledby="traza-help-title"><div class="traza-dialog-header"><h2 id="traza-help-title">Ayuda de TRAZA</h2><button type="button" class="traza-icon-button" data-dialog-close aria-label="Cerrar ayuda">×</button></div><div class="traza-help-content"><p><strong>Nueva salida</strong> te permite cargar un PDF, revisar sus productos y guardar el Excel. Puedes cambiar las columnas, el número de salida y el nombre del archivo.</p><p><strong>Archivo de salidas</strong> reúne los documentos compartidos. Inicia sesión con tu usuario y contraseña para buscar una salida y guardar su PDF o Excel.</p><p>Elige la carpeta de destino en los navegadores compatibles. En los demás, revisa la configuración de descargas de tu navegador.</p><p class="audit-muted">Creado por Eddie Rivera. Conserva y revisa el documento original antes de usar la información.</p></div></dialog>
 </body>
 </html>

@@ -1,6 +1,32 @@
-# PDF a Excel — Selector de columnas
+# TRAZA | Centro documental
 
-Aplicación para seleccionar columnas de un PDF con texto y descargar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
+TRAZA permite revisar salidas, seleccionar columnas de un PDF con texto y guardar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
+
+## Navegación y documentos
+
+**Nueva salida** presenta tres pasos: cargar PDF, revisar información y guardar Excel. **Archivo de salidas** consulta el historial compartido sin abandonar la aplicación: cambiar de sección conserva el PDF cargado y la sesión. El encabezado muestra el perfil; desde él puedes iniciar o cerrar sesión. Los administradores abren **Usuarios y permisos** y **Seguridad** en diálogos. La clave de recuperación se guarda como un archivo privado; consérvala en una ubicación protegida.
+
+El archivo admite número exacto (conservando ceros iniciales), responsable y fechas Desde/Hasta, además de Todo, Hoy, Esta semana y Este mes. Las fechas y horas corresponden a Panamá; la semana empieza el lunes. Al aplicar filtros se vuelve a la primera página; Actualizar conserva los filtros y Limpiar los elimina. El número se busca mediante un índice cifrado, sin enviar el número comercial en texto claro.
+
+La suma **Unidades en esta página** corresponde solo a los registros visibles, no a todo el archivo. Si un registro no puede descifrarse, permanece visible con un aviso y sus documentos desactivados; la suma se identifica como **Unidades verificadas en esta página**. Los responsables y las fechas proceden del servidor.
+
+Al abrir una salida, el detalle muestra sus documentos y una vista previa real de la primera página del PDF, renderizada localmente. Puedes guardar el PDF y el Excel por separado. En Chrome y Edge compatibles, el selector de archivos permite elegir carpeta y nombre antes de recuperar el documento. En otros navegadores se utiliza la configuración habitual de descargas. Cancelar el selector detiene la operación.
+
+Al guardar desde el convertidor, el nombre sugerido es **Salida [número].xlsx** y se puede editar. La auditoría se confirma antes de escribir el archivo o iniciar la descarga. Cancelar el selector no registra la salida; si una escritura local falla después de registrarla, reintentar no crea otro registro.
+
+## Desarrollo y validación
+
+La interfaz utiliza `traza.css` y `traza.js`, con iconos locales y bibliotecas incluidas en `vendor`. No requiere compilación. Sirve la carpeta con `python3 -m http.server 8000`. Las dos modalidades de auditoría conservan su almacenamiento independiente: Supabase con cifrado en el navegador e intranet con el servidor Python y SQLite. Abrir un HTML directamente no sustituye la instalación del servicio de auditoría.
+
+Las pruebas de conversión, cifrado y SQL se ejecutan así (la dependencia de PGlite se instala fuera del repositorio):
+
+```sh
+npm install --prefix /tmp/mega-audit-tests --ignore-scripts --no-audit --no-fund @electric-sql/pglite@0.5.8
+NODE_PATH=/tmp/mega-audit-tests/node_modules node --test tests/*.test.cjs
+python3 -m unittest discover -s tests -p 'test_*.py'
+```
+
+La prueba `tests/traza.browser.cjs` utiliza Playwright y Chromium, documentos ficticios, cifrado real y Supabase simulado. Sus resultados no acreditan el acceso de una cuenta real a producción. Consulta el encabezado de esa prueba para ejecutarla con Playwright instalado fuera del checkout.
 
 ## Autoría y condiciones de uso
 

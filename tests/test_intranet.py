@@ -141,6 +141,17 @@ class IntranetAuditTests(unittest.TestCase):
         self.assertIn(status, (200, 201), body)
         return body.get("user", body)
 
+    def test_traza_assets_are_available_without_exposing_private_storage(self):
+        for name, mime in (("traza.css", "text/css"), ("traza.js", "javascript")):
+            content = ("/* local " + name + " */").encode("utf-8")
+            (self.static / name).write_bytes(content)
+            status, body, headers = self.request("/" + name + "?v=traza")
+            self.assertEqual(status, 200)
+            self.assertEqual(body, content)
+            self.assertIn(mime, headers["Content-Type"])
+        status, _, _ = self.request("/auditoria.sqlite3")
+        self.assertEqual(status, 404)
+
     def test_anonymous_cannot_read_history_or_documents(self):
         status, body, _ = self.request("/api/status")
         self.assertEqual(status, 200)
