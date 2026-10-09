@@ -20,10 +20,15 @@ La vista conserva las proporciones y ajusta su resolucion al tamaño de pantalla
 Ampliar, Reducir y Ajustar a ancho permiten leer los detalles. Ver PDF ampliado
 abre un visor grande, con cierre mediante boton o Escape, sin recuperar otra
 vez el documento. Las imagenes escaneadas conservan la calidad del PDF original.
-Chrome y Edge compatibles permiten elegir carpeta y nombre antes de guardar.
-Otros navegadores usan su configuracion de descargas. Cancelar el selector
-detiene la operacion. El convertidor confirma la auditoria antes de escribir
-el Excel; reintentar una escritura local fallida no duplica el registro.
+El Excel se descarga una sola vez por el navegador, sin Descargar una copia.
+El convertidor confirma la auditoria antes de iniciar la descarga. Repetir
+exactamente el mismo Excel en la misma sesion verifica el acceso y reutiliza
+sus bytes sin otro registro. Si cancelas el guardado desde el navegador,
+el registro confirmado permanece y puedes volver a descargarlo.
+Cambiar de PDF o cerrar sesion limpia la copia retenida en memoria.
+Para el PDF, Chrome y Edge permiten elegir carpeta desde la app; cancelar
+su selector detiene la recuperacion. Otros navegadores usan sus descargas.
+Los numeros agrupados, como 1,800.00, se leen como 1800 unidades.
 
 EDITAR UN EXCEL GUARDADO
 En el Archivo, Editar Excel recupera el PDF original con la misma sesion y abre
@@ -34,12 +39,15 @@ registro existente: no se suben documentos ni se crea otra salida. El PDF y
 el Excel originales siguen en el Archivo. audit.html abre esa misma aplicacion.
 
 CONFIRMACION DE GUARDADO
-La app muestra una confirmacion visible con el nombre del archivo guardado.
-Elegir carpeta escribe el archivo alli; Chrome y Edge no lo muestran en su
-panel de descargas. Descargar una copia inicia otra descarga con los mismos
-bytes, sin registrar de nuevo la salida. Esa copia usa la configuracion de
-descargas del navegador. Cambiar de seccion o cerrar sesion limpia la
-confirmacion y la copia disponible.
+La app muestra una confirmacion visible con el nombre del Excel descargado.
+Para elegir carpeta, activa Preguntar donde guardar cada archivo en los
+ajustes de descargas de Chrome o Edge. Para abrirlo automaticamente, descarga
+un .xlsx y marca Abrir siempre archivos de este tipo en el menu de ese archivo
+en el panel de descargas, si esta opcion esta disponible. Excel debe estar
+instalado y asociado a .xlsx. La pagina no puede cambiar esos ajustes.
+Los PDF guardados con el selector de la app conservan Descargar una copia
+como opcion adicional. Cambiar de seccion o cerrar sesion limpia las
+confirmaciones y las URLs temporales.
 
 AUDITORIA CON SUPABASE
 La version publicada usa usuario y contraseña y guarda una auditoria compartida.

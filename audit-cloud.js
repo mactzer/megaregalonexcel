@@ -749,10 +749,20 @@
     link.href = url;
     link.download = name;
     document.body.append(link);
-    link.click();
-    link.remove();
+    blobUrls.set(url, null);
+    try { link.click(); }
+    catch (_) {
+      URL.revokeObjectURL(url);
+      blobUrls.delete(url);
+      throw new Error("No se pudo iniciar la descarga. Inténtalo nuevamente.");
+    } finally { link.remove(); }
     const timer = setTimeout(function () { URL.revokeObjectURL(url); blobUrls.delete(url); }, 30000);
     blobUrls.set(url, timer);
+  }
+
+  function clearBlobDownloads() {
+    for (const [url, timer] of blobUrls) { clearTimeout(timer); URL.revokeObjectURL(url); }
+    blobUrls.clear();
   }
 
   function picker(name, kind) {
@@ -987,6 +997,7 @@
   }
 
   function disposeDetail(view, restore) {
+    clearBlobDownloads();
     if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
     if (view && view.edit) { view.edit.controller.abort(); view.edit = null; }
     if (!view || !view.detail) return;
@@ -1036,8 +1047,10 @@
       const guard = function () { assertView(view, load); if (view.detail !== selected) throw new Error("La vista cambió."); };
       let destination;
       let clear;
-      // No network, decryption or async session check precedes the picker.
-      const selection = picker(name, kind);
+      // Excel uses one browser download, including its download list and any
+      // configured open-after-download behavior. PDFs retain the folder picker.
+      // No network, decryption or async session check precedes that picker.
+      const selection = kind === "excel" ? null : picker(name, kind);
       if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       download.disabled = true;
       result.replaceChildren();
@@ -1054,7 +1067,13 @@
         const message = await writeDownload(clear, destination, name, mime, guard);
         guard();
         feedback(result, message, false);
-        if (destination && window.TrazaSavedFile) window.TrazaSavedFile.show({ data: clear, name: destination.name || name, mime, guard, message });
+        if ((destination || kind === "excel") && window.TrazaSavedFile) {
+          const saved = { name: destination ? destination.name || name : name, mime, guard, message };
+          // A folder save can offer a browser copy. The Excel download is
+          // already that copy, so keep only its visible confirmation.
+          if (destination) saved.data = clear;
+          window.TrazaSavedFile.show(saved);
+        }
       } catch (error) {
         if (epoch === generation && archiveView === view && load === view.load && view.detail === selected) {
           if (error && error.name === "AbortError") feedback(result, "Guardado cancelado. No se recuperó el documento.", false);

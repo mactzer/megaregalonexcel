@@ -351,7 +351,7 @@
     active = notice;
     const main = document.getElementById("app-main");
     (main || document.body).append(panel);
-    if (window.matchMedia("(max-width: 600px)").matches) panel.scrollIntoView({ block: "nearest" });
+    if (window.matchMedia("(max-width: 600px)").matches) panel.scrollIntoView({ block: "nearest", behavior: "instant" });
   }
 
   window.TrazaSavedFile = Object.freeze({ show, clear });
