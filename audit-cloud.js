@@ -1896,7 +1896,7 @@
       data = await getDocument(rows[0], "pdf", key, guard, signal);
       const result = await window.TrazaConverter.analyzeUnits({ data, expectedNumber: meta.salida_numero, assertCurrent: guard, signal, includeProducts: true });
       guard();
-      return { products: result.products, salida: meta.salida_numero, date: rows[0].created_at };
+      return { products: result.products, salida: /^\d{1,60}$/.test(result.documentNumber) ? result.documentNumber : '', archiveSalida: meta.salida_numero, invoiceDate: window.MobileCatalog.invoiceDate(result.invoiceDate), date: rows[0].created_at };
     } finally { if (data) data.fill(0); }
   }
 

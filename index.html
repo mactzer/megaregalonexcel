@@ -483,8 +483,8 @@
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=product-prices-1"></script>
   <script src="traza.js?v=shared-navigation-1"></script>
-  <script src="mobile-catalog.js?v=1"></script>
-  <script src="audit-cloud.js?v=product-prices-1"></script>
+  <script src="mobile-catalog.js?v=2"></script>
+  <script src="audit-cloud.js?v=invoice-history-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -1540,6 +1540,7 @@
             totalUnits,
             missingUnits,
             documentNumber,
+            invoiceDate: parsed.documentInfo.fecha || "",
             numberMatches: documentNumber === String(options.expectedNumber),
             complete: missingUnits === 0 && Number.isFinite(totalUnits)
           };

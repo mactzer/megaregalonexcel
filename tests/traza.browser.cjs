@@ -42,7 +42,7 @@ function fakePdf(options = {}) {
   ] : [];
   const footer = options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
     : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
-  const textContent = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text('Fecha: 08/10/2026', 10, 520),
+  const textContent = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
   const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
@@ -125,6 +125,51 @@ async function fictionalPrice(cents,version=1){
  const code='0001234567890',tag=await fixture.master.productIndex(code),encrypted=await fixture.master.encrypt(new TextEncoder().encode(JSON.stringify({code,cents})),`product-price-v1|${tag}|${version}`);
  return {workspace_id:WORKSPACE,product_tag:tag,encrypted_price:Buffer.from(encrypted).toString('base64'),version,updated_by:OWNER,updated_at:'2026-10-10T03:00:00.000Z'};
 }
+test('mobile salidas: latest invoice selects 8.99 despite later upload of 9.99, history survives cache and admin override', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    await setArchivedPdf(h, 0, { number: '29317', invoiceDate: '8/10/2026', price: '9.99' }, { salida_numero: '90000' });
+    await setArchivedPdf(h, 2, { number: '29345', invoiceDate: '9/10/2026', price: '8.99' }, { salida_numero: '29345' });
+    h.state.records[0].created_at = '2026-10-30T20:00:00.000Z';
+    h.state.records[2].created_at = '2026-10-09T20:00:00.000Z';
+    h.state.records = [h.state.records[0], h.state.records[2]];
+    await mobileLogin(h); const downloads = h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length;
+    await mobileLookup(h);
+    assert.match(await h.page.locator('.price').innerText(), /8\.99/);
+    assert.deepEqual(await h.page.locator('.product-salidas tbody tr').allTextContents(), ['29345Última salidaUSD\u00a08.9909/10/2026', '29317USD\u00a09.9908/10/2026']);
+    const details = await h.page.locator('#result dl').innerText();
+    assert.match(details, /Salida de origen\s+29345/); assert.match(details, /Fecha de factura\s+09\/10\/2026/);
+    assert.doesNotMatch(details, /Registrado|30\/10/);
+    await mobileLogin(h); await mobileLookup(h);
+    assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length, downloads, 'Cached history must not reopen PDFs');
+    await h.page.locator('#edit-price').click(); await h.page.locator('#price-input').fill('7.99'); await h.page.locator('#save-price').click();
+    await h.page.waitForFunction(() => /7\.99/.test(document.querySelector('.price').textContent));
+    assert.match(await h.page.locator('.original-price').innerText(), /8\.99/);
+    assert.deepEqual(await h.page.locator('.product-salidas tbody tr').allTextContents(), ['29345Última salidaUSD\u00a08.9909/10/2026', '29317USD\u00a09.9908/10/2026']);
+    await checkNoOverflow(h.page);
+    await h.page.screenshot({ path: path.join(OUTPUT, 'mobile-salidas.png'), fullPage: true });
+    await h.page.locator('#logout').click(); assert.equal(await h.page.locator('.product-salidas').count(), 0);
+  } finally { await h.close(); }
+});
+
+test('mobile salidas: invalid and missing invoice dates stay visible with a warning, never use registration date', async () => {
+  const h = await harness({ mobile: true });
+  try {
+    await setArchivedPdf(h, 0, { number: '99999', invoiceDate: '29/02/2025', price: '9.99' });
+    await setArchivedPdf(h, 2, { number: '29345', invoiceDate: '9/10/2026', price: '8.99' });
+    await setArchivedPdf(h, 3, { number: '99998', invoiceDate: '', price: '6.99' });
+    h.state.records = [h.state.records[0], h.state.records[2], h.state.records[3]];
+    await mobileLogin(h); await mobileLookup(h);
+    assert.match(await h.page.locator('.price').innerText(), /8\.99/);
+    assert.match(await h.page.locator('#result').innerText(), /2 coincidencias sin fecha de factura válida/);
+    const rows = await h.page.locator('.product-salidas tbody tr').allTextContents();
+    assert.equal(rows.length, 3); assert.match(rows[0], /^29345.*09\/10\/2026$/);
+    assert.match(rows[1], /^99999.*No disponible en el PDF$/); assert.match(rows[2], /^99998.*No disponible en el PDF$/);
+    assert.equal(await h.page.locator('.latest-salida').count(), 0);
+    await checkNoOverflow(h.page);
+  } finally { await h.close(); }
+});
+
 test('mobile prices: administrator saves 9.99 to 7.99, colleague reads shared override and original PDF stays unchanged',async()=>{
  const h=await harness({mobile:true});let worker;
  try{

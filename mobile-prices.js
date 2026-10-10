@@ -18,10 +18,10 @@
     const panel = node('div', '', 'price-panel'), override = state.override;
     result.querySelector('.price').textContent = override ? money(override.cents / 100) : Number.isFinite(product.pventa) ? money(product.pventa) : 'Precio no disponible';
     const source = result.querySelector('.price-source');
-    source.textContent = override ? 'Precio actualizado por un administrador · ' + new Intl.DateTimeFormat('es-PA', { timeZone: 'America/Panama', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(override.updatedAt)) : 'Precio original del PDF; no confirma el precio vigente.';
+    source.textContent = override ? 'Precio actualizado por un administrador · ' + new Intl.DateTimeFormat('es-PA', { timeZone: 'America/Panama', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(override.updatedAt)) : source.dataset.pdfLabel;
     if (override) panel.append(node('p', 'Precio original del PDF: ' + (Number.isFinite(product.pventa) ? money(product.pventa) : 'No disponible'), 'note original-price'));
     if (!state.available) panel.append(node('p', 'Precios compartidos pendientes de activación. Se muestra únicamente el precio del PDF.', 'note missing'));
-    result.append(panel);
+    result.insertBefore(panel, result.querySelector('.product-salidas'));
     if (api.status().user.role !== 'admin') return;
     const notice = node('p', '', 'note'); notice.id = 'price-notice'; notice.setAttribute('role', 'status'); panel.append(notice);
     const current = () => selected === sequence && api.status().authenticated && api.status().generation === epoch && MobileSession.currentSection === 'scanner';
