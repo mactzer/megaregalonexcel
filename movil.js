@@ -2,22 +2,11 @@
   'use strict';
   const $ = id => document.getElementById(id);
   let api, controller, scanControls, cameraGeneration = 0, busy = false;
-  let history = [], catalogReady = false, signingIn = false, accountGeneration = null, resumeCatalog = false;
+  let catalogReady = false, signingIn = false, accountGeneration = null, resumeCatalog = false;
   const status = (message, error = false) => { $('status').textContent = message; $('status').className = error ? 'error' : ''; };
   const element = (tag, text, className) => { const e = document.createElement(tag); e.textContent = text; if (className) e.className = className; return e; };
-  const time = date => new Intl.DateTimeFormat('es-PA', { timeZone: 'America/Panama', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(date));
   const invoiceDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value.split('-').reverse().join('/') : 'No disponible en el PDF';
   const money = value => Number.isFinite(value) ? new Intl.NumberFormat('es-PA', { style: 'currency', currency: 'USD' }).format(value) : 'Precio no disponible';
-  function renderHistory() {
-    $('history').replaceChildren();
-    if (!history.length) $('history').append(element('li', 'Aún no has consultado productos.'));
-    for (const entry of history) {
-      const li = document.createElement('li');
-      const info = element('span', entry.code);
-      info.append(element('small', time(entry.date)));
-      li.append(info, element('span', entry.label)); $('history').append(li);
-    }
-  }
   function stopCamera() {
     cameraGeneration++;
     if (scanControls) { scanControls.stop(); scanControls = null; }
@@ -32,7 +21,7 @@
   function clear() {
     if (controller) controller.abort();
     accountGeneration = null; resumeCatalog = false;
-    catalogReady = false; stopCamera(); history = []; renderHistory();
+    catalogReady = false; stopCamera();
     $('result').replaceChildren(); $('result').hidden = true;
     $('barcode').value = $('password').value = '';
     $('workspace').hidden = true; $('login-panel').hidden = false;
@@ -43,7 +32,7 @@
   function adoptAccount() {
     if (!api || !api.status().authenticated) return;
     const account = api.status();
-    if (accountGeneration !== account.generation) { history = []; renderHistory(); catalogReady = false; accountGeneration = account.generation; }
+    if (accountGeneration !== account.generation) { catalogReady = false; accountGeneration = account.generation; }
     $('identity').textContent = '@' + account.user.username;
     $('login-panel').hidden = true; $('workspace').hidden = false;
     if (!signingIn && !busy && !catalogReady && MobileSession.currentSection === 'scanner') prepareCatalog();
@@ -75,7 +64,6 @@
     finally { signingIn = false; $('login-button').disabled = false; }
   });
   $('logout').addEventListener('click', () => { clear(); api.mobile.logout(); });
-  $('clear-history').addEventListener('click', () => { history = []; renderHistory(); });
   $('photo-button').addEventListener('click', () => { if (!busy && catalogReady && !MobilePriceEditor.busy) $('photo-input').click(); });
   $('photo-input').addEventListener('change', async () => {
     const file = $('photo-input').files[0]; $('photo-input').value = '';
@@ -209,7 +197,7 @@
         result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : 'Este código no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
         status(failed ? 'La consulta terminó con documentos sin verificar.' : 'Consulta del archivo completada.', Boolean(failed));
       }
-      history.unshift({ code, label, date: new Date().toISOString() }); history = history.slice(0, 20); renderHistory();
+      window.dispatchEvent(new CustomEvent('mobile:consulted', { detail: { code, label, match, price } }));
       $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) { if (api.status().authenticated && (timer || !current.signal.aborted)) status(e.message, true); }
     finally { clearTimeout(timer); busy = false; $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true; if (controller === current) controller = null; }

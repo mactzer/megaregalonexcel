@@ -42,7 +42,7 @@ function fakePdf(options = {}) {
   ] : [];
   const footer = options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
     : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
-  const textContent = [text('MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),
+  const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
   const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
@@ -125,6 +125,97 @@ async function fictionalPrice(cents,version=1){
  const code='0001234567890',tag=await fixture.master.productIndex(code),encrypted=await fixture.master.encrypt(new TextEncoder().encode(JSON.stringify({code,cents})),`product-price-v1|${tag}|${version}`);
  return {workspace_id:WORKSPACE,product_tag:tag,encrypted_price:Buffer.from(encrypted).toString('base64'),version,updated_by:OWNER,updated_at:'2026-10-10T03:00:00.000Z'};
 }
+test('upgrade details: mobile and tablet open immediately above the list, close and Escape preserve scroll; desktop keeps its panel',async()=>{
+ for(const width of [390,820,1440]){
+  const h=await harness({viewport:{width,height:900}});try{
+   h.state.records=h.state.records.filter((_,i)=>i!==1).slice(0,9);await login(h.page);
+   const opener=h.page.getByRole('button',{name:/^Abrir detalle de salida /}).last();await opener.scrollIntoViewIfNeeded();await opener.evaluate(e=>window.__detailOpener=e);const before=await h.page.evaluate(()=>window.scrollY);
+   await opener.click();await h.page.locator('#traza-document-detail').waitFor();
+   if(width<1151){assert.equal(await h.page.locator('.traza-detail-dialog[open]').count(),1);const box=await h.page.locator('#traza-document-title').boundingBox();assert.ok(box.y>=0&&box.y<900);assert.equal(await h.page.getByRole('button',{name:'Cerrar detalle',exact:true}).isVisible(),true);}
+   else assert.equal(await h.page.locator('.traza-detail-dialog').count(),0);
+   assert.match(await h.page.locator('#traza-document-detail').innerText(),/Fecha de factura/);
+   if(width===390)await h.page.screenshot({path:path.join(OUTPUT,'archive-mobile-modal.png')});
+   await h.page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();await h.page.locator('#traza-document-detail').waitFor({state:'detached'});
+   assert.ok(Math.abs(await h.page.evaluate(()=>window.scrollY)-before)<2);assert.equal(await h.page.evaluate(()=>document.activeElement===window.__detailOpener),true);
+   if(width<1151){await opener.click();await h.page.keyboard.press('Escape');await h.page.locator('.traza-detail-dialog').waitFor({state:'detached'});assert.ok(Math.abs(await h.page.evaluate(()=>window.scrollY)-before)<2);}
+   await checkNoOverflow(h.page);
+  }finally{await h.close();}
+ }
+});
+
+test('upgrade history: A saves encrypted query, B sees it by Realtime, F5 and a fresh browser retain it without duplicating subscriptions',async()=>{
+ const a=await harness({mobile:true}),b=await harness({mobile:true,role:'user'});let reopened;
+ try{
+  a.state.records=a.state.records.slice(0,1);b.state.records=b.state.records.slice(0,1);b.state.queries=a.state.queries;b.state.sockets=a.state.sockets;
+  await mobileLogin(a);await mobileLogin(b,'colega');assert.equal(a.state.sockets.size,2);
+  const reads=a.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;await mobileLookup(a);
+  await a.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890'));
+  await b.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890'));
+  assert.equal(a.state.queries.size,1);assert.equal(await b.page.locator('#history li').count(),1);assert.match(await b.page.locator('#history').innerText(),/@administrador/);
+  const row=[...a.state.queries.values()][0],request=a.state.requests.find(r=>r.pathname.endsWith('mega_product_query_add'));
+  assert.doesNotMatch(request.body,/0001234567890|Producto ficticio/);const clear=await fixture.master.decrypt(new Uint8Array(Buffer.from(row.encrypted_query,'base64')),'product-query-v1|'+row.id);assert.equal(JSON.parse(new TextDecoder().decode(clear)).code,'0001234567890');clear.fill(0);
+  assert.equal(a.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,reads,'History writes do not scan PDFs');
+  await a.page.reload();await mobileLogin(a);await a.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890'));assert.equal(a.state.queries.size,1);assert.equal(a.state.sockets.size,2);
+  for(const socket of a.state.sockets)for(let n=0;n<2;n++)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table:'mega_product_queries',record:{workspace_id:WORKSPACE}}}}));
+  await b.page.locator('#clear-history').click();assert.equal(await b.page.locator('#history li').count(),1);
+  const stored=new Map(a.state.queries);await a.close();await b.close();reopened=await harness({mobile:true,role:'user'});reopened.state.records=reopened.state.records.slice(0,1);reopened.state.queries=stored;
+  await mobileLogin(reopened,'colega');await reopened.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890'));assert.equal(await reopened.page.locator('#history li').count(),1);assert.equal(reopened.state.queryCalls,0);
+ }finally{if(reopened)await reopened.close();await a.close();await b.close();}
+});
+
+test('upgrade history: lost save acknowledgement retries the same ID across reload; failed refresh retains data and revoked access clears it',async()=>{
+ const h=await harness({mobile:true});let release;try{
+  h.state.records=h.state.records.slice(0,1);await mobileLogin(h);h.state.dropQueryResponse=true;await mobileLookup(h);
+  await h.page.waitForFunction(()=>document.querySelector('#history-status').textContent.startsWith('Consulta pendiente de guardar.'));assert.equal(h.state.queries.size,1);const saved=[...h.state.queries.values()][0];
+  h.state.dropQueryResponse=false;await h.page.reload();await mobileLogin(h);await h.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890')&&document.querySelector('#retry-history').hidden);
+  assert.equal(h.state.queries.size,1);assert.equal([...h.state.queries.values()][0].id,saved.id);assert.ok(h.state.queryCalls>=2);
+  h.state.failQueries=503;await h.page.locator('#clear-history').click();await h.page.waitForFunction(()=>document.querySelector('#history-status').classList.contains('missing'));assert.match(await h.page.locator('#history').innerText(),/0001234567890/);assert.match(await h.page.locator('#history-status').innerText(),/Se conserva/);
+  h.state.failQueries=0;h.state.noMembership=true;
+  const gate=new Promise(resolve=>{release=resolve;});await h.context.route('**/rest/v1/mega_audit_members?*',async route=>{await gate;await route.fulfill({status:200,contentType:'application/json',body:'[]'});});
+  await h.page.locator('#clear-history').click();release();await h.page.locator('#login-panel').waitFor({state:'visible'});assert.doesNotMatch(await h.page.locator('#history').innerText(),/0001234567890/);
+ }finally{if(release)release();await h.close();}
+});
+
+test('upgrade operations: double save, changed export and another user reuse one invoice across reload; explicit legitimate movement stays separate',async()=>{
+ const a=await harness(),b=await harness({role:'user'});try{
+  a.state.records=a.state.records.slice(0,1);await login(a.page);await convert(a.page);
+  await downloadAction(a,()=>a.page.evaluate(()=>{const b=document.querySelector('#export-button');b.click();b.click();b.click();}));assert.equal(a.state.recordCalls,1);assert.equal(a.state.records.length,2);
+  const created=a.state.records.find(r=>r.document_tag),originalMetadata=created.encrypted_metadata,originalPdf=Buffer.from(a.state.storage.get(`${WORKSPACE}/${OWNER}/${created.id}/pdf.bin`));
+  await a.page.locator('#excel-file-name').fill('Otra presentación.xlsx');await downloadAction(a,()=>a.page.locator('#export-button').click());assert.equal(a.state.recordCalls,1);assert.equal(a.state.records.length,2);
+  await a.page.reload();await login(a.page);await convert(a.page);await downloadAction(a,()=>a.page.locator('#export-button').click());assert.equal(a.state.recordCalls,1);
+  b.state.records=a.state.records;b.state.storage=a.state.storage;b.state.operations=a.state.operations;b.state.sockets=a.state.sockets;
+  await login(b.page,'index.html',{username:'colega'});await convert(b.page);await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,0);assert.equal(b.state.records.length,2);
+  assert.equal(created.encrypted_metadata,originalMetadata);assert.deepEqual(a.state.storage.get(`${WORKSPACE}/${OWNER}/${created.id}/pdf.bin`),originalPdf);
+  await b.page.locator('#new-movement').click();await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);assert.equal(b.state.records.length,3);assert.equal(b.state.records.filter(r=>r.operation_kind==='separate').length,1);
+  await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);
+  await a.page.evaluate(()=>TrazaUI.navigate('archive'));await a.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===3);
+  for(const socket of a.state.sockets)for(let n=0;n<2;n++)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table:'mega_audit_records',record:{workspace_id:WORKSPACE}}}}));
+  await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await waitUnits(a.page);assert.equal(await a.page.locator('.audit-table tbody tr').count(),3);
+ }finally{await a.close();await b.close();}
+});
+
+test('upgrade history: missing migration is actionable and tampered ciphertext is unverified rather than a false empty history',async()=>{
+ const h=await harness({mobile:true});try{
+  h.state.records=h.state.records.slice(0,1);h.state.missingUpgrade=true;await mobileLogin(h);await h.page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('Activa las consultas'));
+  assert.equal(await h.page.locator('#history-status a[href="supabase-consultas.html"]').count(),1);assert.match(await h.page.locator('#history').innerText(),/pendiente de recuperar/);
+  h.state.missingUpgrade=false;await h.page.locator('#clear-history').click();await mobileLookup(h);await h.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('0001234567890'));
+  const original=[...h.state.queries.values()][0];h.state.queries.set(original.id,{...original,encrypted_query:original.encrypted_query.slice(0,-5)+'AAAA='});await h.page.locator('#clear-history').click();await h.page.waitForFunction(()=>document.querySelector('#history-status').textContent.includes('no pudieron verificarse'));
+  assert.match(await h.page.locator('#history').innerText(),/pendientes de verificar/);assert.doesNotMatch(await h.page.locator('#history').innerText(),/Aún no hay/);
+ }finally{await h.close();}
+});
+
+test('upgrade duplicates: byte verification plus explicit admin decision links a true legacy duplicate while preserving distinct movements and original files',async()=>{
+ const h=await harness();try{
+  await setArchivedPdf(h,2,{number:'00123'},{salida_numero:'00123'});h.state.records=[h.state.records[0],h.state.records[2],h.state.records[3]];const storage=new Map([...h.state.storage].map(([name,data])=>[name,Buffer.from(data)]));
+  await login(h.page);await h.page.locator('#review-duplicates').click();await h.page.locator('.duplicate-group').waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);
+  const candidate=h.page.locator('.duplicate-record').last();await candidate.locator('input:not([type=checkbox])').fill('Mismo documento y misma operación confirmada por el administrador.');await candidate.locator('input[type=checkbox]').check();await candidate.getByRole('button',{name:'Vincular como duplicado',exact:true}).click();await candidate.getByText('Duplicado vinculado.',{exact:false}).waitFor();
+  const linked=h.state.records.find(row=>row.duplicate_of);assert.ok(linked);assert.equal(h.state.records.length,3);assert.deepEqual(h.state.storage,storage);
+  await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 00123',exact:true}).click();await h.page.locator('.linked-records').waitFor();
+  await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);const saved=await h.page.evaluate(()=>window.__picker.files[0]);assert.deepEqual(Buffer.from(saved.bytes),fixture.pdf);assert.equal(h.state.recordCalls,0);
+ }finally{await h.close();}
+});
+
 test('mobile salidas: latest invoice selects 8.99 despite later upload of 9.99, history survives cache and admin override', async () => {
   const h = await harness({ mobile: true });
   try {
@@ -363,6 +454,7 @@ test('mobile scanner: encrypted index survives reload, queries have no PDF reque
     assert.doesNotMatch(ciphertext[0], /Producto ficticio|0001234567890/);
     await mobileLogin(h);
     assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length, firstDownloads, 'Reopening the page reuses authenticated encrypted data');
+    await h.page.waitForFunction(() => document.querySelector('#history').textContent.includes('Aún no hay consultas compartidas'));
     const delay = new Promise(resolve => { release = resolve; });
     await h.context.route('**/rest/v1/mega_audit_members?*', async route => { await delay; await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([{ role: 'admin' }]) }); });
     await h.page.locator('#barcode').fill('0001234567890');
@@ -371,7 +463,9 @@ test('mobile scanner: encrypted index survives reload, queries have no PDF reque
     await h.page.waitForFunction(() => document.querySelector('#status').textContent.includes('cinco segundos'));
     assert.ok(performance.now() - started < 5500, 'A stalled service cannot keep verification running indefinitely');
     assert.equal(await h.page.locator('#result').isVisible(), false);
+    assert.equal(h.state.queries.size, 0, 'A failed verification does not register a completed query');
     release();
+    await h.page.waitForFunction(() => document.querySelector('#history').textContent.includes('Aún no hay consultas compartidas'));
     assert.match(await h.page.locator('#history').textContent(), /Aún no/);
   } finally { if (release) release(); await h.close(); }
 });
@@ -423,18 +517,23 @@ test('mobile scanner: complete absence and unreadable PDF have distinct outcomes
 
 test('mobile scanner: authorization loss aborts lookup and removes previous product and session history', async () => {
   const h = await harness({ mobile: true });
+  let release;
   try {
     await mobileLogin(h);
     await h.page.locator('#barcode').fill('0001234567890');
     await h.page.locator('#search').click();
     await h.page.waitForFunction(() => document.querySelector('#result').textContent.includes('PRODUCTO ENCONTRADO'));
-    await h.context.route('**/rest/v1/mega_audit_members?*', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'unauthorized' }) }));
+    await h.page.waitForFunction(() => document.querySelector('#history').textContent.includes('0001234567890'));
+    const gate=new Promise(resolve=>{release=resolve;});
+    await h.context.route('**/rest/v1/mega_audit_members?*', async route => {await gate;await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ code: 'unauthorized' }) });});
     await h.page.locator('#search').click();
+    release();
     await h.page.locator('#login-panel').waitFor({ state: 'visible' });
     assert.equal(await h.page.locator('#result').textContent(), '');
     assert.equal(await h.page.locator('#workspace').isVisible(), false);
     assert.match(await h.page.locator('#history').innerText(), /Aún no/);
-  } finally { await h.close(); }
+    assert.equal(h.state.queries.size,1,'Revocation clears the private view, not the shared database record');
+  } finally { if(release)release();await h.close(); }
 });
 
 test('mobile scanner: ZXing reads an actual EAN-13 from a camera stream and stops tracks after one lookup', async () => {
@@ -501,7 +600,11 @@ async function harness(options = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowRecord: null, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
-  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER});
+  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),sockets:new Set()});
+  const broadcast=table=>{for(const socket of state.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table,type:'INSERT',record:{workspace_id:WORKSPACE}}}}));};
+  await context.routeWebSocket('wss://aixsnmsmgyejcbtuilwt.supabase.co/**',socket=>{
+    state.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:[{id:1}]}}}));});socket.onClose(()=>state.sockets.delete(socket));
+  });
   page.on('download', download => state.downloads.push(download.suggestedFilename()));
   await context.addInitScript(() => {
     window.__picker = { cancel: false, failWrite: false, files: [], calls: [] };
@@ -572,7 +675,7 @@ async function harness(options = {}) {
     }
     if (pathname === '/auth/v1/signup') { const body = request.postDataJSON(); await json({ access_token: 'fictional-user-token', refresh_token: 'fictional-refresh', user: { id: OTHER, email: body.email } }); return; }
     if (pathname === '/auth/v1/logout') { await route.fulfill({ status: 204 }); return; }
-    if (pathname === '/rest/v1/mega_audit_members') { await json([{ role: state.role }]); return; }
+    if (pathname === '/rest/v1/mega_audit_members') { await json(state.noMembership?[]:[{ role: state.role }]); return; }
     if (pathname === '/rest/v1/mega_audit_workspace') { await json([{ key_fingerprint: fixture.master.fingerprint }]); return; }
     if (pathname === '/rest/v1/mega_audit_user_keys') { await json([{ wrapped_key:state.actor===OTHER ? fixture.colleagueWrapped : fixture.wrapped }]); return; }
     if(pathname==='/rest/v1/mega_product_prices'){
@@ -591,13 +694,37 @@ async function harness(options = {}) {
       await json([{ user_id: OWNER, username: 'administrador', role: state.role }, { user_id: OTHER, username: 'colega', role: 'user' }]); return;
     }
     if (pathname === '/rest/v1/rpc/mega_audit_add_member') { const body = request.postDataJSON(); await json({ user_id: OTHER, username: body.p_username, role: body.p_role }); return; }
-    if (pathname === '/rest/v1/rpc/mega_audit_record') {
+    if (pathname === '/rest/v1/mega_product_queries') {
+      if(state.missingUpgrade){await json({code:'PGRST205'},404);return;}if(state.failQueries){await json({code:'fictional_error'},state.failQueries);return;}
+      await json([...state.queries.values()].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id.localeCompare(a.id)).slice(0,20));return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_product_query_add'){
+      state.queryCalls++;if(state.missingUpgrade){await json({code:'PGRST202'},404);return;}if(state.failQueries){await json({code:'fictional_error'},state.failQueries);return;}
+      const body=request.postDataJSON();let row=state.queries.get(body.p_id);
+      if(!row){row={id:body.p_id,workspace_id:WORKSPACE,created_by:state.actor,created_at:new Date().toISOString(),encrypted_query:body.p_encrypted_query};state.queries.set(row.id,row);broadcast('mega_product_queries');}
+      if(state.dropQueryResponse){await route.abort('failed');return;}
+      await json(row);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_audit_operation_claim'){
+      if(state.missingUpgrade){await json({code:'PGRST202'},404);return;}
+      const body=request.postDataJSON(),prior=state.operations.get(body.p_operation_tag);
+      if(prior&&prior.record_id){await json({record:state.records.find(row=>row.id===prior.record_id)});return;}
+      if(prior&&prior.id!==body.p_request_id){await json({code:'40001'},409);return;}
+      if(body.p_existing_id){state.operations.set(body.p_operation_tag,{record_id:body.p_existing_id});await json({record:state.records.find(row=>row.id===body.p_existing_id)});return;}
+      const reserved={id:body.p_request_id,owner_id:state.actor};state.operations.set(body.p_operation_tag,reserved);await json(reserved);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_audit_review_duplicate'){
+      if(state.role!=='admin'){await json({code:'42501'},403);return;}
+      const body=request.postDataJSON(),row=state.records.find(r=>r.id===body.p_record_id);Object.assign(row,{document_tag:body.p_document_tag,duplicate_of:body.p_canonical_id,operation_kind:body.p_canonical_id?'legacy':'separate',reviewed_by:state.actor,reviewed_at:new Date().toISOString(),encrypted_review:body.p_encrypted_review});broadcast('mega_audit_records');await json(row);return;
+    }
+    if (pathname === '/rest/v1/rpc/mega_audit_record_v2') {
       state.recordCalls++;
       if (state.slowRecord) await state.slowRecord;
       if (state.failRecord) { await json({ code: 'fictional_error' }, state.failRecord); return; }
       const body = request.postDataJSON();
       let row = state.records.find(row => row.id === body.p_id);
-      if (!row) { row = { id: body.p_id, created_by: OWNER, workspace_id: WORKSPACE, created_at: '2026-10-09T03:00:00.000Z', salida_tag: body.p_salida_tag, encrypted_metadata: body.p_encrypted_metadata }; state.records.unshift(row); }
+      if (!row) { row = { id: body.p_id, created_by: state.actor, workspace_id: WORKSPACE, created_at: '2026-10-09T03:00:00.000Z', salida_tag: body.p_salida_tag, encrypted_metadata: body.p_encrypted_metadata,document_tag:body.p_document_tag,operation_kind:body.p_document_tag===body.p_operation_tag?'primary':'separate' }; state.records.unshift(row); }
+      state.operations.set(body.p_operation_tag,{record_id:row.id});broadcast('mega_audit_records');
       await json(row); return;
     }
     if (pathname === '/rest/v1/mega_audit_records') {
@@ -605,6 +732,9 @@ async function harness(options = {}) {
       if (state.failList) { await json({ code: 'fictional_error' }, state.failList); return; }
       const eq = key => (url.searchParams.get(key) || '').replace(/^eq\./, '');
       let rows = state.records.filter(row => (!eq('id') || row.id === eq('id')) && (!eq('salida_tag') || row.salida_tag === eq('salida_tag')) && (!eq('created_by') || row.created_by === eq('created_by')));
+      const duplicate=url.searchParams.get('duplicate_of');if(duplicate==='is.null')rows=rows.filter(row=>!row.duplicate_of);else if(duplicate)rows=rows.filter(row=>row.duplicate_of===eq('duplicate_of'));
+      if(url.searchParams.get('operation_kind')==='neq.separate')rows=rows.filter(row=>row.operation_kind!=='separate');
+      if((url.searchParams.get('order')||'').includes('created_at.asc'))rows.sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
       for (const clause of url.searchParams.getAll('created_at')) { if (clause.startsWith('gte.')) rows = rows.filter(row => row.created_at >= new Date(clause.slice(4)).toISOString()); if (clause.startsWith('lt.')) rows = rows.filter(row => row.created_at < new Date(clause.slice(3)).toISOString()); }
       const total = rows.length, offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || total);
       rows = rows.slice(offset, offset + limit);
@@ -628,7 +758,7 @@ async function harness(options = {}) {
 
 async function login(page, filename = 'index.html', options = {}) {
   await page.goto(`${origin}/${filename}#archivo`);
-  await page.locator('#audit-cloud-login-username').fill('administrador');
+  await page.locator('#audit-cloud-login-username').fill(options.username||'administrador');
   await page.locator('#audit-cloud-login-password').fill(PASSWORD);
   await page.locator('#audit-bar').getByRole('button', { name: 'Iniciar sesión', exact: true }).click();
   await page.waitForFunction(() => window.AuditCloud && typeof window.AuditCloud.status === 'function' && window.AuditCloud.status().authenticated);
@@ -661,7 +791,7 @@ async function convert(page) {
   await page.evaluate(() => window.TrazaUI.navigate('converter'));
   assert.equal(await page.locator('#drop-zone').isVisible(), true);
   assert.equal(await page.locator('#converter-title').innerText(), 'Nueva salida');
-  await page.locator('#file-input').setInputFiles({ name: 'Salida ficticia 00123.pdf', mimeType: 'application/pdf', buffer: fixture.pdf });
+  await page.locator('#file-input').setInputFiles({ name: 'Salida ficticia 00123.pdf', mimeType: 'application/pdf', buffer: fakePdf({variant:'MegaControl - FACTURA ENTRANTE FICTICIA, SIN VALOR COMERCIAL'}) });
   await page.locator('#export-button:not([disabled])').waitFor();
   assert.equal(await page.locator('#salida-number').inputValue(), '00123');
 }
@@ -771,10 +901,12 @@ for (const density of [1, 3]) {
       assert.ok(Math.abs(first.width - first.available) <= 2, 'Fit-to-width uses the actual preview content width');
       await checkNoOverflow(h.page);
       const before = h.state.requests.filter(request => request.pathname.startsWith('/storage/') && request.method === 'GET').length;
-      await h.page.setViewportSize({ width: 1080, height: 1000 });
+      // The new tablet dialog has a bounded width. Resize below that bound to
+      // exercise actual content-width rerendering rather than the former stack.
+      await h.page.setViewportSize({ width: 580, height: 1000 });
       await h.page.waitForFunction(previous => {
         const canvas = document.querySelector('[data-testid="pdf-preview"]');
-        return canvas && canvas.width > previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
+        return canvas && canvas.width < previous && canvas.closest('.traza-preview-scroll').getAttribute('aria-busy') === 'false';
       }, first.bitmapWidth);
       const resized = await previewGeometry(h.page);
       assertCrispPortrait(resized, Math.max(2, density));
@@ -1050,7 +1182,7 @@ test('converter: navigation keeps loaded PDF and session; native Excel table and
     const saved = await downloadAction(h, () => h.page.locator('#export-button').click());
     const result = await h.page.evaluate(() => ({ picker: window.__picker, events: window.__events }));
     assert.equal(result.picker.calls.length, 0, 'Excel uses browser downloads even when the native folder picker is available');
-    const auditPosition = result.events.indexOf('fetch:/rest/v1/rpc/mega_audit_record');
+    const auditPosition = result.events.indexOf('fetch:/rest/v1/rpc/mega_audit_record_v2');
     const downloadPosition = result.events.indexOf('download:Salida 00123 revisada.xlsx');
     assert.ok(auditPosition >= 0 && downloadPosition > auditPosition, 'The browser download starts only after audit registration');
     assert.equal(h.state.recordCalls, 1);
@@ -1167,12 +1299,12 @@ test('converter: audit HTTP 500, network failure and session 401 never produce a
     assert.equal(h.state.records.length, fixture.records.length);
     assert.match(await h.page.locator('#message').innerText(), /Supabase|500|operación/i);
     h.state.failRecord = 0;
-    await h.context.route('**/rest/v1/rpc/mega_audit_record', route => route.abort('failed'));
+    await h.context.route('**/rest/v1/rpc/mega_audit_record_v2', route => route.abort('failed'));
     await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
     assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
     assert.equal(h.state.downloads.length, 0);
     assert.match(await h.page.locator('#message').innerText(), /conectar|conexión/i);
-    await h.context.unroute('**/rest/v1/rpc/mega_audit_record');
+    await h.context.unroute('**/rest/v1/rpc/mega_audit_record_v2');
     h.state.failRecord = 401;
     await h.page.locator('#export-button').click();
     await h.page.waitForFunction(() => !window.AuditCloud.status().authenticated);
@@ -1189,7 +1321,7 @@ test('converter: an audit response arriving after logout cannot start an Excel d
     await login(h.page); await convert(h.page);
     h.state.slowRecord = new Promise(resolve => { release = resolve; });
     await h.page.locator('#export-button').click();
-    await h.page.waitForFunction(() => window.__events.some(event => event === 'fetch:/rest/v1/rpc/mega_audit_record'));
+    await h.page.waitForFunction(() => window.__events.some(event => event === 'fetch:/rest/v1/rpc/mega_audit_record_v2'));
     await profile(h.page);
     await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
     release(); h.state.slowRecord = null;

@@ -148,6 +148,8 @@ tbody tr:hover td { background: #f3f8f5; }
 .audit-cloud-unreadable td { color: #953139; background: #fff7f6; }
 .audit-pagination { font-size: 11px; gap: 12px; }
 .traza-detail { min-width: 0; position: sticky; top: 20px; margin: 0; padding: 21px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
+.traza-detail-dialog{border:0;padding:0;width:min(640px,calc(100% - 24px));max-width:none;max-height:calc(100dvh - 24px);border-radius:12px;overscroll-behavior:contain;box-shadow:0 20px 70px #102e2a40}.traza-detail-dialog::backdrop{background:#102e2a80}.traza-detail-dialog .traza-detail{position:static;border:0}.traza-detail-dialog .traza-detail-header{position:sticky;top:-18px;background:#fff;z-index:1;padding:12px 0;margin-top:-12px}.traza-detail-dialog .traza-detail-header button{min-height:44px}
+.duplicate-group{margin:16px 0}.duplicate-group select,.duplicate-group input:not([type=checkbox]){width:100%;max-width:100%;min-height:44px}.duplicate-record{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}.duplicate-record label{display:block;font-size:12px;margin:12px 0}.duplicate-record button{margin:5px 8px 5px 0}.duplicate-record input[type=checkbox]{width:auto;min-height:0}.linked-records{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .traza-detail h2, .traza-detail h3 { margin: 0 0 9px; font-size: 19px; font-weight: 650; letter-spacing: -.02em; }
 .traza-detail .traza-dialog-header { margin-bottom: 20px; }
 .traza-detail-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; margin: 0 0 20px; }

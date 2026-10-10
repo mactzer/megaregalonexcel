@@ -260,7 +260,16 @@
       if (!value || value.length > 80 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('Código de producto inválido.');
       return hex(await crypto.subtle.sign('HMAC', indexKey, encoder.encode('megaregalonexcel/catalog/product/v1|' + value)));
     }
-    return Object.freeze({ encrypt, decrypt, blindIndex, productIndex, fingerprint });
+    async function documentIndex(value, movement) {
+      const data = copyBytes(value);
+      try {
+        if (!data.length) throw new Error('Falta el PDF de la operación.');
+        if (movement !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(movement)) throw new Error('Movimiento inválido.');
+        const digest = hex(await crypto.subtle.digest('SHA-256', data));
+        return hex(await crypto.subtle.sign('HMAC', indexKey, encoder.encode('megaregalonexcel/audit/document/v1|' + digest + (movement ? '|movement|' + movement : ''))));
+      } finally { data.fill(0); }
+    }
+    return Object.freeze({ encrypt, decrypt, blindIndex, productIndex, documentIndex, fingerprint });
   }
 
   const api = Object.freeze({ createRecoveryKey, unlock, unlockUser, normalizeUsername, encodeBase64Url, decodeBase64Url });

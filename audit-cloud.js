@@ -17,6 +17,7 @@
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   let session = null;
   let mobileCatalog = null;
+  let realtime = null;
   let member = null;
   let username = "";
   let master = null;
@@ -147,6 +148,7 @@
 
   function clearSession() {
     generation++;
+    if (realtime) realtime.close(); realtime = null;
     if (mobileCatalog) mobileCatalog.clear();
     mobileCatalog = null;
     for (const controller of requests) controller.abort();
@@ -323,6 +325,14 @@
   function rpc(name, args) {
     return request("/rest/v1/rpc/" + name, { method: "POST", body: args });
   }
+  async function activeRecords(path, options) {
+    try { return await request(path + '&duplicate_of=is.null', options); }
+    catch(error) {
+      // Until the additive migration is installed, original records stay readable.
+      if (!['PGRST204','42703'].includes(error.code)) throw error;
+      return request(path, options);
+    }
+  }
 
   function ownQuery(table, columns) {
     return "/rest/v1/" + table + "?workspace_id=eq." + CONFIG.workspace + "&user_id=eq." + session.user.id + "&select=" + columns;
@@ -385,10 +395,23 @@
       renderAccountBar();
       renderAuditPage();
       window.dispatchEvent(new CustomEvent("audit:authenticated", { detail: status() }));
+      startRealtime();
     } catch (error) {
       if (epoch === generation) clearSession();
       throw error;
     }
+  }
+
+  function startRealtime() {
+    if (realtime) realtime.close(); realtime = null;
+    if (!window.AuditRealtime || !status().authenticated) return;
+    const epoch = generation;
+    realtime = window.AuditRealtime.connect({ url: CONFIG.url, key: CONFIG.key, workspace: CONFIG.workspace,
+      isCurrent: () => generation === epoch && status().authenticated,
+      async getAccessToken() { await refreshIfNeeded(); assertAccount(epoch); return session.access_token; },
+      onChange(table) { window.dispatchEvent(new CustomEvent('audit:changed', { detail: { table } })); },
+      onStatus(mode) { window.dispatchEvent(new CustomEvent('audit:sync-status', { detail: { mode } })); }
+    });
   }
 
   async function signup(rawUsername, password, viewGuard) {
@@ -517,7 +540,7 @@
         typeof metadata.username !== "string" || typeof metadata.pdf_name !== "string" || typeof metadata.excel_name !== "string") {
       throw new Error("La información cifrada de una salida no es válida.");
     }
-    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id });
+    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id, document_tag:record.document_tag,operation_kind:record.operation_kind,duplicate_of:record.duplicate_of,reviewed_by:record.reviewed_by,reviewed_at:record.reviewed_at });
   }
 
   async function getDocument(record, kind, key, guard, signal) {
@@ -624,8 +647,41 @@
       }
     };
     let snapshot = pending.get(id);
+    let source;
     try {
     guard();
+    if (!options.pdfFile || typeof options.pdfFile.arrayBuffer !== 'function' || options.pdfFile.size > FILE_LIMIT) throw new Error('Carga un PDF válido de hasta 25 MB.');
+    source = new Uint8Array(await options.pdfFile.arrayBuffer()); guard();
+    const documentTag = await key.documentIndex(source); guard();
+    const operationTag = options.movementId ? await key.documentIndex(source, options.movementId) : documentTag; guard();
+    let existingId = null;
+    if (!options.movementId) {
+      const salidaTag = await key.blindIndex(String(options.salidaNumero)); guard();
+      for (let offset=0; !existingId; offset+=500) {
+        let candidates;
+        try { candidates = await request('/rest/v1/mega_audit_records?workspace_id=eq.' + CONFIG.workspace + '&salida_tag=eq.' + salidaTag + '&duplicate_of=is.null&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset=' + offset); }
+        catch(error) { throw upgradeError(error); }
+        guard(); if (!Array.isArray(candidates)) throw new Error('No se pudo comprobar el origen de la salida.');
+        for (const candidate of candidates) {
+          let previousPdf;
+          try { previousPdf=await getDocument(candidate,'pdf',key,guard); guard(); if(equalBytes(source,previousPdf)){existingId=candidate.id;break;} }
+          finally { if(previousPdf)previousPdf.fill(0); }
+        }
+        if(candidates.length<500)break;
+      }
+    }
+    let claim;
+    try { claim = await rpc('mega_audit_operation_claim',{p_workspace_id:CONFIG.workspace,p_operation_tag:operationTag,p_document_tag:documentTag,p_request_id:id,p_existing_id:existingId}); }
+    catch(error) { throw upgradeError(error); }
+    guard();
+    if(claim && claim.record) {
+      let previousPdf;
+      try { previousPdf=await getDocument(claim.record,'pdf',key,guard);guard();if(!equalBytes(source,previousPdf))throw new Error('La operación guardada contiene otro PDF. No se reutilizó el registro.'); }
+      finally { if(previousPdf)previousPdf.fill(0); }
+      const saved=await decryptedRecord(claim.record,key);guard();clearPending();
+      window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));return saved;
+    }
+    if(!claim || claim.id!==id || claim.owner_id!==owner)throw new Error('No se pudo confirmar la reserva de la operación. Reintenta sin cambiar de identificador.');
     if (!snapshot) {
       clearPending();
       snapshot = await prepareRecord(options, id, key, owner, guard);
@@ -664,9 +720,9 @@
       guard();
       await putDocument(recordPath(row, "excel"), snapshot.encryptedExcel, guard);
       guard();
-      let result = await rpc("mega_audit_record", {
+      let result = await rpc("mega_audit_record_v2", {
         p_id: id, p_workspace_id: CONFIG.workspace, p_salida_tag: snapshot.tag,
-        p_encrypted_metadata: snapshot.encryptedMetadata, p_idempotency_key: id
+        p_encrypted_metadata: snapshot.encryptedMetadata, p_idempotency_key: id, p_operation_tag: operationTag, p_document_tag: documentTag
       });
       guard();
       if (Array.isArray(result) && result.length === 1) result = result[0];
@@ -682,6 +738,7 @@
     window.dispatchEvent(new CustomEvent("audit:recorded", { detail: saved }));
     return saved;
     } finally {
+      if (source) source.fill(0);
       // Retain encrypted upload bytes for safe retries; keep clear copies only
       // while comparing the operation's documents.
       if (snapshot) {
@@ -1017,8 +1074,11 @@
     detail.buffers.clear();
     detail.panel.replaceChildren();
     detail.panel.remove();
+    if (detail.dialog) { detail.dialog.close(); detail.dialog.remove(); openDialogs.delete(detail.dialog); }
+    if (detail.restoreOverflow !== undefined) document.documentElement.style.overflow = detail.restoreOverflow;
     view.layout.classList.remove("has-detail");
-    if (restore && detail.opener.isConnected) detail.opener.focus();
+    if (restore && detail.opener.isConnected) { detail.opener.focus({ preventScroll: true }); window.scrollTo(detail.scrollX, detail.scrollY); }
+    if (restore && view.needsRefresh && view.checkUpdates) view.checkUpdates();
   }
 
   function disposeArchive() {
@@ -1052,8 +1112,14 @@
     detail.units.textContent = unitsTextFor(record);
     detail.units.dataset.unitState = record.unitCheck.state;
     detail.products.textContent = record.row_count.toLocaleString("es-PA");
-    detail.unitsNote.textContent = record.unitCheck.state === "unverified" ? record.unitCheck.message :
-      record.unitCheck.changed ? "Unidades corregidas desde el PDF original. Usa Editar Excel para descargar el Excel actualizado; el Excel original se conserva." : "";
+    const checking = record.unitCheck.state === 'checking';
+    if(detail.documentNumber)detail.documentNumber.textContent=record.unitCheck.documentNumber||(checking?'Verificando…':'No disponible en el PDF');
+    if(detail.invoiceDate)detail.invoiceDate.textContent=record.unitCheck.invoiceDate||(checking?'Verificando…':'No disponible en el PDF');
+    const notes=[];
+    if(record.unitCheck.state==='unverified')notes.push(record.unitCheck.message);
+    if(record.unitCheck.documentNumber&&record.unitCheck.documentNumber!==record.salida_numero)notes.push('El número guardado difiere del número impreso en el PDF. Revisa el origen; no se modificó el historial.');
+    if(record.unitCheck.changed)notes.push('Unidades corregidas desde el PDF original. Usa Editar Excel para descargar el Excel actualizado; el Excel original se conserva.');
+    detail.unitsNote.textContent=notes.join(' ');
     detail.unitsNote.hidden = !detail.unitsNote.textContent;
   }
 
@@ -1077,7 +1143,7 @@
       if (!summary || !summary.complete || summary.missingUnits !== 0 || !Number.isFinite(summary.totalUnits) || summary.totalUnits < 0 || !Number.isInteger(summary.rowCount) || summary.rowCount <= 0) {
         throw new Error("El PDF contiene productos sin unidades legibles. Revisa el documento original antes de usar su total.");
       }
-      const verified = { totalUnits: summary.totalUnits, rowCount: summary.rowCount };
+      const verified = { totalUnits: summary.totalUnits, rowCount: summary.rowCount,documentNumber:summary.documentNumber,invoiceDate:summary.invoiceDate };
       // Only numerical summaries and encrypted revision markers live in this
       // session cache. PDF bytes, products and descriptions are never retained.
       verifiedUnitSummaries.set(record.id, { metadata: record.unitRevision, summary: verified });
@@ -1371,7 +1437,7 @@
     const panel = node("aside", undefined, "traza-detail audit-panel");
     panel.id = "traza-document-detail";
     panel.setAttribute("aria-labelledby", "traza-document-title");
-    const detail = { panel, opener, record, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null };
+    const detail = { panel, opener, record, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null, scrollX: window.scrollX, scrollY: window.scrollY };
     view.detail = detail;
     const guard = function () { assertView(view); if (view.detail !== detail || detail.controller.signal.aborted) throw new Error("La vista cambió."); };
     const header = node("div", undefined, "traza-detail-header");
@@ -1383,10 +1449,12 @@
     panel.append(header);
     const when = formatWhen(record.created_at);
     const facts = node("dl", undefined, "traza-detail-facts");
-    for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", unitsTextFor(record)]]) {
+    for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Número en el PDF",record.unitCheck.documentNumber||'Verificando…'],["Fecha de factura",record.unitCheck.invoiceDate||'Verificando…'],["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", unitsTextFor(record)]]) {
       const value = node("dd", pair[1]);
       if (pair[0] === "Productos") detail.products = value;
       if (pair[0] === "Unidades") detail.units = value;
+      if (pair[0] === 'Número en el PDF') detail.documentNumber=value;
+      if (pair[0] === 'Fecha de factura') detail.invoiceDate=value;
       facts.append(node("dt", pair[0]), value);
     }
     panel.append(facts);
@@ -1404,11 +1472,26 @@
     }
     const preview = createPdfPreview(detail, record, guard);
     panel.append(result, preview.element);
-    view.layout.append(panel);
-    view.layout.classList.add("has-detail");
+    if (window.matchMedia('(max-width: 1150px)').matches) {
+      const dialog = node('dialog', undefined, 'traza-detail-dialog'); detail.dialog = dialog;
+      detail.restoreOverflow = document.documentElement.style.overflow; document.documentElement.style.overflow = 'hidden';
+      dialog.setAttribute('aria-labelledby', title.id); dialog.append(panel); document.body.append(dialog); openDialogs.add(dialog);
+      dialog.addEventListener('cancel', event => { event.preventDefault(); disposeDetail(view, true); });
+      dialog.addEventListener('close', () => { if (view.detail === detail) disposeDetail(view, true); });
+      dialog.showModal();
+    } else { view.layout.append(panel); view.layout.classList.add("has-detail"); }
     close.focus({ preventScroll: true });
     const epoch = generation;
     const key = master;
+    (async function(){
+      try{
+        const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=eq.'+record.id+'&select=*&order=created_at.asc,id.asc',{signal:detail.controller.signal});guard();
+        if(!Array.isArray(rows)||!rows.length)return;
+        const linked=node('section',undefined,'linked-records');linked.append(node('h3','Registros vinculados'),node('p','Copias confirmadas de la misma operación. Se conservan sus documentos y fechas originales.','audit-muted'));
+        for(const row of rows){const original=await decryptedRecord(row,key);guard();const item=node('div',undefined,'traza-document-name');item.append(node('strong','Salida '+original.salida_numero),node('p','Registro '+formatWhen(original.created_at).date+' '+formatWhen(original.created_at).time,'audit-muted'),documentButton(original,'pdf','Guardar PDF vinculado',result,view,detail),documentButton(original,'excel','Guardar Excel vinculado',result,view,detail));linked.append(item);}
+        guard();panel.append(linked);
+      }catch(error){if(!['PGRST204','42703'].includes(error.code)&&epoch===generation&&view.detail===detail)panel.append(node('p','No se pudieron comprobar los registros vinculados. Los documentos permanecen guardados.','audit-muted'));}
+    })();
     (async function () {
       let clear;
       try {
@@ -1450,6 +1533,9 @@
     const newOutput = button("Nueva salida");
     newOutput.addEventListener("click", function () { if (window.TrazaUI) window.TrazaUI.navigate("converter"); else location.href = "index.html#nueva-salida"; });
     header.append(heading, newOutput);
+    if(status().user.role==='admin'){
+      const review=button('Revisar duplicados',true);review.id='review-duplicates';review.addEventListener('click',()=>openDuplicateReview(review));heading.append(review);
+    }
     panel.append(header);
     const form = node("form", undefined, "audit-form audit-search");
     const search = field(form, "Número exacto de salida", "search", "search", { required: false, maxLength: 60, placeholder: "Ejemplo: 0029307", autocomplete: "off" });
@@ -1502,6 +1588,7 @@
     }
 
     async function loadRecords() {
+      view.loadBusy = true;
       if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       disposeDetail(view, false);
       for (const clear of view.buffers) { try { clear.fill(0); } catch (_) {} }
@@ -1535,7 +1622,7 @@
           path += "&created_at=lt." + encodeURIComponent(end.toISOString());
         }
         const responses = await Promise.all([
-          request(path, { headers: { Prefer: "count=exact" }, raw: true, signal: controller.signal }),
+          activeRecords(path, { headers: { Prefer: "count=exact" }, raw: true, signal: controller.signal }),
           request("/rest/v1/rpc/mega_audit_authors", { method: "POST", body: { p_workspace_id: CONFIG.workspace }, signal: controller.signal })
         ]);
         guard();
@@ -1550,6 +1637,7 @@
         const rows = await responses[0].json();
         guard();
         if (!Array.isArray(rows)) throw new Error("El archivo recibido no es válido.");
+        view.currentPath=path;view.lastSignature=recordSignature(rows);view.needsRefresh=false;
         const outcomes = await Promise.allSettled(rows.map(async function (entry) {
           const decoded = await decryptedRecord(entry, key);
           guard();
@@ -1609,6 +1697,7 @@
             } else {
               const record = outcome.value;
               cells[0].append(node("strong", "Salida " + record.salida_numero));
+              if(record.operation_kind==='separate')cells[0].append(node('span','Movimiento distinto','audit-muted'));
               cells[3].textContent = unitsTextFor(record);
               cells[3].dataset.unitState = "checking";
               unitCells.push({ record, cell: cells[3] });
@@ -1656,6 +1745,7 @@
               record.unitCheck.changed = summary.totalUnits !== record.unitCheck.originalUnits || summary.rowCount !== record.unitCheck.originalRowCount;
               record.total_units = summary.totalUnits;
               record.row_count = summary.rowCount;
+              record.unitCheck.documentNumber=summary.documentNumber;record.unitCheck.invoiceDate=summary.invoiceDate;
               record.unitCheck.state = "verified";
             } catch (error) {
               guard();
@@ -1683,11 +1773,29 @@
       } finally {
         view.controller.signal.removeEventListener("abort", stop);
         if (archiveView === view && sequence === view.load) {
+          view.loadBusy=false;
           submit.disabled = clear.disabled = refresh.disabled = false;
           recordsArea.setAttribute("aria-busy", "false");
         }
       }
     }
+    let checkingUpdates=false;
+    view.checkUpdates=async function(){
+      if(view.disposed||view.page.hidden||view.page.closest('[hidden]')||document.hidden)return;
+      if(checkingUpdates||view.loadBusy||view.detail){view.needsRefresh=true;return;}
+      if(!view.currentPath)return;
+      checkingUpdates=true;const sequence=view.load;
+      try{
+        await approvedMember(view.epoch,master,view.controller.signal);assertView(view,sequence);
+        const rows=await activeRecords(view.currentPath,{signal:view.controller.signal});assertView(view,sequence);
+        view.needsRefresh=false;
+        if(recordSignature(rows)!==view.lastSignature){const scrollY=window.scrollY;await loadRecords();if(archiveView===view)window.scrollTo(window.scrollX,scrollY);}
+      }catch(error){if(archiveView===view&&!view.disposed)feedback(result,'No se pudieron sincronizar cambios. Usa Actualizar; los registros permanecen en Supabase.',true);}
+      finally{checkingUpdates=false;}
+    };
+    const changed=event=>{if(['mega_audit_records','all'].includes(event.detail.table))view.checkUpdates();};
+    window.addEventListener('audit:changed',changed,{signal:view.controller.signal});
+    const syncTimer=setInterval(view.checkUpdates,15000);view.controller.signal.addEventListener('abort',()=>clearInterval(syncTimer),{once:true});
     form.addEventListener("submit", function (event) { event.preventDefault(); applyFilters(); });
     clear.addEventListener("click", function () { search.value = from.value = to.value = author.value = ""; applyFilters(); });
     refresh.addEventListener("click", function () { verifiedUnitSummaries.clear(); loadRecords(); });
@@ -1708,6 +1816,59 @@
       quick.append(shortcut);
     }
     loadRecords();
+  }
+  function recordSignature(rows){return JSON.stringify(rows.map(row=>[row.id,row.encrypted_metadata,row.duplicate_of,row.operation_kind,row.reviewed_at]));}
+
+  async function duplicateCandidates(progress,signal){
+    const epoch=generation,key=master;await requireAdmin(epoch);priceGuard(epoch,key,signal);
+    const rows=[];
+    try{
+      for(let offset=0;;offset+=500){const page=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=is.null&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset='+offset,{signal});priceGuard(epoch,key,signal);if(!Array.isArray(page))throw new Error('Archivo inválido.');rows.push(...page);if(page.length<500)break;}
+    }catch(error){throw upgradeError(error);}
+    const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});priceGuard(epoch,key,signal);
+    const names=new Map(authors.map(row=>[row.user_id,row.username])),groups=new Map();let next=0,done=0,failed=0;
+    async function worker(){while(next<rows.length){const row=rows[next++];let clear;try{const decoded=await decryptedRecord(row,key);priceGuard(epoch,key,signal);clear=await getDocument(row,'pdf',key,()=>priceGuard(epoch,key,signal),signal);const tag=await key.documentIndex(clear);priceGuard(epoch,key,signal);if(!groups.has(tag))groups.set(tag,[]);groups.get(tag).push({...decoded,username:names.get(row.created_by)||''});}catch(error){priceGuard(epoch,key,signal);failed++;}finally{if(clear)clear.fill(0);}progress({done:++done,total:rows.length,failed});}}
+    await Promise.all([worker(),worker()]);priceGuard(epoch,key,signal);
+    return {groups:[...groups].filter(([,records])=>records.length>1).map(([documentTag,records])=>({documentTag,records:records.sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id))})),failed,total:rows.length};
+  }
+  async function reviewDuplicate(recordId,canonicalId,documentTag,reason,signal){
+    const epoch=generation,key=master;await requireAdmin(epoch);priceGuard(epoch,key,signal);
+    if(!UUID.test(recordId)||(canonicalId&&!UUID.test(canonicalId))||recordId===canonicalId||typeof reason!=='string'||reason.trim().length<8||reason.length>2048)throw new Error('Describe el motivo de la revisión (8 a 2048 caracteres).');
+    for(const id of canonicalId?[recordId,canonicalId]:[recordId]){
+      const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&id=eq.'+id+'&select=*&limit=2',{signal});priceGuard(epoch,key,signal);if(rows.length!==1)throw new Error('El registro cambió. Repite la revisión.');
+      let data;try{data=await getDocument(rows[0],'pdf',key,()=>priceGuard(epoch,key,signal),signal);if(await key.documentIndex(data)!==documentTag)throw new Error('Los documentos ya no coinciden. No se modificó el historial.');priceGuard(epoch,key,signal);}finally{if(data)data.fill(0);}
+    }
+    let clear=new TextEncoder().encode(JSON.stringify({reason:reason.trim(),recordId,canonicalId,documentTag})),encrypted;
+    try{encrypted=base64(await key.encrypt(clear,'audit-review-v1|'+recordId));}finally{clear.fill(0);}priceGuard(epoch,key,signal);
+    let result;try{result=await request('/rest/v1/rpc/mega_audit_review_duplicate',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_record_id:recordId,p_canonical_id:canonicalId,p_document_tag:documentTag,p_encrypted_review:encrypted}});}catch(error){throw upgradeError(error);}
+    priceGuard(epoch,key,signal);
+    if(!result||result.id!==recordId||(result.duplicate_of||null)!==canonicalId||result.reviewed_by!==session.user.id||result.encrypted_review!==encrypted)throw new Error('No se confirmó la clasificación. Actualiza antes de reintentar.');
+    window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return result;
+  }
+  function openDuplicateReview(opener){
+    const modal=createDialog('Revisión de duplicados',opener),controller=new AbortController(),epoch=generation;
+    modal.dialog.addEventListener('close',()=>controller.abort(),{once:true});
+    const content=modal.content,info=node('p','Se comparan los bytes completos de los PDF. Compartir productos, cantidades, fecha o número no basta. Confirma si cada coincidencia es la misma operación o un movimiento legítimo distinto. Los archivos se conservan.','audit-muted'),state=node('p','Comprobando documentos…','audit-state'),groups=node('div');content.append(info,state,groups);
+    const current=()=>modal.dialog.open&&epoch===generation&&!controller.signal.aborted;
+    (async()=>{try{
+      const report=await duplicateCandidates(p=>{if(current())state.textContent=p.done+' de '+p.total+' PDF comprobados · '+p.failed+' sin verificar.';},controller.signal);if(!current())return;
+      state.textContent=report.groups.length+' grupos con PDF idéntico.'+(report.failed?' Hay '+report.failed+' documentos sin verificar. No se clasificaron.':'');
+      for(const group of report.groups){
+        const box=node('section',undefined,'audit-panel duplicate-group'),select=node('select');select.setAttribute('aria-label','Registro principal a conservar');
+        for(const record of group.records){const option=node('option','Salida '+record.salida_numero+' · @'+(record.username||'sin autor')+' · '+formatWhen(record.created_at).date+' '+formatWhen(record.created_at).time);option.value=record.id;select.append(option);}
+        box.append(node('h3','PDF idéntico en '+group.records.length+' registros'),node('p','Elige el registro principal. La clasificación solo se aplica tras tu revisión.','audit-muted'),select);
+        for(const record of group.records){
+          const card=node('div',undefined,'duplicate-record'),label=node('p','Salida '+record.salida_numero+' · @'+(record.username||'sin autor')+' · '+formatWhen(record.created_at).date+' '+formatWhen(record.created_at).time),reason=node('input');reason.placeholder='Motivo de la decisión';reason.maxLength=2048;reason.setAttribute('aria-label','Motivo para salida '+record.salida_numero);
+          const confirmation=node('label'),check=node('input');check.type='checkbox';confirmation.append(check,document.createTextNode(' Confirmo que es la misma operación; no otro movimiento legítimo.'));
+          const link=button('Vincular como duplicado',true),distinct=button('Conservar como movimiento distinto',true),notice=node('p','');link.disabled=true;
+          const update=()=>{link.disabled=!check.checked||select.value===record.id;};check.addEventListener('change',update);select.addEventListener('change',update);
+          async function decide(canonical){if(!current())return;link.disabled=distinct.disabled=true;try{await reviewDuplicate(record.id,canonical,group.documentTag,reason.value,controller.signal);if(current()){card.replaceChildren(node('p',canonical?'Duplicado vinculado. El registro y sus archivos siguen accesibles desde el principal.':'Movimiento distinto conservado.'));for(const option of [...select.options])if(option.value===record.id)option.remove();select.dispatchEvent(new Event('change'));}}catch(error){if(current()){notice.textContent=error.message;distinct.disabled=false;update();}}}
+          link.addEventListener('click',()=>decide(select.value));distinct.addEventListener('click',()=>decide(null));
+          card.append(label,reason,confirmation,link,distinct,notice);box.append(card);
+        }
+        groups.append(box);
+      }
+    }catch(error){if(current())state.textContent=error.message;}})();
   }
 
   async function openUsersDialog(opener) {
@@ -1834,7 +1995,7 @@
     if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
     const result = [];
     for (let offset = 0; ; offset += 500) {
-      const rows = await request("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at,encrypted_metadata&order=created_at.desc,id.desc&limit=500&offset=" + offset, { signal });
+      const rows = await activeRecords("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at,encrypted_metadata&order=created_at.desc,id.desc&limit=500&offset=" + offset, { signal });
       assertAccount(epoch);
       if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id) || typeof row.encrypted_metadata !== "string")) throw new Error("El historial recibido no es válido.");
       result.push(...rows);
@@ -1962,7 +2123,68 @@
     if (result.match) result.price = await mobilePrice(result.match.product.codigo, signal);
     return result;
   }
+  function upgradeError(error) {
+    if (['PGRST202','PGRST204','PGRST205','42P01','42703'].includes(error.code)) {
+      error.message = 'Activa las consultas y operaciones ejecutando supabase/consultas-operaciones.sql en el SQL Editor del proyecto existente.';
+      error.setupRequired = true;
+    }
+    return error;
+  }
+  async function approvedMember(epoch, key, signal) {
+    priceGuard(epoch, key, signal);
+    const rows = await request(ownQuery('mega_audit_members','role'), { signal });
+    priceGuard(epoch, key, signal);
+    if (!Array.isArray(rows) || rows.length !== 1 || !['user','admin'].includes(rows[0].role)) { clearSession(); throw new Error('Tu cuenta ya no tiene acceso al equipo.'); }
+  }
+  async function decodeQuery(row, key) {
+    if (!row || row.workspace_id !== CONFIG.workspace || !UUID.test(row.id) || !UUID.test(row.created_by) || !Number.isFinite(Date.parse(row.created_at))) throw new Error('Consulta compartida inválida.');
+    let clear, value;
+    try { clear = await key.decrypt(unbase64(row.encrypted_query), 'product-query-v1|' + row.id); value = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(clear)); }
+    finally { if (clear) clear.fill(0); }
+    if (!value || value.version !== 1 || typeof value.code !== 'string' || !value.code || value.code.length > 80 || /[\x00-\x1f\x7f]/.test(value.code) || !['Encontrado','Sin coincidencia','Consulta incompleta'].includes(value.label) || typeof value.description !== 'string' || value.description.length > 2048 || (value.cents !== null && (!Number.isSafeInteger(value.cents) || value.cents < 0)) || typeof value.salida !== 'string' || value.salida.length > 60) throw new Error('No se pudo verificar la consulta compartida.');
+    return Object.assign({}, value, { id: row.id, created_by: row.created_by, created_at: row.created_at });
+  }
+  async function queryTicket(value) {
+    const epoch = generation, key = master; priceGuard(epoch,key);
+    const id = newIdempotencyKey();
+    const data = new TextEncoder().encode(JSON.stringify(value));
+    try {
+      const encrypted = base64(await key.encrypt(data,'product-query-v1|' + id)); priceGuard(epoch,key);
+      const ticket = { id, workspace_id: CONFIG.workspace, owner_id: session.user.id, encrypted_query: encrypted };
+      await decodeQuery({ ...ticket, created_by: ticket.owner_id, created_at: new Date().toISOString() },key); priceGuard(epoch,key);
+      return ticket;
+    } finally { data.fill(0); }
+  }
+  async function queryAdd(ticket,signal) {
+    const epoch = generation, key = master; await approvedMember(epoch,key,signal);
+    if (!ticket || ticket.workspace_id !== CONFIG.workspace || ticket.owner_id !== session.user.id || !UUID.test(ticket.id)) throw new Error('El reintento pertenece a otra cuenta.');
+    await decodeQuery({ ...ticket,created_by:ticket.owner_id,created_at:new Date().toISOString() },key); priceGuard(epoch,key,signal);
+    let row;
+    try { row = await request('/rest/v1/rpc/mega_product_query_add',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_id:ticket.id,p_encrypted_query:ticket.encrypted_query}}); }
+    catch(error) { throw upgradeError(error); }
+    priceGuard(epoch,key,signal); if(Array.isArray(row)&&row.length===1)row=row[0];
+    if(!row || row.id!==ticket.id || row.created_by!==ticket.owner_id || row.encrypted_query!==ticket.encrypted_query)throw new Error('No se confirmó el guardado de la consulta. Reintenta con el mismo identificador.');
+    const result=await decodeQuery(row,key); priceGuard(epoch,key,signal); return result;
+  }
+  async function queryList(signal) {
+    const epoch=generation,key=master; await approvedMember(epoch,key,signal);
+    let responses;
+    try { responses=await Promise.all([request('/rest/v1/mega_product_queries?workspace_id=eq.'+CONFIG.workspace+'&select=*&order=created_at.desc,id.desc&limit=20',{signal}),request('/rest/v1/rpc/mega_audit_authors',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace}})]); }
+    catch(error){throw upgradeError(error);}
+    priceGuard(epoch,key,signal);
+    if(!Array.isArray(responses[0])||!Array.isArray(responses[1]))throw new Error('El historial compartido recibido no es válido.');
+    const names=new Map(responses[1].filter(row=>row&&UUID.test(row.user_id)&&typeof row.username==='string').map(row=>[row.user_id,row.username]));
+    const unique=new Map(responses[0].map(row=>[row.id,row]));
+    const outcomes=await Promise.allSettled([...unique.values()].map(row=>decodeQuery(row,key))); priceGuard(epoch,key,signal);
+    return { entries:outcomes.filter(r=>r.status==='fulfilled').map(r=>({...r.value,username:names.get(r.value.created_by)||''})), damaged:outcomes.filter(r=>r.status==='rejected').length };
+  }
+  function queryQueue() {
+    if(!status().authenticated)throw new Error('Inicia sesión para recuperar los reintentos.');
+    // Tickets contain ciphertext and official IDs only; no products, keys or tokens.
+    return window.MobileCatalog.cache('query-pending|'+CONFIG.workspace+'|'+session.user.id+'|'+master.fingerprint);
+  }
   window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,
+    queries: Object.freeze({ticket:queryTicket,add:queryAdd,list:queryList,queue:queryQueue}),
     mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {

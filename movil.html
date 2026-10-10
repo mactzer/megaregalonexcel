@@ -10,13 +10,14 @@
   <link rel="icon" href="megacontrol-logo.png">
   <link rel="apple-touch-icon" href="megacontrol-logo.png">
   <link rel="manifest" href="movil.webmanifest">
-  <link rel="stylesheet" href="movil.css?v=6">
+  <link rel="stylesheet" href="movil.css?v=7">
   <script defer src="vendor/zxing-browser.min.js"></script>
   <script defer src="vendor/zxing-wasm-reader.js"></script>
   <script defer src="mobile-scanner.js?v=2"></script>
   <script defer src="movil-navigation.js?v=1"></script>
   <script defer src="mobile-prices.js?v=2"></script>
-  <script defer src="movil.js?v=6"></script>
+  <script defer src="movil.js?v=7"></script>
+  <script defer src="mobile-history.js?v=1"></script>
 </head>
 <body>
   <header class="top"><a href="index.html" data-mobile-section="converter" aria-label="MegaControl, página principal"><img src="megacontrol-logo.png" alt=""><span>MegaControl<small>CONSULTA DE PRODUCTOS</small></span></a><span class="live">● Acceso seguro</span></header>
@@ -40,14 +41,14 @@
         <p class="note">Los ceros iniciales se conservan. Compatible con EAN, UPC, Code 128, Code 39 e ITF.</p>
       </section>
       <section id="result" class="card" hidden aria-live="polite"></section>
-      <section class="card history-card"><div class="section-title"><h2>Últimas consultas</h2><button id="clear-history" class="quiet">Limpiar</button></div><p class="note">Solo en esta sesión; se borran al salir.</p><ul id="history"><li>Aún no has consultado productos.</li></ul></section>
+      <section class="card history-card"><div class="section-title"><h2>Últimas consultas</h2><button id="clear-history" class="quiet">Actualizar</button></div><p id="history-status" class="note" role="status">Inicia sesión para ver las consultas compartidas.</p><button id="retry-history" class="quiet" hidden>Reintentar guardado</button><ul id="history"><li>Aún no hay consultas compartidas.</li></ul></section>
     </section>
     <p id="status" role="status" aria-live="polite">Preparando acceso seguro…</p>
     <button id="cancel" class="quiet" hidden>Cancelar consulta</button>
     <footer>Información extraída de los PDF autorizados. Los precios actualizados por administradores se muestran con el PDF original como referencia.<br><a href="index.html#archivo" data-mobile-section="archive">Abrir archivo de salidas</a></footer>
   </main>
   <nav class="bottom" aria-label="Navegación"><a href="#escaner" data-mobile-section="scanner" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo" data-mobile-section="archive">▤<span>Archivo</span></a><a href="index.html" data-mobile-section="converter">＋<span>Nueva salida</span></a></nav>
-  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=6#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
+  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=7#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
   <noscript>Activa JavaScript para usar la cámara y consultar los documentos.</noscript>
 </body>
 </html>

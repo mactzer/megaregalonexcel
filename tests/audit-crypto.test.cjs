@@ -9,6 +9,15 @@ const AuditCrypto = require("../audit-crypto.js");
 const encoder = new TextEncoder();
 const keyA = "MEGA1." + AuditCrypto.encodeBase64Url(Uint8Array.from({ length: 32 }, (_, i) => i));
 const keyB = "MEGA1." + AuditCrypto.encodeBase64Url(Uint8Array.from({ length: 32 }, (_, i) => 255 - i));
+test('operation identity follows the whole PDF and separates workspaces and explicit movements',async()=>{
+ const key=await AuditCrypto.unlock(keyA,'a'),other=await AuditCrypto.unlock(keyA,'b'),data=encoder.encode('Fictional PDF document');
+ const tag=await key.documentIndex(data);assert.match(tag,/^[a-f0-9]{64}$/);assert.equal(tag,await key.documentIndex(data));assert.notEqual(tag,await other.documentIndex(data));
+ assert.notEqual(tag,await key.documentIndex(encoder.encode('Another actual invoice with the same barcode and quantity')));
+ assert.notEqual(tag,await key.documentIndex(data,'11111111-1111-4111-8111-111111111111'));
+ assert.deepEqual(data,encoder.encode('Fictional PDF document'));await assert.rejects(()=>key.documentIndex(new Uint8Array()));await assert.rejects(()=>key.documentIndex(data,'bad-id'));
+ const query=await key.encrypt(encoder.encode('Fictional query'),'product-query-v1|11111111-1111-4111-8111-111111111111');
+ await assert.rejects(()=>key.decrypt(query,'product-query-v1|22222222-2222-4222-8222-222222222222'));await assert.rejects(()=>other.decrypt(query,'product-query-v1|11111111-1111-4111-8111-111111111111'));
+});
 test('product indexes separate prices from salida indexes, workspaces and keys',async()=>{
  const a=await AuditCrypto.unlock(keyA,'a'),b=await AuditCrypto.unlock(keyB,'a'),c=await AuditCrypto.unlock(keyA,'b');
  const tag=await a.productIndex('6900004248146');assert.match(tag,/^[a-f0-9]{64}$/);assert.equal(tag,await a.productIndex('6900004248146'));assert.notEqual(tag,await a.blindIndex('6900004248146'));assert.notEqual(tag,await b.productIndex('6900004248146'));assert.notEqual(tag,await c.productIndex('6900004248146'));
