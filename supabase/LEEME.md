@@ -89,6 +89,16 @@ where workspace_id = '86551e44-7504-4d30-b453-c9e04b269a43'
 
 Conserva al menos un administrador. No borres desde Auth a un usuario con registros: estos conservan una referencia a su cuenta. Retirar su membresía impide nuevas lecturas mediante Supabase y elimina su copia envuelta de la clave; no elimina archivos ni secretos que ya descargó. Una rotación completa de clave necesitaría volver a cifrar los registros y no forma parte de esta versión.
 
+## Activar precios compartidos del escáner
+
+En un proyecto con la auditoría ya funcionando, el propietario abre **SQL Editor → New query**, copia únicamente [precios.sql](precios.sql) y pulsa **Run**. No repitas la configuración inicial. La actualización conserva cuentas y documentos; es seguro ejecutarla otra vez sin borrar los precios. También puedes usar [el asistente para copiar y activar](https://mactzer.github.io/megaregalonexcel/supabase-precios.html).
+
+Vuelve a la ficha del escáner y pulsa **Comprobar activación**. Un administrador puede usar **Editar precio → Guardar precio**, por ejemplo cambiar 9.99 a 7.99. Los demás miembros verán 7.99 en sus siguientes consultas; la ficha conserva 9.99 como precio original del PDF.
+
+Los precios y códigos se cifran antes de subirlos. Supabase fija la fecha, autor y versión; sólo administradores pueden escribir mediante la función. Los trabajadores pueden consultar, y las políticas de la base de datos impiden que escriban por otra vía. Si otro administrador guardó antes, se exige consultar nuevamente para evitar sobrescribirlo. Un error o un guardado cancelado no se presenta como un cambio confirmado.
+
+La activación necesita los permisos del dueño de Supabase: la clave pública de la aplicación no permite crear tablas. No compartas credenciales en el chat.
+
 ## Respaldos y comprobación
 
 Conserva una copia protegida de recuperación y configura respaldos de **la base de datos y los objetos del bucket**: respaldar solo las tablas no incluye los PDF y Excel de Storage. Consulta las opciones del plan de Supabase. Los respaldos de documentos deben conservar el formato cifrado.

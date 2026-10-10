@@ -10,14 +10,17 @@
   <link rel="icon" href="megacontrol-logo.png">
   <link rel="apple-touch-icon" href="megacontrol-logo.png">
   <link rel="manifest" href="movil.webmanifest">
-  <link rel="stylesheet" href="movil.css?v=2">
+  <link rel="stylesheet" href="movil.css?v=5">
   <script defer src="vendor/zxing-browser.min.js"></script>
-  <script defer src="mobile-scanner.js?v=1"></script>
-  <script defer src="movil.js?v=3"></script>
+  <script defer src="vendor/zxing-wasm-reader.js"></script>
+  <script defer src="mobile-scanner.js?v=2"></script>
+  <script defer src="movil-navigation.js?v=1"></script>
+  <script defer src="mobile-prices.js?v=1"></script>
+  <script defer src="movil.js?v=5"></script>
 </head>
 <body>
-  <header class="top"><a href="index.html" aria-label="MegaControl, página principal"><img src="megacontrol-logo.png" alt=""><span>MegaControl<small>CONSULTA DE PRODUCTOS</small></span></a><span class="live">● Acceso seguro</span></header>
-  <main>
+  <header class="top"><a href="index.html" data-mobile-section="converter" aria-label="MegaControl, página principal"><img src="megacontrol-logo.png" alt=""><span>MegaControl<small>CONSULTA DE PRODUCTOS</small></span></a><span class="live">● Acceso seguro</span></header>
+  <main id="mobile-scanner-view">
     <div class="heading"><p class="eyebrow">MEGA REGALÓN · MÓVIL</p><h1>Tu catálogo,<br>en un escaneo.</h1><p>Consulta los productos de tus documentos guardados, desde donde estés.</p></div>
     <section id="login-panel" class="card">
       <h2>Entra con tu cuenta</h2><p>Usa el mismo usuario y contraseña de MegaControl.</p>
@@ -29,6 +32,7 @@
       <section class="card scanner-card"><div class="section-title"><h2>Consultar producto</h2><span class="pill">PDF originales</span></div>
         <div id="camera" hidden><video id="video" autoplay muted playsinline aria-label="Cámara para escanear códigos"></video><div class="scan-frame" aria-hidden="true"></div><p>Acerca la etiqueta: muestra todas las barras y evita reflejos</p></div>
         <button id="scan" class="scan-button"><span aria-hidden="true">▥</span> ESCANEAR PRODUCTO</button>
+        <button id="photo-button" class="quiet" disabled>Leer foto de una etiqueta</button><input id="photo-input" type="file" accept="image/*" hidden>
         <div id="camera-controls" hidden><button id="stop" class="quiet">Detener cámara</button><button id="torch" class="quiet" hidden>Encender linterna</button></div>
         <div id="zoom-control" hidden><label for="camera-zoom">Zoom de cámara</label><input id="camera-zoom" type="range" aria-label="Zoom de cámara"></div>
         <div class="divider">O ESCRIBE EL CÓDIGO</div>
@@ -40,10 +44,10 @@
     </section>
     <p id="status" role="status" aria-live="polite">Preparando acceso seguro…</p>
     <button id="cancel" class="quiet" hidden>Cancelar consulta</button>
-    <footer>Información extraída de los PDF autorizados. El precio corresponde al documento; confirma su vigencia antes de vender.<br><a href="index.html#archivo">Abrir archivo de salidas</a></footer>
+    <footer>Información extraída de los PDF autorizados. Los precios actualizados por administradores se muestran con el PDF original como referencia.<br><a href="index.html#archivo" data-mobile-section="archive">Abrir archivo de salidas</a></footer>
   </main>
-  <nav class="bottom" aria-label="Navegación"><a href="movil.html" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo">▤<span>Archivo</span></a><a href="index.html">＋<span>Nueva salida</span></a></nav>
-  <iframe id="engine" src="index.html?mobile-index=1#nueva-salida" title="Motor de acceso y lectura de documentos" hidden></iframe>
+  <nav class="bottom" aria-label="Navegación"><a href="#escaner" data-mobile-section="scanner" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo" data-mobile-section="archive">▤<span>Archivo</span></a><a href="index.html" data-mobile-section="converter">＋<span>Nueva salida</span></a></nav>
+  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
   <noscript>Activa JavaScript para usar la cámara y consultar los documentos.</noscript>
 </body>
 </html>

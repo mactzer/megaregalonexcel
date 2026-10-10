@@ -1871,6 +1871,7 @@
         if (!Array.isArray(rows) || rows.length !== 1 || !["admin", "user"].includes(rows[0].role)) {
           clearSession(); throw new Error("Tu cuenta ya no tiene acceso al historial.");
         }
+        if (member.role !== rows[0].role) { member = rows[0]; renderAccountBar(); }
       }
     });
     return mobileCatalog;
@@ -1899,8 +1900,70 @@
     } finally { if (data) data.fill(0); }
   }
 
+  function priceGuard(epoch, key, signal) {
+    assertAccount(epoch);
+    if (!status().authenticated || master !== key || (signal && signal.aborted)) throw new Error('La consulta del precio se canceló.');
+  }
+  async function decryptedPrice(row, code, tag, key) {
+    if (!row || row.workspace_id !== CONFIG.workspace || row.product_tag !== tag || !UUID.test(row.updated_by) || !Number.isSafeInteger(row.version) || row.version < 1 || !Number.isFinite(Date.parse(row.updated_at))) throw new Error('El precio compartido recibido no es válido.');
+    let data, value;
+    try {
+      data = await key.decrypt(unbase64(row.encrypted_price), 'product-price-v1|' + tag + '|' + row.version);
+      value = JSON.parse(new TextDecoder().decode(data));
+    } catch (_) { throw new Error('No se pudo verificar el precio compartido. Consulta nuevamente el producto.'); }
+    finally { if (data) data.fill(0); }
+    if (!value || value.code !== code || !Number.isSafeInteger(value.cents) || value.cents < 0 || value.cents > 999999999) throw new Error('No se pudo verificar el precio de este producto.');
+    return { cents: value.cents, version: row.version, updatedBy: row.updated_by, updatedAt: row.updated_at };
+  }
+  async function mobilePrice(rawCode, signal) {
+    const epoch = generation, key = master;
+    priceGuard(epoch, key, signal);
+    const code = window.MobileCatalog.canonical(rawCode), tag = await key.productIndex(code);
+    priceGuard(epoch, key, signal);
+    let rows;
+    try { rows = await request('/rest/v1/mega_product_prices?workspace_id=eq.' + CONFIG.workspace + '&product_tag=eq.' + tag + '&select=*&limit=2', { signal }); }
+    catch (error) {
+      priceGuard(epoch, key, signal);
+      if (['PGRST205', '42P01'].includes(error.code)) return { available: false, override: null };
+      throw new Error('No se pudo comprobar el precio actualizado. Reintenta la consulta.');
+    }
+    priceGuard(epoch, key, signal);
+    if (!Array.isArray(rows) || rows.length > 1) throw new Error('Supabase devolvió un precio ambiguo.');
+    const override = rows.length ? await decryptedPrice(rows[0], code, tag, key) : null;
+    priceGuard(epoch, key, signal);
+    return { available: true, override };
+  }
+  async function mobileSetPrice(rawCode, cents, expectedVersion, signal) {
+    if (!Number.isSafeInteger(cents) || cents < 0 || cents > 999999999 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) throw new Error('Ingresa un precio válido con hasta dos decimales.');
+    const epoch = generation, key = master;
+    priceGuard(epoch, key, signal); await requireAdmin(epoch); priceGuard(epoch, key, signal);
+    const code = window.MobileCatalog.canonical(rawCode), tag = await key.productIndex(code);
+    const data = new TextEncoder().encode(JSON.stringify({ code, cents }));
+    let encrypted;
+    try { encrypted = base64(await key.encrypt(data, 'product-price-v1|' + tag + '|' + (expectedVersion + 1))); }
+    finally { data.fill(0); }
+    priceGuard(epoch, key, signal);
+    let row;
+    try { row = await request('/rest/v1/rpc/mega_product_price_set', { method: 'POST', signal, body: { p_workspace_id: CONFIG.workspace, p_product_tag: tag, p_encrypted_price: encrypted, p_expected_version: expectedVersion } }); }
+    catch (error) {
+      if (error.code === '40001') error.message = 'Otro administrador cambió este precio. Consulta nuevamente el producto antes de guardar.';
+      if (['PGRST202', 'PGRST205', '42P01'].includes(error.code)) error.message = 'Activa los precios compartidos ejecutando supabase/precios.sql en el SQL Editor de tu proyecto.';
+      throw error;
+    }
+    priceGuard(epoch, key, signal);
+    if (Array.isArray(row) && row.length === 1) row = row[0];
+    if (!row || row.version !== expectedVersion + 1 || row.updated_by !== session.user.id || row.encrypted_price !== encrypted) throw new Error('No se pudo confirmar el cambio de precio. Consulta el producto para verificarlo.');
+    const override = await decryptedPrice(row, code, tag, key);
+    priceGuard(epoch, key, signal);
+    return { available: true, override };
+  }
+  async function mobileLookup(code, signal) {
+    const result = await getMobileCatalog().lookup(code, signal);
+    if (result.match) result.price = await mobilePrice(result.match.product.codigo, signal);
+    return result;
+  }
   window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,
-    mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: (code, signal) => getMobileCatalog().lookup(code, signal), hasUpdates: signal => getMobileCatalog().hasUpdates(signal) }) });
+    mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {
     for (const dialog of openDialogs) dialog.close();

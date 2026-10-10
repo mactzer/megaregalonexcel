@@ -254,7 +254,13 @@
         encoder.encode("megaregalonexcel/audit/salida/v1|" + number)));
     }
 
-    return Object.freeze({ encrypt, decrypt, blindIndex, fingerprint });
+    async function productIndex(code) {
+      if (typeof code !== 'string' && !(typeof code === 'number' && Number.isFinite(code))) throw new Error('Código de producto inválido.');
+      const value = String(code).trim();
+      if (!value || value.length > 80 || /[\x00-\x1f\x7f]/.test(value)) throw new Error('Código de producto inválido.');
+      return hex(await crypto.subtle.sign('HMAC', indexKey, encoder.encode('megaregalonexcel/catalog/product/v1|' + value)));
+    }
+    return Object.freeze({ encrypt, decrypt, blindIndex, productIndex, fingerprint });
   }
 
   const api = Object.freeze({ createRecoveryKey, unlock, unlockUser, normalizeUsername, encodeBase64Url, decodeBase64Url });

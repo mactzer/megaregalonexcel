@@ -29,6 +29,8 @@ function fakePdf(options = {}) {
     ['Unidades', 760], ['Total', 820], ['Unidades', 890], ['Total', 950]
   ];
   const product = ['0001234567890', 'Producto ficticio de descripcion completa', 'Caja', 'Estilo A', 'REF-001 COMPLETA', '7%', '10.00', '12.00', '2', '20.00', '0', '0.00'];
+  if(options.price)product[7]=options.price;
+  if(options.code)product[0]=options.code;
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
   const fractional = ['0000000000025', 'Producto fraccionario ficticio', 'Unidad', 'Estilo C', 'REF-003', '0%', '0.40', '0.50', '2.5', '1.00', '0', '0.00'];
   const bulkQuantity = options.bulkUnits || '1,800.00';
@@ -65,6 +67,8 @@ async function fixtures() {
   const master = await Crypto.unlock(key, WORKSPACE);
   const unlock = await Crypto.unlockUser('administrador', PASSWORD, WORKSPACE);
   const wrapped = Buffer.from(await unlock.wrapRecoveryKey(key)).toString('base64');
+  const colleague = await Crypto.unlockUser('colega', PASSWORD, WORKSPACE);
+  const colleagueWrapped = Buffer.from(await colleague.wrapRecoveryKey(key)).toString('base64');
   const pdf = fakePdf();
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([['Codigo', 'Unidades'], ['0001234567890', 5]]), 'Datos');
@@ -81,7 +85,7 @@ async function fixtures() {
       salida_tag: await master.blindIndex(number), encrypted_metadata: index === 1 ? 'AQAA' : Buffer.from(encrypted).toString('base64') });
     for (const [kind, bytes] of [['pdf', fakePdf({ number })], ['excel', excel]]) storage.set(`${WORKSPACE}/${owner}/${id}/${kind}.bin`, Buffer.from(await master.encrypt(new Uint8Array(bytes), `${id}|${kind}`)));
   }
-  return { key, master, authPassword: unlock.authPassword, wrapped, pdf, excel, records, storage, numberTag: await master.blindIndex('00123') };
+  return { key, master, authPassword: unlock.authPassword, wrapped, colleagueWrapped, pdf, excel, records, storage, numberTag: await master.blindIndex('00123') };
 }
 
 before(async () => {
@@ -93,7 +97,7 @@ before(async () => {
     if (!filename.startsWith(ROOT + path.sep)) { response.writeHead(403); response.end(); return; }
     fs.readFile(filename, (error, contents) => {
       if (error) { response.writeHead(404); response.end(); return; }
-      const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+      const types = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.wasm':'application/wasm' };
       response.writeHead(200, { 'Content-Type': types[path.extname(filename)] || 'application/octet-stream' }); response.end(contents);
     });
   });
@@ -104,16 +108,131 @@ before(async () => {
 
 after(async () => { if (browser) await browser.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 
-async function mobileLogin(h) {
+async function mobileLogin(h, username='administrador') {
   await h.page.goto(`${origin}/movil.html`);
   await h.page.locator('#login-button:not([disabled])').waitFor();
-  await h.page.locator('#username').fill('administrador');
+  await h.page.locator('#username').fill(username);
   await h.page.locator('#password').fill(PASSWORD);
   await h.page.locator('#login-button').click();
   await h.page.locator('#workspace').waitFor({ state: 'visible' });
   await h.page.locator('#scan:not([disabled])').waitFor();
 }
 
+async function mobileLookup(h,code='0001234567890'){
+ await h.page.locator('#barcode').fill(code);await h.page.locator('#search').click();await h.page.locator('#result').waitFor({state:'visible'});await h.page.locator('#search:not([disabled])').waitFor();
+}
+async function fictionalPrice(cents,version=1){
+ const code='0001234567890',tag=await fixture.master.productIndex(code),encrypted=await fixture.master.encrypt(new TextEncoder().encode(JSON.stringify({code,cents})),`product-price-v1|${tag}|${version}`);
+ return {workspace_id:WORKSPACE,product_tag:tag,encrypted_price:Buffer.from(encrypted).toString('base64'),version,updated_by:OWNER,updated_at:'2026-10-10T03:00:00.000Z'};
+}
+test('mobile prices: administrator saves 9.99 to 7.99, colleague reads shared override and original PDF stays unchanged',async()=>{
+ const h=await harness({mobile:true});let worker;
+ try{
+  await setArchivedPdf(h,0,{price:'9.99'});h.state.records=h.state.records.slice(0,1);
+  const row={...h.state.records[0]},original=Buffer.from(h.state.storage.get(`${WORKSPACE}/${OWNER}/${row.id}/pdf.bin`));
+  await mobileLogin(h);await mobileLookup(h);assert.match(await h.page.locator('.price').innerText(),/9\.99/);
+  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7,99');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  assert.match(await h.page.locator('#price-notice').innerText(),/guardado/);assert.match(await h.page.locator('#result').innerText(),/9\.99/);
+  const saved=[...h.state.prices.values()][0],write=h.state.requests.find(r=>r.pathname.endsWith('mega_product_price_set'));
+  assert.doesNotMatch(write.body,/0001234567890|7[.,]99/);const clear=await fixture.master.decrypt(new Uint8Array(Buffer.from(saved.encrypted_price,'base64')),`product-price-v1|${saved.product_tag}|1`);assert.deepEqual(JSON.parse(new TextDecoder().decode(clear)),{code:'0001234567890',cents:799});clear.fill(0);
+  assert.deepEqual(h.state.records[0],row);assert.deepEqual(h.state.storage.get(`${WORKSPACE}/${OWNER}/${row.id}/pdf.bin`),original);
+  const reads=h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;await mobileLookup(h);assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,reads);
+  worker=await harness({mobile:true,role:'user'});worker.state.records=h.state.records.map(r=>({...r}));worker.state.storage=new Map(h.state.storage);worker.state.prices=new Map(h.state.prices);
+  await mobileLogin(worker,'colega');await mobileLookup(worker,'001234567890');assert.match(await worker.page.locator('.price').innerText(),/7\.99/);assert.equal(await worker.page.locator('#edit-price').count(),0);
+  const error=await worker.page.evaluate(async()=>{try{await(await MobileSession.ready).AuditCloud.mobile.setPrice('0001234567890',599,1);return'';}catch(e){return e.message;}});assert.match(error,/admin|permiso/i);assert.equal(worker.state.priceCalls,0);
+  await checkNoOverflow(h.page);await checkNoOverflow(worker.page);
+ }finally{if(worker)await worker.close();await h.close();}
+});
+test('mobile prices: missing schema has activation instructions, and checking activation enables the admin editor',async()=>{
+ const h=await harness({mobile:true});try{
+ h.state.records=h.state.records.slice(0,1);h.state.missingPrices=true;await mobileLogin(h);await mobileLookup(h);
+ assert.match(await h.page.locator('#result').innerText(),/pendientes de activación/);assert.equal(await h.page.locator('#result a[href="supabase/precios.sql"]').count(),1);assert.equal(await h.page.locator('#price-form').count(),0);
+ h.state.missingPrices=false;await h.page.locator('#check-prices').click();await h.page.locator('#edit-price').waitFor({state:'visible'});assert.equal(h.state.priceCalls,0);
+ }finally{await h.close();}
+});
+test('mobile prices: conflict, revoked administrator, bad ciphertext and failed verification do not confirm stale prices',async()=>{
+ for(const failure of ['conflict','revocation','tamper','network']){
+  const h=await harness({mobile:true});try{
+   h.state.records=h.state.records.slice(0,1);await mobileLogin(h);await mobileLookup(h);
+   if(failure==='conflict'||failure==='revocation'){
+    await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');
+    if(failure==='conflict'){const price=await fictionalPrice(899);h.state.prices.set(price.product_tag,price);}else h.state.role='user';
+    await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>document.querySelector('#price-notice').textContent.includes('administrador')||document.querySelector('#price-notice').textContent.includes('administración'));
+    assert.doesNotMatch(await h.page.locator('#price-notice').innerText(),/guardado/i);assert.doesNotMatch(await h.page.locator('.price').innerText(),/7\.99/);
+    assert.equal(h.state.priceCalls,failure==='conflict'?1:0);
+   }else{
+    if(failure==='tamper'){const price=await fictionalPrice(799);h.state.prices.set(price.product_tag,{...price,version:2});}else h.state.failPrice=500;
+    await h.page.locator('#search').click();await h.page.waitForFunction(()=>document.querySelector('#status').classList.contains('error'));await h.page.locator('#search:not([disabled])').waitFor();assert.equal(await h.page.locator('#result').isVisible(),false);
+   }
+  }finally{await h.close();}
+ }
+});
+test('mobile prices: late save after logout cannot restore a product or a session',async()=>{
+ const h=await harness({mobile:true});let release;try{
+  h.state.records=h.state.records.slice(0,1);await mobileLogin(h);await mobileLookup(h);
+  h.state.slowPriceSave=new Promise(r=>release=r);await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#save-price').click();
+  await h.page.waitForFunction(()=>document.querySelector('#save-price').disabled);
+  for(let attempt=0;attempt<100&&!h.state.prices.size;attempt++)await h.page.waitForTimeout(20);
+  assert.equal(h.state.prices.size,1,'The server already committed before logout');
+  await h.page.locator('#logout').click();release();await h.page.locator('#login-panel').waitFor({state:'visible'});
+  assert.equal(await h.page.locator('#result').textContent(),'');assert.equal(await h.page.evaluate(async()=>(await MobileSession.ready).AuditCloud.status().authenticated),false);
+ }finally{if(release)release();await h.close();}
+});
+test('mobile navigation: Archivo and browser history preserve the session and the retained price editor',async()=>{
+ const h=await harness({mobile:true});try{
+  h.state.records=h.state.records.slice(0,1);await mobileLogin(h);await mobileLookup(h);await h.page.evaluate(async()=>{window.__owner=await MobileSession.ready;window.__generation=window.__owner.AuditCloud.status().generation;});
+  await h.page.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=640;canvas.height=360;const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,640,360);window.__navigationStream=canvas.captureStream(10);navigator.mediaDevices.getUserMedia=async()=>window.__navigationStream;});
+  await h.page.locator('#scan').click();await h.page.waitForFunction(()=>document.querySelector('#video').srcObject&&document.querySelector('#video').readyState>=2);
+  const owner=h.page.frameLocator('#engine');await h.page.locator('.bottom [data-mobile-section="archive"]').click();await owner.locator('#audit-page').waitFor({state:'visible'});await owner.locator('#app-profile').getByText('@administrador',{exact:true}).waitFor();
+  assert.equal(await h.page.evaluate(()=>window.__navigationStream.getTracks().every(t=>t.readyState==='ended')),true);
+  await h.page.locator('.bottom [data-mobile-section="converter"]').click();await owner.locator('#drop-zone').waitFor({state:'visible'});await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#workspace').waitFor({state:'visible'});
+  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  await h.page.goBack();await owner.locator('#drop-zone').waitFor({state:'visible'});await h.page.goForward();await h.page.locator('#workspace').waitFor({state:'visible'});
+  assert.equal(await h.page.evaluate(async()=>{const w=await MobileSession.ready;return w===window.__owner&&w.AuditCloud.status().generation===window.__generation&&w.AuditCloud.status().authenticated;}),true);assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);
+  await h.page.locator('.bottom [data-mobile-section="archive"]').click();await owner.locator('#app-profile button').first().click();await owner.getByRole('button',{name:'Cerrar sesión',exact:true}).click();await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#login-panel').waitFor({state:'visible'});
+ }finally{await h.close();}
+});
+test('mobile navigation: scanner launched from index uses the parent account without another engine',async()=>{
+ const h=await harness({mobile:true});try{
+  h.state.records=h.state.records.slice(0,1);await login(h.page);await h.page.evaluate(()=>{window.__api=AuditCloud;TrazaUI.navigate('scanner');});
+  const scanner=h.page.frameLocator('#scanner-frame');await scanner.locator('#workspace').waitFor({state:'visible'});await scanner.locator('#scan:not([disabled])').waitFor();assert.equal(await scanner.locator('#engine').count(),0);
+  await scanner.locator('.bottom [data-mobile-section="archive"]').click();await h.page.locator('#audit-page').waitFor({state:'visible'});assert.equal(await h.page.evaluate(()=>AuditCloud===window.__api&&AuditCloud.status().authenticated),true);assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);
+ }finally{await h.close();}
+});
+test('mobile scanner: C++ reader recognizes small Code128 and EAN13 labels including upside-down sheets and photo lookup',async()=>{
+ const labels=JSON.parse(fs.readFileSync(path.join(ROOT,'tests/fixtures/label-barcodes.json'),'utf8'));
+ const h=await harness({mobile:true});try{
+  await setArchivedPdf(h,0,{code:labels.text});h.state.records=h.state.records.slice(0,1);await mobileLogin(h);
+  const result=await h.page.evaluate(async labels=>{
+   const timings=[],texts=[];
+   for(const format of ['Code128','EAN13'])for(const upsideDown of [false,true]){
+    const canvas=document.createElement('canvas');canvas.width=900;canvas.height=1600;const ctx=canvas.getContext('2d');ctx.fillStyle='#888';ctx.fillRect(0,0,900,1600);
+    if(upsideDown){ctx.translate(900,1600);ctx.rotate(Math.PI);}
+    const bits=labels.symbols[format].row;
+    for(let row=0;row<5;row++)for(let col=0;col<2;col++){
+     ctx.save();ctx.translate(200+col*350,350+row*170);ctx.rotate(8*Math.PI/180);ctx.fillStyle='white';ctx.fillRect(-130,-90,300,150);ctx.fillStyle='black';ctx.font='16px sans-serif';ctx.fillText('ETIQUETA FICTICIA',-100,-65);ctx.font='26px sans-serif';ctx.fillText('$3.49',-100,-35);
+     [...bits].forEach((bit,i)=>{if(bit==='1')ctx.fillRect(-100+i*1.5,0,1.5,38);});ctx.font='12px sans-serif';ctx.fillText(labels.text,-100,55);ctx.restore();
+    }
+    const file=new File([await new Promise(r=>canvas.toBlob(r,'image/jpeg',.9))],'etiquetas-ficticias.jpg',{type:'image/jpeg'});const start=performance.now(),found=await MobileScanner.photo(file);timings.push(performance.now()-start);texts.push(found.map(x=>x.text));
+    if(format==='Code128'&&upsideDown){const transfer=new DataTransfer();transfer.items.add(file);const input=document.querySelector('#photo-input');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));}
+   }
+   return{timings,texts};
+  },labels);
+  assert.deepEqual(result.texts,Array.from({length:4},()=>[labels.text]));assert.ok(result.timings.every(ms=>ms<5000),JSON.stringify(result.timings));
+  await h.page.waitForFunction(code=>document.querySelector('#barcode').value===code&&document.querySelector('#result').textContent.includes('PRODUCTO ENCONTRADO'),labels.text);
+  assert.equal(h.state.requests.filter(r=>r.pathname.endsWith('mega_product_price_set')).length,0);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('mobile scanner: cancelling photo preparation releases controls while the WASM download is stalled',async()=>{
+ const h=await harness({mobile:true});let release;
+ try{
+  const pending=new Promise(r=>release=r);
+  await h.context.route('**/vendor/zxing_reader.wasm',async route=>{await pending;await route.fulfill({contentType:'application/wasm',body:fs.readFileSync(path.join(ROOT,'vendor/zxing_reader.wasm'))});});
+  h.state.records=h.state.records.slice(0,1);await mobileLogin(h);
+  await h.page.evaluate(async()=>{const c=document.createElement('canvas');c.width=300;c.height=200;const b=await new Promise(r=>c.toBlob(r,'image/png'));const transfer=new DataTransfer();transfer.items.add(new File([b],'ficticia.png',{type:'image/png'}));const input=document.querySelector('#photo-input');input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));});
+  await h.page.locator('#cancel').waitFor({state:'visible'});await h.page.locator('#cancel').click();await h.page.locator('#photo-button:not([disabled])').waitFor({timeout:2000});assert.equal(await h.page.locator('#result').isVisible(),false);assert.equal(await h.page.evaluate(async()=>(await MobileSession.ready).AuditCloud.status().authenticated),true);release();
+ }finally{if(release)release();await h.close();}
+});
 test('mobile scanner: reads the label number as a small tilted Code 128 and releases the camera', async () => {
   const h = await harness({ mobile: true });
   try {
@@ -337,6 +456,7 @@ async function harness(options = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowRecord: null, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
+  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER});
   page.on('download', download => state.downloads.push(download.suggestedFilename()));
   await context.addInitScript(() => {
     window.__picker = { cancel: false, failWrite: false, files: [], calls: [] };
@@ -402,13 +522,26 @@ async function harness(options = {}) {
     if (pathname === '/auth/v1/token') {
       const body = request.postDataJSON();
       const name = (body.email || 'administrador@x').split('@')[0];
+      state.actor=name==='administrador'?OWNER:OTHER;
       await json({ access_token: 'fictional-token', refresh_token: 'fictional-refresh', expires_in: 3600, user: { id: name === 'administrador' ? OWNER : OTHER, email: `${name}@usuarios.megaregalonexcel.invalid` } }); return;
     }
     if (pathname === '/auth/v1/signup') { const body = request.postDataJSON(); await json({ access_token: 'fictional-user-token', refresh_token: 'fictional-refresh', user: { id: OTHER, email: body.email } }); return; }
     if (pathname === '/auth/v1/logout') { await route.fulfill({ status: 204 }); return; }
     if (pathname === '/rest/v1/mega_audit_members') { await json([{ role: state.role }]); return; }
     if (pathname === '/rest/v1/mega_audit_workspace') { await json([{ key_fingerprint: fixture.master.fingerprint }]); return; }
-    if (pathname === '/rest/v1/mega_audit_user_keys') { await json([{ wrapped_key: fixture.wrapped }]); return; }
+    if (pathname === '/rest/v1/mega_audit_user_keys') { await json([{ wrapped_key:state.actor===OTHER ? fixture.colleagueWrapped : fixture.wrapped }]); return; }
+    if(pathname==='/rest/v1/mega_product_prices'){
+      if(state.missingPrices){await json({code:'PGRST205'},404);return;}
+      if(state.failPrice){await json({code:'fictional_error'},state.failPrice);return;}
+      const tag=(url.searchParams.get('product_tag')||'').replace(/^eq\./,'');await json(state.prices.has(tag)?[state.prices.get(tag)]:[]);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_product_price_set'){
+      state.priceCalls++; const b=request.postDataJSON(),prior=state.prices.get(b.p_product_tag);
+      if(state.role!=='admin'){await json({code:'42501'},403);return;}
+      if((prior?prior.version:0)!==b.p_expected_version){await json({code:'40001'},409);return;}
+      const row={workspace_id:WORKSPACE,product_tag:b.p_product_tag,encrypted_price:b.p_encrypted_price,version:b.p_expected_version+1,updated_by:state.actor,updated_at:'2026-10-10T04:00:00.000Z'};state.prices.set(row.product_tag,row);
+      if(state.slowPriceSave)await state.slowPriceSave;await json(row);return;
+    }
     if (pathname === '/rest/v1/rpc/mega_audit_authors' || pathname === '/rest/v1/rpc/mega_audit_list_members') {
       await json([{ user_id: OWNER, username: 'administrador', role: state.role }, { user_id: OTHER, username: 'colega', role: 'user' }]); return;
     }
@@ -459,10 +592,12 @@ async function login(page, filename = 'index.html', options = {}) {
 }
 
 async function waitUnits(page) {
+  // This prepares a page of original PDFs. Product lookups have their separate
+  // five-second limit; slower CI workers still must finish all archive checks.
   await page.waitForFunction(() => {
     const cells = [...document.querySelectorAll('.audit-table tbody [data-unit-state]')];
     return cells.length > 0 && cells.every(cell => cell.dataset.unitState && cell.dataset.unitState !== 'checking');
-  });
+  }, null, { timeout: 30000 });
 }
 
 async function setArchivedPdf(h, index, pdfOptions, overrides = {}) {

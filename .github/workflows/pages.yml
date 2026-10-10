@@ -45,7 +45,7 @@ jobs:
       - name: Preparar sitio
         run: |
           mkdir _site
-          cp mobile-scanner.js mobile-catalog.js movil.html movil.css movil.js movil.webmanifest index.html traza.css traza.js megacontrol-logo.png excel-table.js audit.html audit.js audit.css audit-cloud.js audit-cloud.css audit-crypto.js supabase-config.js supabase-setup.html .nojekyll _site/
+          cp mobile-scanner.js mobile-catalog.js movil-navigation.js mobile-prices.js movil.html movil.css movil.js movil.webmanifest index.html traza.css traza.js megacontrol-logo.png excel-table.js audit.html audit.js audit.css audit-cloud.js audit-cloud.css audit-crypto.js supabase-config.js supabase-setup.html supabase-precios.html .nojekyll _site/
           cp -R supabase _site/
           cp -R vendor _site/
       - name: Subir sitio

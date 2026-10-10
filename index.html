@@ -361,6 +361,7 @@
       .export-bar { display: block; }
       .export-actions { margin-top: 12px; }
     }
+    .traza-scanner-frame{display:block;width:100%;height:calc(100dvh - 165px);min-height:460px;border:0;border-radius:16px}
   </style>
   <link rel="stylesheet" href="traza.css?v=megacontrol-preview-1">
 </head>
@@ -376,7 +377,7 @@
     <nav class="traza-nav" aria-label="Secciones">
       <a id="converter-tab" class="traza-nav-link" href="#nueva-salida" data-traza-section="converter" aria-controls="converter-view"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 14h8M12 10v8"/></svg><span>Nueva salida</span></a>
       <a id="audit-tab" class="traza-nav-link" href="#archivo" data-traza-section="archive" aria-controls="audit-page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h18v12H3zM2 4h20v4H2zM9 12h6"/></svg><span>Archivo de salidas</span></a>
-      <a class="traza-nav-link" href="movil.html"><span>Escáner de productos</span></a>
+      <a id="scanner-tab" class="traza-nav-link" href="#escaner" data-traza-section="scanner" aria-controls="scanner-view"><span>Escáner de productos</span></a>
     </nav>
     <div class="traza-sidebar-bottom">
       <button class="traza-help-button" type="button" data-traza-help><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 8.5a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16h.01"/></svg>Ayuda</button>
@@ -390,6 +391,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -479,10 +481,10 @@
   <script src="vendor/xlsx.full.min.js?v=megacontrol-1"></script>
   <script src="excel-table.js?v=megacontrol-1"></script>
   <script src="supabase-config.js?v=megacontrol-1"></script>
-  <script src="audit-crypto.js?v=megacontrol-1"></script>
-  <script src="traza.js?v=megacontrol-units-1"></script>
+  <script src="audit-crypto.js?v=product-prices-1"></script>
+  <script src="traza.js?v=shared-navigation-1"></script>
   <script src="mobile-catalog.js?v=1"></script>
-  <script src="audit-cloud.js?v=megacontrol-mobile-index-1"></script>
+  <script src="audit-cloud.js?v=product-prices-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";

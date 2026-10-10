@@ -9,6 +9,13 @@ const AuditCrypto = require("../audit-crypto.js");
 const encoder = new TextEncoder();
 const keyA = "MEGA1." + AuditCrypto.encodeBase64Url(Uint8Array.from({ length: 32 }, (_, i) => i));
 const keyB = "MEGA1." + AuditCrypto.encodeBase64Url(Uint8Array.from({ length: 32 }, (_, i) => 255 - i));
+test('product indexes separate prices from salida indexes, workspaces and keys',async()=>{
+ const a=await AuditCrypto.unlock(keyA,'a'),b=await AuditCrypto.unlock(keyB,'a'),c=await AuditCrypto.unlock(keyA,'b');
+ const tag=await a.productIndex('6900004248146');assert.match(tag,/^[a-f0-9]{64}$/);assert.equal(tag,await a.productIndex('6900004248146'));assert.notEqual(tag,await a.blindIndex('6900004248146'));assert.notEqual(tag,await b.productIndex('6900004248146'));assert.notEqual(tag,await c.productIndex('6900004248146'));
+ for(const value of [null,undefined,{},NaN,Infinity,'','abc\x7f'])await assert.rejects(()=>a.productIndex(value));
+ const data=await a.encrypt(encoder.encode(JSON.stringify({code:'6900004248146',cents:799})),`product-price-v1|${tag}|1`);
+ await assert.rejects(()=>a.decrypt(data,`product-price-v1|${tag}|2`));await assert.rejects(()=>c.decrypt(data,`product-price-v1|${tag}|1`));
+});
 
 test("las claves generadas contienen 32 bytes aleatorios y son distintas", () => {
   const first = AuditCrypto.createRecoveryKey();
