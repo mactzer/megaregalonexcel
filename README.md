@@ -1,5 +1,10 @@
 # MegaControl | Control de salidas de Mega Regalón
 
+Los administradores pueden abrir **Perfil → Respaldos** para guardar una copia cifrada e
+incremental en una carpeta de su computadora. Incluye recuperación sin internet.
+Consulta [respaldos y recuperación](supabase/RESPALDOS.md) para verificar la copia y restaurar
+datos faltantes sin sobrescribir la base activa.
+
 MegaControl permite revisar salidas, seleccionar columnas de un PDF con texto y guardar un Excel. La conversión se realiza en el navegador. La versión publicada utiliza Supabase para compartir la auditoría: cifra el PDF, el Excel y los datos comerciales antes de subirlos. También conserva una modalidad interna con SQLite. No incluye OCR para documentos escaneados.
 
 El logo personalizado combina la M de Mega Regalón con documentos, una hoja de cálculo y una flecha de salida. Se incluye en `megacontrol-logo.png`, con fondo transparente, y se utiliza también como icono de la pestaña del navegador.

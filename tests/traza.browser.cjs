@@ -740,6 +740,17 @@ async function harness(options = {}) {
     if (pathname === '/rest/v1/rpc/mega_audit_authors' || pathname === '/rest/v1/rpc/mega_audit_list_members') {
       await json([{ user_id: OWNER, username: 'administrador', role: state.role }, { user_id: OTHER, username: 'colega', role: 'user' }]); return;
     }
+    if(pathname==='/rest/v1/rpc/mega_audit_backup_snapshot') {
+      if(state.role!=='admin'){await json({code:'42501'},403);return;}
+      const records=state.records.map(r=>({...r,pdf_path:`${WORKSPACE}/${r.created_by}/${r.id}/pdf.bin`,excel_path:`${WORKSPACE}/${r.created_by}/${r.id}/excel.bin`}));
+      await json({version:1,workspace_id:WORKSPACE,created_at:'2026-10-12T17:00:00Z',tables:{
+        mega_audit_workspace:[{id:WORKSPACE,label:'MegaControl',key_fingerprint:fixture.master.fingerprint}],
+        mega_audit_members:[{workspace_id:WORKSPACE,user_id:OWNER,role:'admin'},{workspace_id:WORKSPACE,user_id:OTHER,role:'user'}],
+        mega_audit_user_keys:[{workspace_id:WORKSPACE,user_id:OWNER,wrapped_key:fixture.wrapped},{workspace_id:WORKSPACE,user_id:OTHER,wrapped_key:fixture.colleagueWrapped}],
+        mega_audit_records:records,mega_audit_operations:[],mega_product_prices:[...state.prices.values()],mega_product_queries:[...state.queries.values()]},
+        authors:[{user_id:OWNER,username:'administrador'},{user_id:OTHER,username:'colega'}],
+        objects:[...state.storage].map(([name,data])=>({name,size:String(data.length),updated_at:'2026-10-12T17:00:00Z'}))});return;
+    }
     if (pathname === '/rest/v1/rpc/mega_audit_add_member') { const body = request.postDataJSON(); await json({ user_id: OTHER, username: body.p_username, role: body.p_role }); return; }
     if (pathname === '/rest/v1/mega_product_queries') {
       if(state.missingUpgrade){await json({code:'PGRST205'},404);return;}if(state.failQueries){await json({code:'fictional_error'},state.failQueries);return;}
@@ -2190,4 +2201,62 @@ test('archive units: session HTTP 401 during automatic original-PDF verification
     assert.equal(h.state.downloads.length, 0);
     assert.equal(h.state.recordCalls, 0);
   } finally { await h.close(); }
+});
+
+async function backupDirectory(page, initial=[]) {
+  await page.evaluate(entries=>{
+    const data=new Map(entries.map(([p,v])=>[p,new Uint8Array(v)])),dirs=new Set(['']);
+    for(const name of data.keys()){const p=name.split('/');for(let i=1;i<p.length;i++)dirs.add(p.slice(0,i).join('/'));}
+    window.__directory={data,dirs,calls:[],failWrite:false};
+    const missing=()=>{throw new DOMException('Missing file','NotFoundError');};
+    function folder(prefix='') {return {name:'Respaldo privado',async getDirectoryHandle(name,{create=false}={}){const p=prefix?prefix+'/'+name:name;if(!dirs.has(p)){if(!create)missing();dirs.add(p);}return folder(p);},
+      async getFileHandle(name,{create=false}={}) {const p=prefix?prefix+'/'+name:name;if(!data.has(p)){if(!create)missing();data.set(p,new Uint8Array());}
+        return {async getFile(){return new File([data.get(p)],name);},async createWritable(){let value;return {async write(v){if(window.__directory.failWrite)throw new Error('Guardado local interrumpido');value=new Uint8Array(v);},async close(){data.set(p,value);},async abort(){value=null;}};}};
+      }};}
+    window.showDirectoryPicker=async options=>{window.__directory.calls.push({options,active:navigator.userActivation.isActive});return folder();};
+  },initial);
+}
+async function openBackups(h) {
+  await h.page.locator('#app-profile button').first().click();await h.page.getByRole('button',{name:'Respaldos',exact:true}).click();await h.page.locator('#audit-cloud-backup-password').waitFor();
+}
+async function backupPassword(page) {
+  await page.locator('#audit-cloud-backup-password').fill(PASSWORD);await page.locator('#audit-cloud-backup-repeat').fill(PASSWORD);
+}
+test('backups: administrator saves and reuses encrypted files, offline tool verifies and restores exact originals without network',async()=>{
+ const h=await harness();let offline;
+ try{
+  h.state.records=h.state.records.slice(0,1);h.state.storage=new Map([...h.state.storage].filter(([p])=>p.includes(h.state.records[0].id)));await login(h.page);await backupDirectory(h.page);await openBackups(h);await backupPassword(h.page);
+  const before=h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;
+  await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByText(/Respaldo guardado y verificado:/).waitFor();
+  assert.match(await h.page.getByRole('dialog').innerText(),/Descargados: 2; reutilizados: 0/);assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length-before,2);
+  assert.equal(await h.page.evaluate(()=>window.__directory.calls[0].active),true);
+  await backupPassword(h.page);await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByText(/Descargados: 0; reutilizados: 2/).waitFor();
+  assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length-before,2);
+  await backupPassword(h.page);await h.page.getByRole('button',{name:'Verificar respaldo',exact:true}).click();await h.page.getByText(/Respaldo verificado: 1 registros y 2 documentos/).waitFor();
+  const files=await h.page.evaluate(()=>[...window.__directory.data].map(([p,v])=>[p,Array.from(v)]));
+  const contents=Buffer.from(files.find(([p])=>p==='recuperar.html')[1]).toString('utf8'),filename=path.join(OUTPUT,'recuperar-ficticio.html');fs.writeFileSync(filename,contents);
+  assert.ok(!contents.includes(fixture.key));assert.ok(!JSON.stringify(files).includes(PASSWORD));
+  offline=await h.context.newPage();const errors=[],requests=[];offline.on('pageerror',e=>errors.push(e.message));offline.on('request',r=>requests.push(r.url()));
+  await offline.route(origin+'/recuperar-ficticio.html',route=>route.fulfill({contentType:'text/html',body:contents}));await offline.goto(origin+'/recuperar-ficticio.html');await backupDirectory(offline,files);
+  await offline.locator('#password').fill(PASSWORD);await offline.getByRole('button',{name:'Verificar respaldo',exact:true}).click();await offline.getByText(/Respaldo verificado: 1 registros y 2 documentos/).waitFor();
+  await offline.locator('#password').fill(PASSWORD);await offline.getByRole('button',{name:'Recuperar archivos y datos',exact:true}).click();await offline.getByRole('button',{name:'Elegir destino y recuperar',exact:true}).click();await offline.getByText(/Recuperados 1 registros y 2 documentos/).waitFor();
+  const restored=await offline.evaluate(()=>[...window.__directory.data].filter(([p])=>p.startsWith('MegaControl-recuperado-')).map(([p,v])=>[p,Array.from(v)]));
+  assert.deepEqual(Buffer.from(restored.find(([p])=>p.endsWith('/original.pdf'))[1]),fixture.pdf);assert.deepEqual(Buffer.from(restored.find(([p])=>p.endsWith('/original.xlsx'))[1]),fixture.excel);
+  assert.equal(Buffer.from(restored.find(([p])=>p.endsWith('/clave-privada.txt'))[1]).toString().trim(),fixture.key);
+  assert.deepEqual(errors,[]);
+  assert.deepEqual(requests,[origin+'/recuperar-ficticio.html'],'The standalone recovery artifact loads no scripts, styles, APIs or other network resources');
+ }finally{if(offline)await offline.close();await h.close();}
+});
+test('backups: ordinary users cannot access backup controls; remote revocation and an interrupted save preserve the prior copy',async()=>{
+ const user=await harness({role:'user'});try{await login(user.page);await user.page.locator('#app-profile button').first().click();assert.equal(await user.page.getByRole('button',{name:'Respaldos',exact:true}).count(),0);}finally{await user.close();}
+ const h=await harness();try{
+  h.state.records=h.state.records.slice(0,1);h.state.storage=new Map([...h.state.storage].filter(([p])=>p.includes(h.state.records[0].id)));await login(h.page);await backupDirectory(h.page);await openBackups(h);await backupPassword(h.page);
+  await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByText(/Respaldo guardado y verificado:/).waitFor();
+  const old=await h.page.evaluate(()=>Array.from(window.__directory.data.get('respaldo.megacontrol.json')));
+  await h.page.evaluate(()=>window.__directory.failWrite=true);await backupPassword(h.page);await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByText('Guardado local interrumpido',{exact:true}).waitFor();
+  assert.deepEqual(await h.page.evaluate(()=>Array.from(window.__directory.data.get('respaldo.megacontrol.json'))),old);
+  await h.page.evaluate(()=>window.__directory.failWrite=false);h.state.role='user';await backupPassword(h.page);const calls=h.state.requests.filter(r=>r.pathname==='/rest/v1/rpc/mega_audit_backup_snapshot').length;
+  await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByRole('dialog').waitFor({state:'detached'});
+  assert.equal(h.state.requests.filter(r=>r.pathname==='/rest/v1/rpc/mega_audit_backup_snapshot').length,calls);assert.deepEqual(await h.page.evaluate(()=>Array.from(window.__directory.data.get('respaldo.megacontrol.json'))),old);
+ }finally{await h.close();}
 });

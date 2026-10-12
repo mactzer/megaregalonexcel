@@ -942,9 +942,11 @@
         if (member.role === "admin") {
           const users = button("Usuarios y permisos", true);
           const security = button("Seguridad", true);
+          const backups = button("Respaldos", true);
           users.addEventListener("click", function () { closeMenu(false); openUsersDialog(users); });
           security.addEventListener("click", function () { closeMenu(false); openSecurityDialog(security); });
-          menu.append(users, security);
+          backups.addEventListener("click", function () { closeMenu(false); openBackupDialog(backups); });
+          menu.append(users, security, backups);
         }
         const logout = button("Cerrar sesión", true);
         logout.addEventListener("click", function () {
@@ -1918,6 +1920,64 @@
         } finally { wipe(); modal.dialog.removeEventListener("close", wipe); download.disabled = false; }
       });
     } catch (error) { if (modal && modal.dialog.open && epoch === generation) feedback(modal.content, errorText(error), true); }
+  }
+
+  async function openBackupDialog(opener) {
+    const epoch=generation, key=master, controller=new AbortController();let modal,working=false;
+    try {
+      assertAccount(epoch,true);modal=createDialog('Respaldos',opener);
+      modal.dialog.addEventListener('close',()=>controller.abort(),{once:true});
+      await requireAdmin(epoch);if(!modal.dialog.open)return;
+      const guard=()=>{assertAccount(epoch,true);if(!modal.dialog.open||controller.signal.aborted||master!==key)throw new Error('La vista cambió.');};
+      const explanation=node('p','Guarda datos, PDF, Excel y la clave de recuperación en una carpeta privada de tu computadora. Al actualizar la misma carpeta, solo se descargan los documentos nuevos o dañados.','audit-muted');
+      const form=node('form',undefined,'audit-form audit-cloud-form');
+      const password=field(form,'Contraseña del respaldo','backup-password','password',{minLength:12,autocomplete:'new-password'});
+      const repeat=field(form,'Repite la contraseña','backup-repeat','password',{minLength:12,autocomplete:'new-password'});
+      passwordToggle(form,[password,repeat]);
+      const save=button('Guardar o actualizar respaldo');save.type='submit';
+      const verify=button('Verificar respaldo',true),notice=node('div');notice.setAttribute('aria-live','polite');
+      const restoreInfo=node('p','Conserva la carpeta completa y su contraseña. Incluye recuperar.html para verificar y recuperar los archivos sin internet. Haz un respaldo después de cada jornada.','audit-muted');
+      form.append(save,verify);modal.content.replaceChildren(explanation,form,restoreInfo,notice);
+      if(typeof window.showDirectoryPicker!=='function') {
+        save.disabled=verify.disabled=true;feedback(notice,'Para respaldar o recuperar carpetas, abre MegaControl en Chrome o Edge de computadora.',true);return;
+      }
+      async function run(action) {
+        if(working||!form.reportValidity())return;
+        if(password.value!==repeat.value){feedback(notice,'Las contraseñas no coinciden.',true);return;}
+        // Directory selection must start during the original user gesture.
+        let selection;
+        try{selection=window.showDirectoryPicker({mode:action==='save'?'readwrite':'read',id:'megacontrol-backup'});selection.catch(()=>{});}
+        catch(error){feedback(notice,errorText(error),true);return;}
+        const secret=password.value;password.value=repeat.value='';working=true;save.disabled=verify.disabled=true;
+        try {
+          const folder=await selection;guard();await requireAdmin(epoch);guard();
+          const progress=p=>{guard();feedback(notice,(action==='save'?'Guardados ':'Verificados ')+p.done+' de '+p.total+' documentos.',false);};
+          if(action==='verify') {
+            const result=await window.AuditBackup.open(folder,secret,progress,guard);
+            guard();if(result.header.workspace!==CONFIG.workspace||result.key.fingerprint!==key.fingerprint)throw new Error('El respaldo corresponde a otro equipo.');
+            await requireAdmin(epoch);guard();feedback(notice,'Respaldo verificado: '+result.decoded.records.length+' registros y '+result.manifest.files.length+' documentos. La clave funciona y todos los archivos se pueden recuperar.',false);
+          } else {
+            feedback(notice,'Preparando la instantánea de datos…',false);
+            const snapshot=await request('/rest/v1/rpc/mega_audit_backup_snapshot',{method:'POST',body:{p_workspace_id:CONFIG.workspace},signal:controller.signal});guard();
+            const sources=await Promise.all(['audit-crypto.js?v=shared-history-1','audit-backup.js?v=1'].map(async path=>{
+              const response=await fetch(path,{signal:controller.signal,credentials:'omit',redirect:'error'});if(!response.ok)throw new Error('No se pudo preparar la herramienta de recuperación.');return response.text();
+            }));guard();
+            const result=await window.AuditBackup.save({folder,password:secret,snapshot,key,recovery:recoveryKey,guard,progress,
+              authorize:()=>requireAdmin(epoch), recoveryPage:window.AuditBackup.offlinePage(...sources),
+              download:async path=>{
+                guard();await requireAdmin(epoch);guard();
+                const response=await request('/storage/v1/object/authenticated/'+BUCKET+'/'+path,{raw:true,signal:controller.signal});guard();
+                if(Number(response.headers.get('Content-Length'))>FILE_LIMIT+64)throw new Error('El documento excede el tamaño permitido.');
+                const value=new Uint8Array(await response.arrayBuffer());guard();return value;
+              }
+            });guard();
+            feedback(notice,'Respaldo guardado y verificado: '+result.records+' registros y '+result.files+' documentos. Descargados: '+result.downloaded+'; reutilizados: '+result.reused+'.',false);
+          }
+        }catch(error){if(epoch===generation&&modal.dialog.open)feedback(notice,error.name==='AbortError'?'Selección cancelada.':errorText(error),error.name!=='AbortError');}
+        finally{working=false;if(modal.dialog.open){save.disabled=verify.disabled=false;}}
+      }
+      form.addEventListener('submit',e=>{e.preventDefault();run('save');});verify.addEventListener('click',()=>run('verify'));
+    }catch(error){if(modal&&modal.dialog.open&&epoch===generation)feedback(modal.content,errorText(error),true);}
   }
 
   function renderUserManagement(parent, dialog, userGeneration) {
