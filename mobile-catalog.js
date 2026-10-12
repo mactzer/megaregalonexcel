@@ -45,10 +45,10 @@
     return (aDate > bDate ? -1 : aDate < bDate ? 1 : 0) || compareNumber(b.doc.salida, a.doc.salida) || a.id.localeCompare(b.id);
   }
   function create(client) {
-    let products = new Map(),references=new Map(),documents = [], failed = 0, prepared = false, generation = 0, revision = '';
+    let products = new Map(),references=new Map(),documents = [], failed = 0, unidentified=0,prepared = false, generation = 0, revision = '';
     const signature = rows => JSON.stringify(rows.map(row => [row.id, row.created_at, row.metadata_revision||row.encrypted_metadata]));
     const guard = (epoch, signal) => { if (epoch !== generation || (signal && signal.aborted)) throw new Error('Preparación cancelada.'); };
-    function clear() { generation++; prepared = false; products.clear();references.clear(); documents = []; failed = 0; revision = ''; }
+    function clear() { generation++; prepared = false; products.clear();references.clear(); documents = []; failed = 0;unidentified=0; revision = ''; }
     async function prepare(progress, signal) {
       clear();
       const epoch = generation;
@@ -110,6 +110,7 @@
       }
       for(const match of index.values())if(refIndex.get(String(match.product.ref||'').trim().toUpperCase())?.ambiguousReference)match.product={...match.product,referenceAmbiguous:true};
       guard(epoch, signal); products = index;references=refIndex; documents = results.filter(Boolean); failed = errors; prepared = true; revision = signature(snapshot);
+      unidentified=documents.reduce((n,entry)=>n+entry.doc.products.filter(p=>!p.codigo&&!p.ref).length,0);
       // Cache only authenticated ciphertext, never PDF bytes or clear product data.
       try {
         if (reused !== snapshot.length || previous.length !== snapshot.length) {
@@ -117,13 +118,13 @@
           await client.cache.write(ciphertext); guard(epoch, signal);
         }
       } catch (_) { guard(epoch, signal); }
-      return { products: products.size+[...references.values()].filter(r=>r.history.every(h=>!h.product.codigo)).length, documents: snapshot.length, failed, cached: reused };
+      return { products: products.size+[...references.values()].filter(r=>r.history.every(h=>!h.product.codigo)).length, documents: snapshot.length, failed,unidentified, cached: reused };
     }
     async function lookup(code, signal) {
       const epoch = generation;
       if (!prepared) throw new Error('Prepara el índice antes de consultar productos.');
       await client.verifyAccess(signal); guard(epoch, signal);
-      return { match: products.get(canonical(code)) || references.get(String(code).trim().toUpperCase()) || null, failed, documents: documents.length + failed };
+      return { match: products.get(canonical(code)) || references.get(String(code).trim().toUpperCase()) || null, failed,unidentified, documents: documents.length + failed };
     }
     async function hasUpdates(signal) {
       const epoch = generation;

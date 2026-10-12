@@ -2151,7 +2151,7 @@
     if(meta.imported_document){
       if(!UUID.test(meta.import_reviewed_by||'')||!Number.isFinite(Date.parse(meta.import_reviewed_at)))throw new Error('Documento pendiente de revisión administrativa.');
       const s=meta.imported_document;
-      return {products:s.rows.map(r=>({codigo:r.codigo,descripcion:r.descripcion,pventa:r.pventa===''?null:r.pventa,empaque:r.empaque,ref:r.ref,priceOrigin:r.priceOrigin})),salida:s.numero,archiveSalida:meta.salida_numero,invoiceDate:window.MobileCatalog.invoiceDate(s.fecha),kind:s.kind,format:s.format,reviewed:true,date:rows[0].created_at};
+      return {products:s.rows.map(r=>({codigo:r.codigo,descripcion:r.descripcion,pventa:r.pventa===''?null:r.pventa,empaque:r.empaque,ref:r.ref,priceOrigin:r.priceOrigin})),unidentified:s.rows.filter(r=>!r.codigo&&!r.ref).length,salida:s.numero,archiveSalida:meta.salida_numero,invoiceDate:window.MobileCatalog.invoiceDate(s.fecha),kind:s.kind,format:s.format,reviewed:true,date:rows[0].created_at};
     }
     let data;
     try {

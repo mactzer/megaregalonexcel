@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" href="megacontrol-logo.png?v=megacontrol-logo-1">
   <link rel="stylesheet" href="audit.css?v=megacontrol-1">
   <link rel="stylesheet" href="audit-cloud.css?v=megacontrol-1">
-  <link rel="stylesheet" href="invoice-import.css?v=1">
+  <link rel="stylesheet" href="invoice-import.css?v=2">
   <style>
     :root {
       --ink: #191b22;
@@ -392,7 +392,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
-    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=10" title="Escáner de productos" allow="camera"></iframe></section>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=11" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -486,13 +486,13 @@
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=shared-history-1"></script>
   <script src="audit-backup.js?v=1"></script>
-  <script src="invoice-formats.js?v=1"></script>
+  <script src="invoice-formats.js?v=2"></script>
   <script src="invoice-ocr.js?v=1"></script>
-  <script src="invoice-review.js?v=1"></script>
+  <script src="invoice-review.js?v=2"></script>
   <script src="audit-realtime.js?v=1"></script>
   <script src="traza.js?v=shared-navigation-1"></script>
-  <script src="mobile-catalog.js?v=pdf-imports-1-2"></script>
-  <script src="audit-cloud.js?v=pdf-imports-1"></script>
+  <script src="mobile-catalog.js?v=fiscal-pdfs-1"></script>
+  <script src="audit-cloud.js?v=fiscal-pdfs-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -1401,7 +1401,7 @@
       }
     }
 
-    async function handleFile(file, archiveSource) {
+    async function handleFile(file, archiveSource,readOriginal=false) {
       if (state.exporting) {
         showMessage("Espera a que termine la descarga antes de cargar otro PDF.", "info");
         return;
@@ -1450,10 +1450,10 @@
       updateStep(1);
       try {
         let parsed;
-        if(archiveSource&&archiveSource.importedDocument){
+        if(archiveSource&&archiveSource.importedDocument&&!readOriginal){
           const saved=window.InvoiceFormats.validateSaved(archiveSource.importedDocument);
           const actual=new Uint8Array(await file.arrayBuffer());try{const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',actual)),b=>b.toString(16).padStart(2,'0')).join('');if(digest!==saved.pdfSha256)throw new Error('El PDF no coincide con su lectura guardada.');}finally{actual.fill(0);}
-          parsed={rows:saved.rows,rawLines:saved.rows.map((r,i)=>({pagina:r.page||1,linea:i+1,texto:r.fila_original||r.descripcion})),documentInfo:{numero:saved.numero,fecha:saved.fecha,kind:saved.kind,format:saved.format},pdfSha256:saved.pdfSha256,imported:true};
+          parsed={rows:saved.rows,rawLines:saved.rows.map((r,i)=>({pagina:r.page||1,linea:i+1,texto:r.fila_original||r.descripcion})),documentInfo:{numero:saved.numero,fecha:saved.fecha,kind:saved.kind,format:saved.format,...saved.totals},pdfSha256:saved.pdfSha256,imported:true};
         }else parsed = await parsePdf(file, parseContext);
         assertParseCurrent(parseContext);
         state.rows = parsed.rows;
@@ -1475,7 +1475,7 @@
           Object.assign(state.names,{salidas_unidades:'Cantidad',costo:'Precio de la factura',salidas_total:'Importe de la factura',pventa:'Precio de venta confirmado'});
           $('#salida-number').previousElementSibling.textContent='Número del documento';
           const account=window.AuditClient&&window.AuditClient.status();
-          state.importReview=window.InvoiceReview.create({host:$('#invoice-review'),parsed,file,readOnly:Boolean(archiveSource&&account&&account.user&&account.user.role!=='admin'),onChange:()=>{if(parseContext.generation!==converterParseGeneration)return;clearPendingAudit();clearCompletedAudit();state.salidaNumero=parsed.documentInfo.numero;$('#salida-number').value=state.salidaNumero;if(!state.excelNameEdited)$('#excel-file-name').value=safeFileName(defaultExcelName());renderPreview();}});
+          state.importReview=window.InvoiceReview.create({host:$('#invoice-review'),parsed,file,readOnly:Boolean(archiveSource&&account&&account.user&&account.user.role!=='admin'),onReadOriginal:archiveSource&&account&&account.user&&account.user.role==='admin'?()=>handleFile(file,archiveSource,true):null,onChange:()=>{if(parseContext.generation!==converterParseGeneration)return;clearPendingAudit();clearCompletedAudit();state.salidaNumero=parsed.documentInfo.numero;$('#salida-number').value=state.salidaNumero;if(!state.excelNameEdited)$('#excel-file-name').value=safeFileName(defaultExcelName());renderPreview();}});
           if(archiveSource){$('#converter-title').textContent='Revisar documento';$('#archive-source-message').textContent='Revisando la lectura del documento archivado. El PDF y el Excel originales se conservan. Solo un administrador puede aprobar correcciones.';}
           if(parsed.ocrWarning)showMessage(parsed.ocrWarning,'info');
         }

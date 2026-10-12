@@ -88,7 +88,7 @@
     }
     if (found && found.length === 1) lookup(found[0].text);
   });
-  function showProduct(match, failed, price) {
+  function showProduct(match, failed, price, unidentified=0) {
     const { product, doc, history: sources, unverifiedDates, conflictingPrices,ambiguousReference } = match;
     const result = $('result'); result.className = failed || unverifiedDates || conflictingPrices ? 'card warning' : 'card'; result.replaceChildren(); result.hidden = false;
     result.append(element('p', 'PRODUCTO ENCONTRADO EN EL ARCHIVO', 'result-label'), element('h2', product.descripcion || 'Sin descripción en el PDF', 'product-name'));
@@ -102,6 +102,7 @@
     }
     if (doc.archiveSalida && doc.archiveSalida !== doc.salida) dl.append(element('dt', 'Número guardado en Archivo'), element('dd', doc.archiveSalida));
     result.append(dl);
+    if(unidentified)result.append(element('p','Hay '+unidentified+' productos archivados sin código o referencia. La consulta cubre los productos identificados; vincula las etiquetas pendientes desde Archivo.','note missing'));
     if(ambiguousReference)result.append(element('p','Esta referencia corresponde a varios códigos de barras. Consulta el código exacto del producto para ver su precio.','note missing'));
     if (failed) result.append(element('p', 'Hay ' + failed + ' documentos sin verificar en el índice. Este resultado podría tener una versión posterior. Pulsa Actualizar para reintentar.', 'note missing'));
     if (unverifiedDates) result.append(element('p', 'Hay ' + unverifiedDates + ' coincidencias sin fecha de factura válida. No se puede confirmar cuál es la última salida; revisa esos PDF. Se da prioridad a las facturas con fecha verificada.', 'note missing'));
@@ -139,7 +140,8 @@
       if (current.signal.aborted || !api.status().authenticated) return;
       catalogReady = true;
       $('catalog-status').textContent = info.products + ' productos · ' + info.documents + ' documentos · ' + info.cached + ' recuperados del índice.' + (info.failed ? ' ' + info.failed + ' documentos sin verificar; pulsa Actualizar para reintentar.' : ' Índice listo.');
-      status('Listo para escanear. La búsqueda ya no abre los PDF.', Boolean(info.failed));
+      if(info.unidentified)$('catalog-status').textContent+=' '+info.unidentified+' productos pendientes de código o referencia.';
+      status('Listo para escanear. La búsqueda ya no abre los PDF.', Boolean(info.failed||info.unidentified));
     } catch (e) {
       if (api.status().authenticated) {
         $('catalog-status').textContent = 'Índice pendiente. Pulsa Actualizar para prepararlo.';
@@ -191,18 +193,18 @@
           current.abort(); reject(new Error('La conexión no respondió en cinco segundos. Reintenta la consulta; no se ha confirmado el producto.'));
         }, 5000); })
       ]);
-      const { documents: count, failed, match, price } = response;
+      const { documents: count, failed, match, price,unidentified=0 } = response;
       assertCurrent();
       let label;
       if (match) {
-        showProduct(match, failed, price); label = 'Encontrado';
+        showProduct(match, failed, price,unidentified); label = 'Encontrado';
         status('Producto encontrado en el índice de ' + count + ' documentos.');
       } else {
         const result = $('result'); result.hidden = false; result.className = 'card warning';
-        label = failed ? 'Consulta incompleta' : 'Sin coincidencia';
-        result.append(element('p', failed ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
-        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : 'Este código no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
-        status(failed ? 'La consulta terminó con documentos sin verificar.' : 'Consulta del archivo completada.', Boolean(failed));
+        label = failed||unidentified ? 'Consulta incompleta' : 'Sin coincidencia';
+        result.append(element('p', failed||unidentified ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
+        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : unidentified?'Hay '+unidentified+' productos archivados sin código o referencia. Este código no coincide con los productos identificados; completa sus etiquetas desde Archivo antes de confirmar que falta.':'Este código no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
+        status(failed||unidentified ? 'La consulta terminó con productos o documentos pendientes de verificar.' : 'Consulta del archivo completada.', Boolean(failed||unidentified));
       }
       window.dispatchEvent(new CustomEvent('mobile:consulted', { detail: { code, label, match, price } }));
       if (!window.matchMedia('(min-width: 900px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });

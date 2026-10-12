@@ -9,7 +9,9 @@ Las salidas habituales conservan su conversión automática. Para Nevada, Feduro
 3. El **precio de la factura** se conserva separado del **precio de venta**. El administrador puede escribir el precio de venta, aceptar explícitamente una sugerencia o aplicar un precio a varios productos seleccionados. **Usar precio de factura como venta** también requiere una decisión explícita; nunca se aplica de forma automática.
 4. Marca la confirmación y guarda el Excel. Un administrador aprueba la lectura y sus precios. Un compañero puede archivar una lectura pendiente; sus productos aún no participan en las consultas. El administrador la abre desde **Archivo → Revisar lectura / Excel** para corregirla y aprobarla.
 
-El QR identifica la factura; no sustituye los códigos de los productos. Si Skechers solo incluye referencias, se puede buscar por referencia. No se inventa un código de barras. Una referencia asociada con varios códigos exige consultar el código exacto para mostrar el precio.
+Los PDF digitales del **Comprobante Auxiliar de Factura Electrónica (DGI)** se leen completos, incluidas las páginas que continúan sin repetir los encabezados. Se separan cantidad, valor unitario, descuento, monto, ITBMS y total de la fila. En Feduro, el código de barras está entre llaves en **Información de interés**; la referencia está al inicio de **Descripción**. Se conservan los ceros iniciales y se recomponen las referencias impresas con letras separadas. Los totales impresos se conservan aparte de la suma de filas; una diferencia de redondeo no modifica los valores originales.
+
+El QR identifica la factura; no sustituye los códigos de los productos. Si Skechers solo incluye referencias, se puede buscar por referencia. No se inventa un código de barras. Algunos digitales de Skechers no incluyen ni código ni referencia individual: se pueden archivar con los datos del pedido separados, y un administrador vincula después la etiqueta real desde Archivo. Las filas sin identificar no participan en búsquedas; el escáner informa que la consulta está incompleta cuando aún hay productos pendientes de identificación. Una referencia asociada con varios códigos exige consultar el código exacto para mostrar el precio.
 
 Un escaneo puede contener errores de OCR, filas omitidas y números atravesados por lápiz. Los precios escritos a mano, incluidos los que abarcan varias filas con una llave, deben revisarse. Si el reconocimiento falla o el formato es desconocido, puedes ingresar las filas junto a la vista del original. Esto permite incorporar el documento sin aceptar datos ilegibles como ciertos. La primera lectura de imágenes puede tardar; las consultas posteriores utilizan la lectura aprobada y no ejecutan OCR.
 
@@ -17,7 +19,7 @@ Un escaneo puede contener errores de OCR, filas omitidas y números atravesados 
 
 Un precio compartido editado por un administrador conserva su prioridad. Luego se utiliza la última **salida**, según fecha impresa y número. Las demás facturas o pedidos se utilizan cuando el producto no aparece en una salida. La ficha muestra las fuentes, su precio confirmado y la fecha impresa. Un precio pendiente permanece sin definir.
 
-La corrección de una lectura modifica los datos cifrados de consulta. Conserva el PDF y el Excel archivados originales; el Excel corregido se descarga como otra presentación. Reexportar una lectura sin cambios no genera otra revisión ni otro archivo en Supabase.
+La corrección de una lectura modifica los datos cifrados de consulta. Conserva el PDF y el Excel archivados originales; el Excel corregido se descarga como otra presentación. Un administrador puede usar **Volver a leer PDF original** para reconstruir una lectura incompleta con el lector actual, revisar los datos nuevos y aprobar la corrección sin volver a subir archivos. Reexportar una lectura sin cambios no genera otra revisión ni otro archivo en Supabase.
 
 ## Instalación y consumo
 
