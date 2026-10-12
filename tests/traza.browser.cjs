@@ -335,6 +335,53 @@ test('mobile navigation: scanner launched from index uses the parent account wit
   await scanner.locator('.bottom [data-mobile-section="archive"]').click();await h.page.locator('#audit-page').waitFor({state:'visible'});assert.equal(await h.page.evaluate(()=>AuditCloud===window.__api&&AuditCloud.status().authenticated),true);assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);
  }finally{await h.close();}
 });
+test('desktop scanner: wide layout, sidebar icon, keyboard lookup and one scrolling page preserve the parent session',async()=>{
+ const h=await harness({viewport:{width:1366,height:900}});try{
+  h.state.records=h.state.records.slice(0,1);await login(h.page);
+  await h.page.locator('#scanner-tab').click();const scanner=h.page.frameLocator('#scanner-frame');
+  await scanner.locator('#scan:not([disabled])').waitFor();const frame=h.page.frames().find(f=>f.url().includes('embedded=1'));
+  assert.equal(await h.page.locator('#scanner-tab svg[aria-hidden="true"]').count(),1);
+  assert.equal(await scanner.locator('.bottom').isVisible(),false,'The desktop shell already supplies navigation');
+  for(const width of [1366,1920]){
+   await h.page.setViewportSize({width,height:1000});
+   await frame.waitForFunction(()=>document.documentElement.scrollHeight<=innerHeight+1);
+   const layout=await frame.evaluate(()=>{
+    const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,right:r.right,bottom:r.bottom};};
+    return{main:rect('main'),search:rect('.scanner-card'),result:rect('.result-placeholder'),history:rect('.history-card'),input:rect('#lookup-form'),camera:rect('#scan'),overflow:document.documentElement.scrollWidth>innerWidth};
+   });
+   assert.ok(layout.main.width>900,'Desktop content uses the available width rather than the old 600px phone column');
+   assert.ok(layout.search.right<layout.result.x,'Result occupies a separate column');
+   assert.ok(layout.history.y>=layout.search.bottom,'Shared history remains under the search controls');
+   assert.ok(layout.input.y<layout.camera.y,'Keyboard/USB lookup is first on desktop');assert.equal(layout.overflow,false);
+  }
+  await scanner.locator('#barcode').fill('0001234567890');await scanner.locator('#barcode').press('Enter');
+  await scanner.locator('#result .price').waitFor();assert.match(await scanner.locator('#result').innerText(),/12\.00/);
+  assert.equal(await scanner.locator('.result-placeholder').isVisible(),false);
+  const gap=await frame.evaluate(()=>document.querySelector('.history-card').getBoundingClientRect().top-document.querySelector('.scanner-card').getBoundingClientRect().bottom);
+  assert.ok(gap>=19&&gap<=21,'A long product result does not push the search history away from its controls');
+  await frame.waitForFunction(()=>document.documentElement.scrollHeight<=innerHeight+1);
+  await h.page.screenshot({path:path.join(OUTPUT,'desktop-scanner.png'),fullPage:true});
+  await scanner.locator('#history li').filter({hasText:'0001234567890'}).waitFor();
+  const queries=h.state.queryCalls;await h.page.locator('#audit-tab').click();await h.page.locator('#scanner-tab').click();
+  await scanner.locator('#result .price').waitFor();assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);assert.equal(h.state.queryCalls,queries);
+  await h.page.setViewportSize({width:390,height:844});await scanner.locator('.bottom').waitFor({state:'visible'});
+  assert.equal(await h.page.locator('#scanner-frame').evaluate(e=>e.style.height),'','Narrow screens restore their mobile viewport');
+  assert.equal(await scanner.locator('.result-placeholder').isVisible(),false);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('desktop scanner: phone query with no match reaches the PC embedded scanner and its reply reaches the phone',async()=>{
+ const phone=await harness({mobile:true}),pc=await harness({viewport:{width:1440,height:1000},role:'user'});try{
+  phone.state.records=phone.state.records.slice(0,1);pc.state.records=pc.state.records.slice(0,1);pc.state.queries=phone.state.queries;pc.state.sockets=phone.state.sockets;
+  await mobileLogin(phone);await login(pc.page,'index.html',{username:'colega'});await pc.page.locator('#scanner-tab').click();
+  const scanner=pc.page.frameLocator('#scanner-frame');await scanner.locator('#scan:not([disabled])').waitFor();
+  await mobileLookup(phone,'7452100340396');await scanner.locator('#history li').filter({hasText:'7452100340396'}).waitFor();
+  assert.match(await scanner.locator('#history').innerText(),/@administrador/);assert.match(await scanner.locator('#history').innerText(),/Sin coincidencia/);
+  await scanner.locator('#barcode').fill('0001234567890');await scanner.locator('#barcode').press('Enter');
+  await phone.page.waitForFunction(()=>document.querySelector('#history').textContent.includes('@colega'));
+  await scanner.locator('#history li').filter({hasText:'0001234567890'}).waitFor();
+  assert.equal(phone.state.queries.size,2);assert.equal(await scanner.locator('#history li').count(),2);assert.equal(phone.state.sockets.size,2,'One subscription for each authenticated owner');
+ }finally{await phone.close();await pc.close();}
+});
 test('mobile scanner: C++ reader recognizes small Code128 and EAN13 labels including upside-down sheets and photo lookup',async()=>{
  const labels=JSON.parse(fs.readFileSync(path.join(ROOT,'tests/fixtures/label-barcodes.json'),'utf8'));
  const h=await harness({mobile:true});try{

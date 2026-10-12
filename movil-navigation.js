@@ -3,6 +3,21 @@
   const engine = document.getElementById('engine'), scanner = document.getElementById('mobile-scanner-view'), docs = document.getElementById('mobile-document-view');
   const embedded = new URLSearchParams(location.search).get('embedded') === '1' && window.parent !== window;
   const hashes = { scanner: '#escaner', archive: '#archivo', converter: '#nueva-salida' };
+  // Let the desktop shell scroll as one page instead of nesting a phone viewport.
+  if (embedded) {
+    const desktop = window.matchMedia('(min-width: 900px)'), main = document.getElementById('mobile-scanner-view');
+    const fit = () => {
+      const frame = window.frameElement;
+      if (!frame) return;
+      if (!desktop.matches) { frame.style.removeProperty('height'); return; }
+      const height = main.getBoundingClientRect().height;
+      if (height > 0) frame.style.height = Math.ceil(height) + 'px';
+    };
+    const observer = new ResizeObserver(fit); observer.observe(main);
+    desktop.addEventListener('change', fit);
+    window.addEventListener('pageshow', () => { observer.observe(main); fit(); });
+    window.addEventListener('pagehide', () => observer.disconnect());
+  }
   let section = 'scanner', owner, ready;
   function fromHash() { return location.hash === '#archivo' ? 'archive' : location.hash === '#nueva-salida' ? 'converter' : 'scanner'; }
   function present(next, options = {}) {

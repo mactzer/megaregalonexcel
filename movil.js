@@ -198,7 +198,7 @@
         status(failed ? 'La consulta terminó con documentos sin verificar.' : 'Consulta del archivo completada.', Boolean(failed));
       }
       window.dispatchEvent(new CustomEvent('mobile:consulted', { detail: { code, label, match, price } }));
-      $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (!window.matchMedia('(min-width: 900px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) { if (api.status().authenticated && (timer || !current.signal.aborted)) status(e.message, true); }
     finally { clearTimeout(timer); busy = false; $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true; if (controller === current) controller = null; }
   }
