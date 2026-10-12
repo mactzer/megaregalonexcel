@@ -54,12 +54,18 @@
       const epoch = generation;
       const snapshot = await client.snapshot(signal);
       guard(epoch, signal);
-      let previous = [];
+      let previous = [], cacheVersion = 0;
       try {
         const ciphertext = await client.cache.read(); guard(epoch, signal);
         if (ciphertext) {
           const payload = await client.unseal(ciphertext); guard(epoch, signal);
-          if (payload.version === 2 && Array.isArray(payload.documents)) previous = payload.documents;
+          cacheVersion = payload.version;
+          if (Array.isArray(payload.documents)) {
+            if (payload.version === 3) previous = payload.documents;
+            // Old Salidas caches may contain the report's print date. Re-read
+            // those PDFs once; approved imports already use their invoice date.
+            else if (payload.version === 2) previous = payload.documents.filter(entry => entry && entry.doc && entry.doc.reviewed && ['factura','pedido','otro'].includes(entry.doc.kind));
+          }
         }
       } catch (_) { guard(epoch, signal); }
       const cached = new Map(previous.map(entry => [entry.id, entry]));
@@ -113,18 +119,20 @@
       unidentified=documents.reduce((n,entry)=>n+entry.doc.products.filter(p=>!p.codigo&&!p.ref).length,0);
       // Cache only authenticated ciphertext, never PDF bytes or clear product data.
       try {
-        if (reused !== snapshot.length || previous.length !== snapshot.length) {
-          const ciphertext = await client.seal({ version: 2, documents }); guard(epoch, signal);
+        if (cacheVersion !== 3 || reused !== snapshot.length || previous.length !== snapshot.length) {
+          const ciphertext = await client.seal({ version: 3, documents }); guard(epoch, signal);
           await client.cache.write(ciphertext); guard(epoch, signal);
         }
       } catch (_) { guard(epoch, signal); }
       return { products: products.size+[...references.values()].filter(r=>r.history.every(h=>!h.product.codigo)).length, documents: snapshot.length, failed,unidentified, cached: reused };
     }
-    async function lookup(code, signal) {
+    async function lookup(code, signal, mode = 'barcode') {
       const epoch = generation;
       if (!prepared) throw new Error('Prepara el índice antes de consultar productos.');
+      if (!['barcode','reference'].includes(mode)) throw new Error('Elige buscar por código de barras o referencia.');
       await client.verifyAccess(signal); guard(epoch, signal);
-      return { match: products.get(canonical(code)) || references.get(String(code).trim().toUpperCase()) || null, failed,unidentified, documents: documents.length + failed };
+      const match = mode === 'reference' ? references.get(String(code).trim().toUpperCase()) : products.get(canonical(code));
+      return { match: match || null, failed,unidentified, documents: documents.length + failed };
     }
     async function hasUpdates(signal) {
       const epoch = generation;

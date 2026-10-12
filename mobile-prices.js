@@ -29,7 +29,7 @@
       if (!current() || controller) return;
       const abort = new AbortController(); controller = abort;
       window.dispatchEvent(new Event('mobile:stop-camera'));
-      const buttons = [...document.querySelectorAll('#scan,#search,#refresh-catalog,#photo-button,#result button')].map(button => [button, button.disabled]);
+      const buttons = [...document.querySelectorAll('#scan,#search,#refresh-catalog,#photo-button,#lookup-kind,#result button')].map(button => [button, button.disabled]);
       for (const [button] of buttons) button.disabled = true;
       $('cancel').hidden = false; notice.textContent = saving ? 'Guardando el precio compartido…' : 'Comprobando activación…';
       try {

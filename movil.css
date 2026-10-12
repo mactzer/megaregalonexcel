@@ -27,3 +27,5 @@
   .mobile-embedded #mobile-scanner-view{padding:8px 0 16px}.mobile-embedded footer{margin-top:12px}
   .bottom{position:static;max-width:650px;margin:0 auto 24px;border:1px solid #dce6df;border-radius:16px;padding:10px}
 }
+
+.lookup-kind{display:flex;align-items:center;gap:10px;margin-top:14px}.lookup-kind label{margin:0;white-space:nowrap}.lookup-kind select{font:inherit;min-width:0;flex:1;border:1px solid #d1ded6;border-radius:10px;background:#f9fbfa;color:inherit;padding:10px;min-height:44px;font-size:13px}.lookup-kind select:focus-visible{outline:3px solid #de9e40;outline-offset:3px}

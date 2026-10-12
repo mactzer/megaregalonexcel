@@ -32,6 +32,7 @@ function fakePdf(options = {}) {
   const product = ['0001234567890', 'Producto ficticio de descripcion completa', 'Caja', 'Estilo A', 'REF-001 COMPLETA', '7%', '10.00', '12.00', '2', '20.00', '0', '0.00'];
   if(options.price)product[7]=options.price;
   if(options.code)product[0]=options.code;
+  if(options.ref)product[4]=options.ref;
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
   const fractional = ['0000000000025', 'Producto fraccionario ficticio', 'Unidad', 'Estilo C', 'REF-003', '0%', '0.40', '0.50', '2.5', '1.00', '0', '0.00'];
   const bulkQuantity = options.bulkUnits || '1,800.00';
@@ -43,7 +44,7 @@ function fakePdf(options = {}) {
   ] : [];
   const footer = options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
     : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
-  const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),
+  const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),...(options.printDate?[text('Fecha: '+options.printDate,800,526)]:[]),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
   const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
@@ -119,9 +120,30 @@ async function mobileLogin(h, username='administrador') {
   await h.page.locator('#scan:not([disabled])').waitFor();
 }
 
-async function mobileLookup(h,code='0001234567890'){
+async function mobileLookup(h,code='0001234567890',mode='barcode'){
+ await h.page.locator('#lookup-kind').selectOption(mode);
  await h.page.locator('#barcode').fill(code);await h.page.locator('#search').click();await h.page.locator('#result').waitFor({state:'visible'});await h.page.locator('#search:not([disabled])').waitFor();
 }
+for(const viewport of [{width:390,height:844},{width:1440,height:1000}])test('scanner identifier modes: '+viewport.width+'px rejects a reference as a barcode and permits explicit reference lookup; camera always uses barcode mode',async()=>{
+ const h=await harness({mobile:true,viewport});try{
+  await setArchivedPdf(h,0,{ref:'654321'});h.state.records=h.state.records.slice(0,1);await mobileLogin(h);
+  await mobileLookup(h,'654321');assert.match(await h.page.locator('#result').innerText(),/SIN COINCIDENCIA/);assert.equal(await h.page.locator('.price').count(),0);
+  await mobileLookup(h,'654321','reference');assert.match(await h.page.locator('.price').innerText(),/12\.00/);assert.match(await h.page.locator('#result').innerText(),/Coincidencia por referencia: 654321/);assert.match(await h.page.locator('#result').innerText(),/0001234567890/);
+  const reads=h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;
+  await h.page.evaluate(()=>{window.MobileScanner={...MobileScanner,start:async(video,callback)=>{window.__scanCallback=callback;return{stop(){}};}};});
+  await h.page.locator('#scan').click();await h.page.waitForFunction(()=>typeof window.__scanCallback==='function');assert.equal(await h.page.locator('#lookup-kind').inputValue(),'barcode');
+  await h.page.evaluate(()=>window.__scanCallback('654321'));await h.page.locator('#search:not([disabled])').waitFor();assert.match(await h.page.locator('#result').innerText(),/SIN COINCIDENCIA/);assert.equal(await h.page.locator('.price').count(),0);
+  await mobileLookup(h,'0001234567890');assert.match(await h.page.locator('.price').innerText(),/12\.00/);assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,reads);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('scanner invoice dates: later reprinting cannot replace the price from the actual newest Salida',async()=>{
+ const h=await harness({mobile:true});try{
+  await setArchivedPdf(h,0,{number:'55001',invoiceDate:'08/10/2026',printDate:'20/10/2026',price:'9.99'},{salida_numero:'55001'});
+  await setArchivedPdf(h,2,{number:'55002',invoiceDate:'09/10/2026',printDate:'19/10/2026',price:'8.99'},{salida_numero:'55002'});h.state.records=[h.state.records[0],h.state.records[2]];
+  await mobileLogin(h);await mobileLookup(h);assert.match(await h.page.locator('.price').innerText(),/8\.99/);
+  const history=await h.page.locator('.product-salidas tbody tr').allTextContents();assert.match(history[0],/55002.*8\.99.*09\/10\/2026/);assert.match(history[1],/55001.*9\.99.*08\/10\/2026/);assert.doesNotMatch(history.join(' '),/19\/10\/2026|20\/10\/2026/);
+ }finally{await h.close();}
+});
 async function fictionalPrice(cents,version=1){
  const code='0001234567890',tag=await fixture.master.productIndex(code),encrypted=await fixture.master.encrypt(new TextEncoder().encode(JSON.stringify({code,cents})),`product-price-v1|${tag}|${version}`);
  return {workspace_id:WORKSPACE,product_tag:tag,encrypted_price:Buffer.from(encrypted).toString('base64'),version,updated_by:OWNER,updated_at:'2026-10-10T03:00:00.000Z'};
@@ -249,7 +271,7 @@ test('mobile salidas: invalid and missing invoice dates stay visible with a warn
   try {
     await setArchivedPdf(h, 0, { number: '99999', invoiceDate: '29/02/2025', price: '9.99' });
     await setArchivedPdf(h, 2, { number: '29345', invoiceDate: '9/10/2026', price: '8.99' });
-    await setArchivedPdf(h, 3, { number: '99998', invoiceDate: '', price: '6.99' });
+    await setArchivedPdf(h, 3, { number: '99998', invoiceDate: '', printDate:'20/10/2026', price: '6.99' });
     h.state.records = [h.state.records[0], h.state.records[2], h.state.records[3]];
     await mobileLogin(h); await mobileLookup(h);
     assert.match(await h.page.locator('.price').innerText(), /8\.99/);
@@ -2344,7 +2366,7 @@ test('invoice OCR cancellation: changing PDF while local engine loads cannot res
 test('invoice references: Skechers reference price remains editable after linking a barcode, without reopening the PDF',async()=>{
  const h=await harness(),mobile=await harness({mobile:true});try{
   await login(h.page);await importFixture(h,'skechers');await confirmImport(h);const record=h.state.records.find(r=>r.import_revision);
-  mobile.state.records=[record];mobile.state.storage=h.state.storage;await mobileLogin(mobile);await mobileLookup(mobile,'117775N/TOL0');assert.match(await mobile.page.locator('.price').innerText(),/5\.99/);
+  mobile.state.records=[record];mobile.state.storage=h.state.storage;await mobileLogin(mobile);await mobileLookup(mobile,'117775N/TOL0','reference');assert.match(await mobile.page.locator('.price').innerText(),/5\.99/);
   await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('7.99');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
   const bytes=await fixture.master.decrypt(new Uint8Array(Buffer.from(record.encrypted_metadata,'base64')),record.id+'|metadata'),source=JSON.parse(new TextDecoder().decode(bytes)).imported_document;bytes.fill(0);source.rows[0].codigo=source.rows[0].codigo_completo='1234509876543';
   await h.page.evaluate(async args=>{await AuditCloud.updateImport(args.id,args.source,args.expected);},{id:record.id,source,expected:record.encrypted_metadata});

@@ -3,6 +3,28 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Catalog = require('../mobile-catalog.js');
 
+test('barcode and reference queries remain separate, even when numeric identifiers collide; blanks and zero prices keep their meaning',async()=>{
+ const products=[{codigo:'0001234500001',ref:'654321',pventa:5.99},{codigo:'123456',ref:'0001234500001',pventa:9.99},{codigo:'0012345678905',ref:'123456',pventa:0},{codigo:'654322',ref:'NO-PRICE',pventa:''}];
+ let stored;
+ const catalog=Catalog.create({snapshot:async()=>[{id:'one',encrypted_metadata:'v1'}],document:async()=>({salida:'55001',invoiceDate:'2026-10-12',products}),cache:{read:async()=>stored,write:async v=>stored=v},seal:async v=>v,unseal:async v=>v,verifyAccess:async()=>{}});
+ for(let cycle=0;cycle<2;cycle++){
+  await catalog.prepare();assert.equal((await catalog.lookup('654321')).match,null,'A reference is not evidence that the scanned barcode exists');
+  assert.equal((await catalog.lookup('654321',undefined,'reference')).match.product.codigo,'0001234500001');
+  assert.equal((await catalog.lookup('123456')).match.product.pventa,9.99);assert.equal((await catalog.lookup('123456',undefined,'reference')).match.product.pventa,0);
+  assert.equal((await catalog.lookup('0001234500001')).match.product.pventa,5.99);assert.equal((await catalog.lookup('0001234500001',undefined,'reference')).match.product.pventa,9.99);
+  assert.equal((await catalog.lookup('NO-PRICE')).match,null);assert.equal((await catalog.lookup('654322')).match.product.pventa,'');
+  await assert.rejects(catalog.lookup('123456',undefined,'automatic'),/Elige/);
+ }
+});
+test('cache migration reparses Salidas print dates once, retains approved invoice metadata and selects the actual latest price',async()=>{
+ const code='0001234500001',doc=(salida,invoiceDate,pventa)=>({salida,invoiceDate,products:[{codigo:code,pventa}]}),docs=new Map([['old',doc('55001','2026-10-08',9.99)],['latest',doc('55002','2026-10-09',8.99)]]);
+ const imported={kind:'factura',reviewed:true,salida:'55003',invoiceDate:'2026-10-12',products:[{codigo:'0012345678905',pventa:7.99}]};
+ let stored={version:2,documents:[{id:'old',revision:'v1',doc:doc('55001','2026-10-20',9.99)},{id:'latest',revision:'v1',doc:docs.get('latest')},{id:'import',revision:'v1',doc:imported}]},reads=[];
+ const catalog=Catalog.create({snapshot:async()=>['old','latest','import'].map(id=>({id,encrypted_metadata:'v1'})),document:async id=>{reads.push(id);return docs.get(id);},cache:{read:async()=>stored,write:async v=>stored=v},seal:async v=>v,unseal:async v=>v,verifyAccess:async()=>{}});
+ await catalog.prepare();assert.deepEqual(reads.sort(),['latest','old']);assert.equal(stored.version,3);assert.equal((await catalog.lookup(code)).match.product.pventa,8.99);assert.equal((await catalog.lookup('0012345678905')).match.product.pventa,7.99);
+ await catalog.prepare();assert.equal(reads.length,2,'The corrected cache avoids repeated PDF reads');
+});
+
 test('catalog indexes 100 documents once, preserves newest price and zeroes, reuses cache and imports only changed records', async () => {
   let reads = 0, access = 0, stored;
   let snapshot = Array.from({ length: 100 }, (_, i) => ({ id: String(i), encrypted_metadata: 'revision-' + i }));
@@ -86,7 +108,7 @@ test('invoice chronology wins over upload time, keeps every salida, migrates old
   ]);
   assert.equal(match.unverifiedDates, 1);
   assert.equal(reads, 4, 'Old cache must reparse invoices instead of using upload dates');
-  assert.equal(stored.version, 2);
+  assert.equal(stored.version, 3);
   await catalog.prepare(); assert.equal(reads, 4, 'Headers and full history survive the encrypted cache');
   docs.set('same-date-higher-number', doc('00029346', '2026-10-09', 7.99, '2026-10-01T00:00:00Z'));
   await catalog.prepare(); match = (await catalog.lookup(code)).match;

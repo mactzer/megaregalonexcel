@@ -2240,8 +2240,8 @@
     priceGuard(epoch, key, signal);
     return { available: true, override };
   }
-  async function mobileLookup(code, signal) {
-    const result = await getMobileCatalog().lookup(code, signal);
+  async function mobileLookup(code, signal, mode = 'barcode') {
+    const result = await getMobileCatalog().lookup(code, signal, mode);
     if(result.match&&result.match.ambiguousReference)return result;
     if (result.match){const lookupCode=result.match.product.codigo||result.match.product.ref;result.match={...result.match,product:{...result.match.product,lookupCode}};result.price = await mobilePrice(lookupCode, signal);
       if(result.match.doc.reviewed&&result.match.product.codigo&&result.match.product.ref&&!result.match.product.referenceAmbiguous&&!result.price.override){const byRef=await mobilePrice(result.match.product.ref,signal);if(byRef.override){result.price=byRef;result.match.product.lookupCode=result.match.product.ref;}}

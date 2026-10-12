@@ -392,7 +392,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
-    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=11" title="Escáner de productos" allow="camera"></iframe></section>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=13" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -491,8 +491,8 @@
   <script src="invoice-review.js?v=2"></script>
   <script src="audit-realtime.js?v=1"></script>
   <script src="traza.js?v=shared-navigation-1"></script>
-  <script src="mobile-catalog.js?v=fiscal-pdfs-1"></script>
-  <script src="audit-cloud.js?v=fiscal-pdfs-1"></script>
+  <script src="mobile-catalog.js?v=explicit-product-lookup-1"></script>
+  <script src="audit-cloud.js?v=explicit-product-lookup-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -770,7 +770,18 @@
       return numberFrom(value);
     }
 
-    function extractDocumentInfo(rawLines) {
+    function invoiceHeaderDate(lines, headerIndex, width) {
+      const fields = lines.slice(0, headerIndex).flatMap(line => line.items);
+      const numberLabel = fields.find(item => normalize(item.text) === 'numero' && item.x < width / 2);
+      const labels = fields.filter(item => normalize(item.text) === 'fecha' && item.x < width / 2);
+      labels.sort((a, b) => numberLabel ? Math.abs(a.x - numberLabel.x) - Math.abs(b.x - numberLabel.x) || a.y - b.y : a.x - b.x || a.y - b.y);
+      const label = labels[0];
+      if (!label) return '';
+      const value = fields.filter(item => item.x > label.x && item.x < width / 2 && Math.abs(item.y - label.y) <= 3 && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(item.text)).sort((a, b) => a.x - b.x)[0];
+      return value ? value.text : '';
+    }
+
+    function extractDocumentInfo(rawLines, verifiedInvoiceDate) {
       const text = rawLines.map(line => line.texto).join(" | ");
       const numberMatch = text.match(/N[uú]mero:\s*([^|\s]+)/i);
       const dateMatch = text.match(/Fecha:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
@@ -790,7 +801,7 @@
       const netTotalMatch = text.match(/Tota(?:l)?\s*Neto\s*:?\s*([\d,]+(?:\.\d{2})?)/i);
       return {
         numero: numberMatch ? cleanText(numberMatch[1]) : "",
-        fecha: dateMatch ? dateMatch[1] : "",
+        fecha: verifiedInvoiceDate !== undefined ? verifiedInvoiceDate : dateMatch ? dateMatch[1] : "",
         referencia: cleanText(referenceValue),
         destino: cleanText(destinationValue),
         subtotal: subtotalMatch ? moneyFromText(subtotalMatch[1]) : "",
@@ -902,6 +913,7 @@
       const rawLines = [];
       const textPages = [];
       let pagesWithTables = 0;
+      let verifiedInvoiceDate = '';
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         const page = await pdf.getPage(pageNumber);
@@ -919,6 +931,7 @@
         lines.forEach((line, index) => rawLines.push({ pagina: pageNumber, linea: index + 1, texto: line.text }));
         const headerIndex = findHeader(lines);
         if (headerIndex < 0) { page.cleanup(); continue; }
+        if (pageNumber === 1) verifiedInvoiceDate = invoiceHeaderDate(lines, headerIndex, viewport.width);
         pagesWithTables++;
         const geometry = buildGeometry(lines, headerIndex);
         for (const line of lines.slice(headerIndex + 1)) {
@@ -935,7 +948,7 @@
         catch(error){assertParseCurrent(context);imported=window.InvoiceFormats.extract(textPages);imported.rows=[];imported.ocrWarning='La lectura automática no se completó. Puedes ingresar y revisar los productos junto al PDF.';}
         assertParseCurrent(context);imported.pdfSha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data)),b=>b.toString(16).padStart(2,'0')).join('');imported.imported=true;return imported;
       }
-      return { rows, rawLines, documentInfo: extractDocumentInfo(rawLines) };
+      return { rows, rawLines, documentInfo: extractDocumentInfo(rawLines, verifiedInvoiceDate) };
       } finally {
         if (data && data.byteLength) data.fill(0);
         if (pdf) await pdf.destroy();

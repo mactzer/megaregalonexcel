@@ -24,6 +24,7 @@
     catalogReady = false; stopCamera();
     $('result').replaceChildren(); $('result').hidden = true;
     $('barcode').value = $('password').value = '';
+    setLookupMode('barcode'); $('lookup-kind').disabled = true;
     $('workspace').hidden = true; $('login-panel').hidden = false;
     $('cancel').hidden = true;
     status('Inicia sesión para consultar tus documentos.');
@@ -64,13 +65,13 @@
     finally { signingIn = false; $('login-button').disabled = false; }
   });
   $('logout').addEventListener('click', () => { clear(); api.mobile.logout(); });
-  $('photo-button').addEventListener('click', () => { if (!busy && catalogReady && !MobilePriceEditor.busy) $('photo-input').click(); });
+  $('photo-button').addEventListener('click', () => { if (!busy && catalogReady && !MobilePriceEditor.busy) { setLookupMode('barcode'); $('photo-input').click(); } });
   $('photo-input').addEventListener('change', async () => {
     const file = $('photo-input').files[0]; $('photo-input').value = '';
     if (!file || busy || !catalogReady || MobilePriceEditor.busy || !api.status().authenticated) return;
     stopCamera(); busy = true;
     const current = new AbortController(), epoch = api.status().generation; controller = current;
-    $('search').disabled = $('scan').disabled = $('photo-button').disabled = $('refresh-catalog').disabled = true; $('cancel').hidden = false;
+    $('lookup-kind').disabled = $('search').disabled = $('scan').disabled = $('photo-button').disabled = $('refresh-catalog').disabled = true; $('cancel').hidden = false;
     $('result').replaceChildren(); $('result').hidden = true; status('Leyendo las barras de la foto…');
     let found;
     try {
@@ -83,7 +84,7 @@
       }
     } catch (e) { if (api.status().authenticated && api.status().generation === epoch) status(current.signal.aborted ? 'Lectura de foto cancelada.' : e.message, true); }
     finally {
-      busy = false; $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true;
+      busy = false; $('lookup-kind').disabled = $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true;
       if (controller === current) controller = null;
     }
     if (found && found.length === 1) lookup(found[0].text);
@@ -129,7 +130,7 @@
     if (busy || (window.MobilePriceEditor && MobilePriceEditor.busy) || !api || !api.status().authenticated) return;
     stopCamera(); busy = true; catalogReady = false;
     const current = new AbortController(); controller = current;
-    $('scan').disabled = $('search').disabled = $('photo-button').disabled = $('refresh-catalog').disabled = true;
+    $('lookup-kind').disabled = $('scan').disabled = $('search').disabled = $('photo-button').disabled = $('refresh-catalog').disabled = true;
     $('cancel').hidden = false; $('result').replaceChildren(); $('result').hidden = true;
     $('catalog-status').textContent = 'Comprobando documentos y recuperando el índice cifrado…';
     status('La primera preparación procesa los PDF una vez. Las siguientes consultas utilizan el índice.');
@@ -148,7 +149,7 @@
         status(current.signal.aborted ? 'Preparación cancelada.' : e.message, true);
       }
     } finally {
-      busy = false; $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady;
+      busy = false; $('lookup-kind').disabled = $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated;
       $('refresh-catalog').disabled = false; $('cancel').hidden = true;
       if (controller === current) controller = null;
       if (resumeCatalog) { resumeCatalog = false; adoptAccount(); }
@@ -171,16 +172,23 @@
   }
   setInterval(()=>checkCatalogUpdates(false),30000);
   MobileSession.ready.then(owner=>{let timer;owner.addEventListener('audit:changed',event=>{if(!['mega_audit_records','all'].includes(event.detail.table))return;needsCatalogCheck=true;clearTimeout(timer);timer=setTimeout(()=>checkCatalogUpdates(true),250);});}).catch(()=>{});
-  async function lookup(raw) {
+  function setLookupMode(mode) {
+    $('lookup-kind').value = mode;
+    $('barcode-label').textContent = mode === 'reference' ? 'Referencia del producto' : 'Código de barras';
+    $('barcode').placeholder = mode === 'reference' ? 'Ej. HB-0254866' : 'Ej. 7451234567890';
+  }
+  $('lookup-kind').addEventListener('change', () => { stopCamera(); setLookupMode($('lookup-kind').value); });
+  async function lookup(raw, mode = 'barcode') {
     const code = String(raw).trim();
     if (!code || code.length > 80 || /[\x00-\x1f]/.test(code)) { status('Escribe un código válido.', true); return; }
     if (busy || !catalogReady || (window.MobilePriceEditor && MobilePriceEditor.busy)) return;
     if (!api || !api.status().authenticated) { status('Inicia sesión para consultar productos.', true); return; }
+    setLookupMode(mode);
     stopCamera(); busy = true;
     controller = new AbortController();
     const current = controller, epoch = api.status().generation;
     const assertCurrent = () => { if (current.signal.aborted || !api.status().authenticated || api.status().generation !== epoch) throw new Error('Consulta cancelada.'); };
-    $('barcode').value = code; $('search').disabled = $('scan').disabled = $('photo-button').disabled = true;
+    $('barcode').value = code; $('lookup-kind').disabled = $('search').disabled = $('scan').disabled = $('photo-button').disabled = true;
     $('result').hidden = true; $('result').replaceChildren();
     $('cancel').hidden = false;
     $('refresh-catalog').disabled = true;
@@ -188,7 +196,7 @@
     let timer;
     try {
       const response = await Promise.race([
-        api.mobile.lookup(code, current.signal),
+        api.mobile.lookup(code, current.signal, mode),
         new Promise((resolve, reject) => { timer = setTimeout(() => {
           current.abort(); reject(new Error('La conexión no respondió en cinco segundos. Reintenta la consulta; no se ha confirmado el producto.'));
         }, 5000); })
@@ -198,23 +206,25 @@
       let label;
       if (match) {
         showProduct(match, failed, price,unidentified); label = 'Encontrado';
+        if (mode === 'reference') $('result').append(element('p', 'Coincidencia por referencia: ' + code, 'note'));
         status('Producto encontrado en el índice de ' + count + ' documentos.');
       } else {
         const result = $('result'); result.hidden = false; result.className = 'card warning';
         label = failed||unidentified ? 'Consulta incompleta' : 'Sin coincidencia';
         result.append(element('p', failed||unidentified ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
-        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : unidentified?'Hay '+unidentified+' productos archivados sin código o referencia. Este código no coincide con los productos identificados; completa sus etiquetas desde Archivo antes de confirmar que falta.':'Este código no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
+        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : unidentified?'Hay '+unidentified+' productos archivados sin código o referencia. '+(mode==='reference'?'Esta referencia':'Este código')+' no coincide con los productos identificados; completa sus etiquetas desde Archivo antes de confirmar que falta.':(mode==='reference'?'Esta referencia':'Este código')+' no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
         status(failed||unidentified ? 'La consulta terminó con productos o documentos pendientes de verificar.' : 'Consulta del archivo completada.', Boolean(failed||unidentified));
       }
       window.dispatchEvent(new CustomEvent('mobile:consulted', { detail: { code, label, match, price } }));
       if (!window.matchMedia('(min-width: 900px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (e) { if (api.status().authenticated && (timer || !current.signal.aborted)) status(e.message, true); }
-    finally { clearTimeout(timer); busy = false; $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true; if (controller === current) controller = null; }
+    finally { clearTimeout(timer); busy = false; $('lookup-kind').disabled = $('search').disabled = $('scan').disabled = $('photo-button').disabled = !catalogReady || !api.status().authenticated; $('refresh-catalog').disabled = false; $('cancel').hidden = true; if (controller === current) controller = null; }
   }
-  $('lookup-form').addEventListener('submit', event => { event.preventDefault(); lookup($('barcode').value); });
+  $('lookup-form').addEventListener('submit', event => { event.preventDefault(); lookup($('barcode').value, $('lookup-kind').value); });
   $('cancel').addEventListener('click', () => { if (controller) controller.abort(); if (window.MobilePriceEditor) MobilePriceEditor.cancel(); status('Consulta cancelada. Puedes intentar otro código.'); });
   $('scan').addEventListener('click', async () => {
     if (busy || !catalogReady || (window.MobilePriceEditor && MobilePriceEditor.busy) || !api || !api.status().authenticated) return;
+    setLookupMode('barcode');
     if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { status('La cámara requiere HTTPS. Puedes escribir el código manualmente.', true); return; }
     const sequence = ++cameraGeneration;
     $('scan').disabled = true;
