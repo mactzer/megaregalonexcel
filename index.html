@@ -486,7 +486,7 @@
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=shared-history-1"></script>
   <script src="audit-backup.js?v=1"></script>
-  <script src="invoice-formats.js?v=2"></script>
+  <script src="invoice-formats.js?v=3"></script>
   <script src="invoice-ocr.js?v=1"></script>
   <script src="invoice-review.js?v=2"></script>
   <script src="audit-realtime.js?v=1"></script>
@@ -909,7 +909,7 @@
         const viewport = page.getViewport({ scale: 1 });
         const content = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
         assertParseCurrent(context);
-        textPages.push({page:pageNumber,width:viewport.width,height:viewport.height,words:content.items.filter(i=>i.str&&i.str.trim()).flatMap(i=>{const words=[...i.str.matchAll(/\S+/g)];return words.map(w=>({text:w[0],x0:i.transform[4]+(i.width||1)*w.index/i.str.length,x1:i.transform[4]+(i.width||1)*(w.index+w[0].length)/i.str.length,y0:viewport.height-i.transform[5]-(i.height||10),y1:viewport.height-i.transform[5],confidence:100}));})});
+        textPages.push({page:pageNumber,width:viewport.width,height:viewport.height,words:content.items.filter(i=>i.str&&i.str.trim()).flatMap((i,sourceRun)=>{const words=[...i.str.matchAll(/\S+/g)];return words.map(w=>({text:w[0],sourceRun,x0:i.transform[4]+(i.width||1)*w.index/i.str.length,x1:i.transform[4]+(i.width||1)*(w.index+w[0].length)/i.str.length,y0:viewport.height-i.transform[5]-(i.height||10),y1:viewport.height-i.transform[5],confidence:100}));})});
         const items = content.items.flatMap(item => {
           const transform = item.transform || [1, 0, 0, 1, 0, 0];
           const raw = { str: item.str, x: transform[4], y: viewport.height - transform[5], width: item.width || 0 };

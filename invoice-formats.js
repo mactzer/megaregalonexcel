@@ -10,6 +10,28 @@
   function value(p,bounds,y,tolerance){const words=region(p,bounds[0],bounds[1],y-tolerance,y+tolerance);return words.filter(w=>numeric(w.text)!=='').sort((a,b)=>(b.confidence||0)-(a.confidence||0)).map(w=>numeric(w.text))[0]??'';}
   function header(p,word,fallback,after=0){const w=p.words.find(w=>norm(w.text).replace(/[.:]/g,'')===word&&w.y0>after);return w?(w.x0+w.x1)/2/p.width:fallback;}
   function item(p,y,y1,descBounds,quantity,cost,total,ref,code){const words=region(p,descBounds[0],descBounds[1],y,y1),lines=group(words);return {codigo:code||'',codigo_completo:code||'',descripcion:clean(lines.map(l=>l.text).join(' ')).slice(0,2048),ref:ref||'',empaque:'',estilo:'',iv:'DESCONOCIDO',salidas_unidades:quantity,costo:cost,pventa:'',salidas_total:total,entradas_unidades:'',entradas_total:'',fila_original:clean(group(region(p,0,1,y,y1)).map(l=>l.text).join(' ')),page:p.page,box:{x0:0,y0:y/p.height,x1:1,y1:y1/p.height},priceOrigin:'pending'};}
+  function feduroDescription(r,words){
+    const ordered=group(words).flatMap(line=>line.words),original=clean(ordered.map(w=>w.text).join(' '));
+    const ref=/^\s*(?:-\s*)?((?:(?:[A-Z]\s*){1,4}|(?:\d\s*){2})-\s*(?:[A-Z0-9]\s*){3,16}|\d{8,12})(?=\s+-\s+|$)/i.exec(original);
+    if(ref){
+      r.ref=ref[1].replace(/\s/g,'');
+      const separator=/^\s*-\s*/.exec(original.slice(ref[0].length)),prefix=ref[0]+(separator?separator[0]:'');
+      words=ordered.slice(clean(prefix).split(' ').length);
+    }
+    // PDF.js separates justified words into runs. Join spaced letters only
+    // within their original run, so FEMME, EDP and NAT remain separate words.
+    let description=clean(group(words).map(line=>{
+      const runs=[];for(const w of line.words){const last=runs[runs.length-1];if(last&&Number.isInteger(w.sourceRun)&&last[0].sourceRun===w.sourceRun)last.push(w);else runs.push([w]);}
+      return runs.map(run=>run.length>1&&Number.isInteger(run[0].sourceRun)&&run.every(w=>/^[a-z0-9-]$/i.test(w.text))?run.map(w=>w.text).join(''):run.map(w=>w.text).join(' ')).join(' ');
+    }).join(' '));
+    if(ref){
+      // Feduro can print a second stock identifier after the reference.
+      // Keep sizes, quantities and product names such as 212 VIP intact.
+      description=description.replace(/^\d{5,14}\s+(?=[a-z])/i,'');
+    }
+    if(r.codigo){const barcode=/[({\[]\s*(\d[\d\s]{6,25}\d)\s*[)}\]]/.exec(description);if(barcode&&barcode[1].replace(/\s/g,'')===r.codigo)description=description.slice(0,barcode.index);}
+    r.descripcion=clean(description).slice(0,2048);
+  }
   function fiscalGeometry(p){
     const description=p.words.find(w=>norm(w.text)==='DESCRIPCION'),no=description&&p.words.find(w=>norm(w.text)==='NO.'&&Math.abs(w.y0-description.y0)<12);
     if(!no||!description)return null;
@@ -35,10 +57,9 @@
       if(r.impuesto_importe===0)r.iv='0%';else if(r.salidas_total>0&&r.impuesto_importe!==''){const rate=Math.round(r.impuesto_importe/r.salidas_total*100);if([7,10,15].includes(rate)&&Math.abs(r.impuesto_importe-r.salidas_total*rate/100)<=.025)r.iv=rate+'%';}
       if(format==='feduro'){
         const barcode=/[({\[]\s*(\d[\d\s]{6,25}\d)\s*[)}\]]/.exec(r.informacion_interes);if(barcode){const code=barcode[1].replace(/\s/g,'');if(code.length>=8&&code.length<=14)r.codigo=r.codigo_completo=code;}
-        const ref=/^((?:(?:[A-Z]\s*){1,4}|(?:\d\s*){2})-\s*(?:[A-Z0-9]\s*){3,16}|\d{8,12})(?=\s+-\s+|$)/i.exec(r.descripcion);
-        if(ref)r.ref=ref[1].replace(/\s/g,'');
+        feduroDescription(r,region(p,g.desc[0],g.desc[1],y,y1));
       }
-      if(r.descripcion&&r.salidas_unidades!=='')rows.push(r);
+      if((r.descripcion||r.ref||r.codigo)&&r.salidas_unidades!=='')rows.push(r);
     }
     return rows;
   }
@@ -91,7 +112,8 @@
             const text=clean(group(region(p,.075,.45,y,y1)).map(l=>l.text).join(' ')),barcode=/[({\[]\s*(\d[\d\s]{6,20}\d)\s*[)}\]]/.exec(text),code=a.barcode||(barcode?barcode[1].replace(/\s/g,''):'');
             const ref=/(?:^|\s)([A-Z]{1,4}-[A-Z0-9]+|\d{2}-\d{3,12}|\d{8,12})(?=\s|$)/i.exec(text);
             const r=item(p,y,y1,[.075,.45],quantity,value(p,[.565,.625],mid,tol),value(p,[.695,.765],mid,tol),ref?ref[1]:'',code.length>=8&&code.length<=14?code:'');
-            if((!r.descripcion||!/[A-Za-z]/.test(r.descripcion))&&!a.barcode)continue;
+            feduroDescription(r,region(p,.075,.45,y,y1));
+            if((!r.descripcion||!/[A-Za-z]/.test(r.descripcion))&&!a.barcode&&!r.ref&&!r.codigo)continue;
             r.priceSuggestions=region(p,.34,.46,y,y1).filter(w=>/^\d{1,5}[.,]\d{2}$/.test(w.text)&&w.confidence>25).map(w=>numeric(w.text)).slice(0,3);
             const tax=value(p,[.765,.825],(a.y0+a.y1)/2,tol);if(tax===0)r.iv='0%';else if(tax!==''&&r.salidas_total!==''&&Math.abs(tax/r.salidas_total-.07)<.003)r.iv='7%';rows.push(r);
           }

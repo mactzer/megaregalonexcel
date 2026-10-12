@@ -1,6 +1,25 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),Formats=require('../invoice-formats'),Catalog=require('../mobile-catalog');
 function source(){return {version:1,kind:'factura',format:'feduro',numero:'55002',fecha:'12/10/2026',pdfSha256:'a'.repeat(64),rows:[{codigo:'1234509876543',ref:'HB-001',descripcion:'Producto ficticio',salidas_unidades:6,costo:10,pventa:19.99,salidas_total:60,entradas_unidades:'',entradas_total:'',priceOrigin:'manual'}]};}
+function feduroPage(nameRuns){
+ let sourceRun=0;const words=[],run=(text,x,y,native=true)=>{const id=sourceRun++;for(const m of text.matchAll(/\S+/g))words.push({text:m[0],...(native?{sourceRun:id}:{}),x0:x+m.index*4,x1:x+(m.index+m[0].length)*4,y0:y,y1:y+8,confidence:100});};
+ run('FEDURO',80,80);run('Numero: 55002',80,100);run('Fecha: 12/10/2026',80,120);run('Descripcion',100,300);run('Cantidad',450,300);run('- HB-000001 -',90,400);
+ for(const [i,name]of nameRuns.entries())run(name.text,90+(name.x||0),420+(name.y||0),name.native!==false);
+ run('(0012345678905) (0 CJ) (6.000 UN)',90,464);run('6',465,400);run('10.00',580,400);run('60.00',710,400);
+ return {page:1,width:1000,height:1400,words};
+}
+test('Feduro descriptions use original PDF runs to restore unknown words, keep word boundaries and preserve source identifiers',()=>{
+ const p=feduroPage([{text:'1234500 PERFUME'},{text:'F E M M E',y:12},{text:'E D P',x:90,y:12},{text:'N A T',x:140,y:12},{text:'Z Y Q A N',y:24}]);
+ const {rows}=Formats.extract([p]);assert.equal(rows.length,1);const r=rows[0];assert.equal(r.descripcion,'PERFUME FEMME EDP NAT ZYQAN');assert.equal(r.ref,'HB-000001');assert.equal(r.codigo,'0012345678905');assert.equal(r.costo,10);assert.equal(r.salidas_unidades,6);assert.equal(r.pventa,'');assert.match(r.fila_original,/HB-000001/);assert.match(r.fila_original,/1234500/);assert.match(r.fila_original,/F E M M E/);assert.match(r.fila_original,/0012345678905/);
+});
+test('Feduro cleanup preserves product numbers, sizes and normal names; OCR without native word boundaries remains reviewable',()=>{
+ for(const name of ['212 VIP FICTICIO 100 ML','91 EDT 100ML','PERFUME HB001 EDICION 26','SPF 50 PA+++','FORMULA A B']){
+  const r=Formats.extract([feduroPage([{text:name}])]).rows[0];assert.equal(r.descripcion,name);
+ }
+ const r=Formats.extract([feduroPage([{text:'F E M M E E D P',native:false}])]).rows[0];assert.equal(r.descripcion,'F E M M E E D P','Without native boundaries, avoid guessing where one word ends and another begins');
+ const missing=Formats.extract([feduroPage([])]).rows;assert.equal(missing.length,1,'A row with missing description must remain available for manual review');assert.equal(missing[0].descripcion,'');assert.equal(missing[0].ref,'HB-000001');
+ const s=source();s.rows[0].descripcion='Nombre confirmado A B';assert.equal(Formats.validateSaved(s).rows[0].descripcion,s.rows[0].descripcion,'Confirmed manual descriptions are not rewritten');
+});
 test('invoice confirmed metadata validates dates, strict amounts, identifiers, limits and allows only known fields',()=>{
  const s=source();s.rows[0].password='never retained';s.extra='never retained';const out=Formats.validateSaved(s);assert.equal(out.extra,undefined);assert.equal(out.rows[0].password,undefined);assert.equal(out.rows[0].pventa,19.99);
  for(const mutate of [s=>s.fecha='31/02/2026',s=>s.pdfSha256='wrong',s=>s.rows[0].codigo=s.rows[0].ref='',s=>s.rows[0].salidas_unidades=NaN,s=>s.rows[0].pventa=19.999,s=>s.rows[0].priceOrigin='pending',s=>s.rows[0].descripcion='x'.repeat(2049)]){const s=source();mutate(s);assert.throws(()=>Formats.validateSaved(s));}
