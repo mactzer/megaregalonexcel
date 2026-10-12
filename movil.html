@@ -9,14 +9,14 @@
   <title>Escáner · MegaControl</title>
   <link rel="icon" href="megacontrol-logo.png">
   <link rel="apple-touch-icon" href="megacontrol-logo.png">
-  <link rel="manifest" href="movil.webmanifest?v=8">
-  <link rel="stylesheet" href="movil.css?v=8">
+  <link rel="manifest" href="movil.webmanifest?v=10">
+  <link rel="stylesheet" href="movil.css?v=10">
   <script defer src="vendor/zxing-browser.min.js"></script>
   <script defer src="vendor/zxing-wasm-reader.js"></script>
   <script defer src="mobile-scanner.js?v=2"></script>
   <script defer src="movil-navigation.js?v=2"></script>
-  <script defer src="mobile-prices.js?v=2"></script>
-  <script defer src="movil.js?v=8"></script>
+  <script defer src="mobile-prices.js?v=pdf-imports-1"></script>
+  <script defer src="movil.js?v=10"></script>
   <script defer src="mobile-history.js?v=1"></script>
 </head>
 <body>
@@ -38,7 +38,7 @@
         <div id="camera-controls" hidden><button id="stop" class="quiet">Detener cámara</button><button id="torch" class="quiet" hidden>Encender linterna</button></div>
         <div id="zoom-control" hidden><label for="camera-zoom">Zoom de cámara</label><input id="camera-zoom" type="range" aria-label="Zoom de cámara"></div>
         <div class="divider"><span class="mobile-heading">O ESCRIBE EL CÓDIGO</span><span class="desktop-heading">O ESCANEA LA ETIQUETA</span></div>
-        <form id="lookup-form"><label for="barcode">Código de barras</label><div class="input-row"><input id="barcode" inputmode="numeric" autocomplete="off" placeholder="Ej. 7451234567890" maxlength="80" required><button id="search">Buscar</button></div></form>
+        <form id="lookup-form"><label for="barcode">Código de barras o referencia</label><div class="input-row"><input id="barcode" autocomplete="off" placeholder="Ej. 7451234567890 o HB-0254866" maxlength="80" required><button id="search">Buscar</button></div></form>
         <p class="note"><span class="desktop-heading">Escribe el código o usa un lector USB y pulsa Enter. </span>Los ceros iniciales se conservan. Compatible con EAN, UPC, Code 128, Code 39 e ITF.</p>
       </section>
       <section id="result" class="card" hidden aria-live="polite"></section>
@@ -51,7 +51,7 @@
     <footer>Información extraída de los PDF autorizados. Los precios actualizados por administradores se muestran con el PDF original como referencia.<br><a href="index.html#archivo" data-mobile-section="archive">Abrir archivo de salidas</a></footer>
   </main>
   <nav class="bottom" aria-label="Navegación"><a href="#escaner" data-mobile-section="scanner" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo" data-mobile-section="archive">▤<span>Archivo</span></a><a href="index.html" data-mobile-section="converter">＋<span>Nueva salida</span></a></nav>
-  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=8#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
+  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=10#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
   <noscript>Activa JavaScript para usar la cámara y consultar los documentos.</noscript>
 </body>
 </html>

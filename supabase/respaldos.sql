@@ -23,7 +23,7 @@ begin
     ),
     'authors',(select coalesce(jsonb_agg(jsonb_build_object('user_id',u.id,'username',split_part(u.email,'@',1)) order by u.id),'[]'::jsonb)
       from auth.users u where exists(select 1 from public.mega_audit_members m where m.workspace_id=p_workspace_id and m.user_id=u.id)
-      or exists(select 1 from public.mega_audit_records r where r.workspace_id=p_workspace_id and (r.created_by=u.id or r.reviewed_by=u.id))
+      or exists(select 1 from public.mega_audit_records r where r.workspace_id=p_workspace_id and (r.created_by=u.id or r.reviewed_by=u.id or to_jsonb(r)->>'import_reviewed_by'=u.id::text))
       or exists(select 1 from public.mega_product_queries q where q.workspace_id=p_workspace_id and q.created_by=u.id)
       or exists(select 1 from public.mega_product_prices p where p.workspace_id=p_workspace_id and p.updated_by=u.id)
       or exists(select 1 from public.mega_audit_operations o where o.workspace_id=p_workspace_id and o.owner_id=u.id)),

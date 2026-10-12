@@ -18,6 +18,7 @@
   let session = null;
   let mobileCatalog = null;
   let realtime = null;
+  let syncMode='polling';
   let member = null;
   let username = "";
   let master = null;
@@ -33,6 +34,7 @@
   const blobUrls = new Map();
   const archiveFilters = { query: "", from: "", to: "", author: "", page: 1 };
   const pending = new Map();
+  const importUpdates = new Map();
   const pendingMembers = new Map();
   const verifiedUnitSummaries = new Map();
 
@@ -136,6 +138,7 @@
     return {
       mode: "supabase",
       generation,
+      syncMode,
       authenticated: Boolean(session && member && master),
       user: session && member && master ? { id: session.user.id, username, display_name: username, role: member.role } : null
     };
@@ -149,6 +152,7 @@
   function clearSession() {
     generation++;
     if (realtime) realtime.close(); realtime = null;
+    syncMode='polling';importUpdates.clear();
     if (mobileCatalog) mobileCatalog.clear();
     mobileCatalog = null;
     for (const controller of requests) controller.abort();
@@ -410,7 +414,7 @@
       isCurrent: () => generation === epoch && status().authenticated,
       async getAccessToken() { await refreshIfNeeded(); assertAccount(epoch); return session.access_token; },
       onChange(table) { window.dispatchEvent(new CustomEvent('audit:changed', { detail: { table } })); },
-      onStatus(mode) { window.dispatchEvent(new CustomEvent('audit:sync-status', { detail: { mode } })); }
+      onStatus(mode) { if(generation!==epoch)return;syncMode=mode;window.dispatchEvent(new CustomEvent('audit:sync-status', { detail: { mode } })); }
     });
   }
 
@@ -540,7 +544,13 @@
         typeof metadata.username !== "string" || typeof metadata.pdf_name !== "string" || typeof metadata.excel_name !== "string") {
       throw new Error("La información cifrada de una salida no es válida.");
     }
-    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id, document_tag:record.document_tag,operation_kind:record.operation_kind,duplicate_of:record.duplicate_of,reviewed_by:record.reviewed_by,reviewed_at:record.reviewed_at });
+    if(record.import_revision>0&&!metadata.imported_document)throw new Error('Falta la lectura revisada del documento importado.');
+    if(metadata.imported_document){
+      if(!window.InvoiceFormats)throw new Error('Actualiza la página para leer las facturas importadas.');
+      metadata.imported_document=window.InvoiceFormats.validateSaved(metadata.imported_document);
+      if(metadata.imported_document.kind!==(record.document_kind||'salida')||metadata.imported_document.numero!==String(metadata.salida_numero)||record.import_revision<1)throw new Error('La lectura importada no coincide con su registro.');
+    }
+    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id,encryptedMetadata:record.encrypted_metadata,document_kind:record.document_kind||'salida',import_reviewed_by:record.import_reviewed_by,import_reviewed_at:record.import_reviewed_at,import_revision:record.import_revision||0, document_tag:record.document_tag,operation_kind:record.operation_kind,duplicate_of:record.duplicate_of,reviewed_by:record.reviewed_by,reviewed_at:record.reviewed_at });
   }
 
   async function getDocument(record, kind, key, guard, signal) {
@@ -606,6 +616,12 @@
       salida_numero: number, pdf_name: String(options.pdfFile.name || "Documento.pdf"), excel_name: String(options.excelName || "Salida " + number + ".xlsx"),
       row_count: options.rowCount, total_units: options.totalUnits, username, user_display_name: username
     };
+    if(options.importedDocument){
+      const imported=window.InvoiceFormats.validateSaved(options.importedDocument);
+      const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',pdf)),b=>b.toString(16).padStart(2,'0')).join('');guard();
+      if(digest!==imported.pdfSha256||imported.numero!==number||imported.rows.length!==options.rowCount||Math.abs(imported.rows.reduce((s,r)=>s+r.salidas_unidades,0)-options.totalUnits)>.011)throw new Error('El PDF, los productos o sus cantidades no coinciden con la lectura revisada.');
+      metadata.imported_document=imported;
+    }
     payload = new TextEncoder().encode(JSON.stringify(metadata));
     const outcomes = await Promise.allSettled([
       key.encrypt(payload, id + "|metadata"), key.encrypt(pdf, id + "|pdf"), key.encrypt(excel, id + "|excel"), key.blindIndex(number)
@@ -650,6 +666,7 @@
     let source;
     try {
     guard();
+    if(options.importedDocument&&options.importConfirmed){await requireAdmin(epoch);guard();}
     if (!options.pdfFile || typeof options.pdfFile.arrayBuffer !== 'function' || options.pdfFile.size > FILE_LIMIT) throw new Error('Carga un PDF válido de hasta 25 MB.');
     source = new Uint8Array(await options.pdfFile.arrayBuffer()); guard();
     const documentTag = await key.documentIndex(source); guard();
@@ -679,6 +696,7 @@
       try { previousPdf=await getDocument(claim.record,'pdf',key,guard);guard();if(!equalBytes(source,previousPdf))throw new Error('La operación guardada contiene otro PDF. No se reutilizó el registro.'); }
       finally { if(previousPdf)previousPdf.fill(0); }
       const saved=await decryptedRecord(claim.record,key);guard();clearPending();
+      if(options.importedDocument&&options.importConfirmed&&!saved.import_reviewed_by)throw new Error('Este PDF ya está archivado. Abre Archivo → Revisar lectura / Excel para aprobar sus datos y precios.');
       window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));return saved;
     }
     if(!claim || claim.id!==id || claim.owner_id!==owner)throw new Error('No se pudo confirmar la reserva de la operación. Reintenta sin cambiar de identificador.');
@@ -720,10 +738,14 @@
       guard();
       await putDocument(recordPath(row, "excel"), snapshot.encryptedExcel, guard);
       guard();
-      let result = await rpc("mega_audit_record_v2", {
+      const args={
         p_id: id, p_workspace_id: CONFIG.workspace, p_salida_tag: snapshot.tag,
         p_encrypted_metadata: snapshot.encryptedMetadata, p_idempotency_key: id, p_operation_tag: operationTag, p_document_tag: documentTag
-      });
+      };
+      if(options.importedDocument){args.p_kind=snapshot.metadata.imported_document.kind;args.p_confirmed=Boolean(options.importConfirmed);}
+      let result;
+      try{result=await rpc(options.importedDocument?'mega_audit_record_import':'mega_audit_record_v2',args);}
+      catch(error){if(options.importedDocument&&['PGRST202','42P01','42703'].includes(error.code))error.message='Activa las importaciones ejecutando supabase/importaciones.sql en el proyecto existente.';throw error;}
       guard();
       if (Array.isArray(result) && result.length === 1) result = result[0];
       if (!result || result.id !== id || result.created_by !== owner || result.encrypted_metadata !== snapshot.encryptedMetadata) {
@@ -1105,7 +1127,7 @@
   function unitsTextFor(record) {
     if (!record.unitCheck || record.unitCheck.state === "checking") return "Verificando unidades…";
     if (record.unitCheck.state !== "verified") return "Unidades no verificadas";
-    return record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 });
+    return record.total_units.toLocaleString("es-PA", { maximumFractionDigits: 2 })+(record.imported_document?' · revisadas':'');
   }
 
   function updateDetailUnits(view, record) {
@@ -1126,6 +1148,12 @@
   }
 
   async function verifyRecordUnits(record, view, key, controller, guard) {
+    if(record.imported_document){
+      guard();
+      if(!UUID.test(record.import_reviewed_by||'')||!record.import_reviewed_at)throw new Error('La lectura está pendiente de aprobación de un administrador.');
+      const s=window.InvoiceFormats.validateSaved(record.imported_document);
+      return {totalUnits:Math.round(s.rows.reduce((n,r)=>n+r.salidas_unidades,0)*100)/100,rowCount:s.rows.length,documentNumber:s.numero,invoiceDate:s.fecha,reviewed:true};
+    }
     const cached = verifiedUnitSummaries.get(record.id);
     if (cached && cached.metadata === record.unitRevision) {
       guard();
@@ -1211,9 +1239,9 @@
   }
 
   function editButton(record, result, view, detail) {
-    const edit = button("Editar Excel", true);
+    const edit = button(record.imported_document?'Revisar lectura / Excel':"Editar Excel", true);
     edit.classList.add("audit-button-small");
-    edit.setAttribute("aria-label", "Editar Excel de salida " + record.salida_numero);
+    edit.setAttribute("aria-label", record.imported_document?'Revisar lectura de '+documentLabel(record):"Editar Excel de salida " + record.salida_numero);
     edit.addEventListener("click", async function () {
       const epoch = generation;
       const key = master;
@@ -1443,7 +1471,7 @@
     view.detail = detail;
     const guard = function () { assertView(view); if (view.detail !== detail || detail.controller.signal.aborted) throw new Error("La vista cambió."); };
     const header = node("div", undefined, "traza-detail-header");
-    const title = node("h3", "Salida " + record.salida_numero);
+    const title = node("h3", documentLabel(record));
     title.id = "traza-document-title";
     const close = button("Cerrar detalle", true);
     close.addEventListener("click", function () { disposeDetail(view, true); });
@@ -1698,7 +1726,8 @@
               cells[5].textContent = "No se pudo descifrar";
             } else {
               const record = outcome.value;
-              cells[0].append(node("strong", "Salida " + record.salida_numero));
+              cells[0].append(node("strong", documentLabel(record)));
+              if(record.imported_document)cells[0].append(node('small',record.import_reviewed_by?'Lectura aprobada':'Pendiente de aprobación','audit-muted'));
               if(record.operation_kind==='separate')cells[0].append(node('span','Movimiento distinto','audit-muted'));
               cells[3].textContent = unitsTextFor(record);
               cells[3].dataset.unitState = "checking";
@@ -1707,7 +1736,7 @@
               docs.append(documentButton(record, "pdf", "Guardar PDF", result, view), documentButton(record, "excel", "Guardar Excel", result, view));
               cells[4].append(docs);
               const open = button("Detalle", true);
-              open.setAttribute("aria-label", "Abrir detalle de salida " + record.salida_numero);
+              open.setAttribute("aria-label", "Abrir detalle de "+((record.document_kind||'salida')==='salida'?'salida ':record.document_kind+' ')+record.salida_numero);
               open.addEventListener("click", function () { openDetail(view, record, officialName, open); });
               cells[5].append(open, editButton(record, result, view));
             }
@@ -1782,22 +1811,25 @@
       }
     }
     let checkingUpdates=false;
-    view.checkUpdates=async function(){
+    let lastBulkCheck=0;
+    view.checkUpdates=async function(force){
       if(view.disposed||view.page.hidden||view.page.closest('[hidden]')||document.hidden)return;
       if(checkingUpdates||view.loadBusy||view.detail){view.needsRefresh=true;return;}
       if(!view.currentPath)return;
       checkingUpdates=true;const sequence=view.load;
       try{
         await approvedMember(view.epoch,master,view.controller.signal);assertView(view,sequence);
+        if(syncMode==='live'&&!force&&Date.now()-lastBulkCheck<120000)return;
+        lastBulkCheck=Date.now();
         const rows=await activeRecords(view.currentPath,{signal:view.controller.signal});assertView(view,sequence);
         view.needsRefresh=false;
         if(recordSignature(rows)!==view.lastSignature){const scrollY=window.scrollY;await loadRecords();if(archiveView===view)window.scrollTo(window.scrollX,scrollY);}
       }catch(error){if(archiveView===view&&!view.disposed)feedback(result,'No se pudieron sincronizar cambios. Usa Actualizar; los registros permanecen en Supabase.',true);}
       finally{checkingUpdates=false;}
     };
-    const changed=event=>{if(['mega_audit_records','all'].includes(event.detail.table))view.checkUpdates();};
+    const changed=event=>{if(['mega_audit_records','all'].includes(event.detail.table))view.checkUpdates(true);};
     window.addEventListener('audit:changed',changed,{signal:view.controller.signal});
-    const syncTimer=setInterval(view.checkUpdates,15000);view.controller.signal.addEventListener('abort',()=>clearInterval(syncTimer),{once:true});
+    const syncTimer=setInterval(()=>view.checkUpdates(false),15000);view.controller.signal.addEventListener('abort',()=>clearInterval(syncTimer),{once:true});
     form.addEventListener("submit", function (event) { event.preventDefault(); applyFilters(); });
     clear.addEventListener("click", function () { search.value = from.value = to.value = author.value = ""; applyFilters(); });
     refresh.addEventListener("click", function () { verifiedUnitSummaries.clear(); loadRecords(); });
@@ -1820,6 +1852,7 @@
     loadRecords();
   }
   function recordSignature(rows){return JSON.stringify(rows.map(row=>[row.id,row.encrypted_metadata,row.duplicate_of,row.operation_kind,row.reviewed_at]));}
+  function documentLabel(record){const kind=record.document_kind||'salida';return ({salida:'Salida',factura:'Factura',pedido:'Pedido',otro:'Documento'}[kind]||'Documento')+' '+record.salida_numero;}
 
   async function duplicateCandidates(progress,signal){
     const epoch=generation,key=master;await requireAdmin(epoch);priceGuard(epoch,key,signal);
@@ -2049,15 +2082,18 @@
   }
 
   // The mobile view reuses this session and parser without exposing tokens or keys.
-  async function mobileSnapshot(signal) {
+  async function mobileSnapshot(signal,options) {
     const epoch = generation;
     assertAccount(epoch);
     if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
     const result = [];
     for (let offset = 0; ; offset += 500) {
-      const rows = await activeRecords("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at,encrypted_metadata&order=created_at.desc,id.desc&limit=500&offset=" + offset, { signal });
+      let rows;
+      const light=options&&options.light;
+      try{rows=await activeRecords('/rest/v1/mega_audit_catalog_records?workspace_id=eq.'+CONFIG.workspace+'&select=id,created_at,metadata_revision'+(light?'':',encrypted_metadata')+'&order=created_at.desc,id.desc&limit=500&offset='+offset,{signal});}
+      catch(error){if(!['PGRST205','42P01','42703'].includes(error.code))throw error;rows=await activeRecords("/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=id,created_at,encrypted_metadata&order=created_at.desc,id.desc&limit=500&offset=" + offset, { signal });}
       assertAccount(epoch);
-      if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id) || typeof row.encrypted_metadata !== "string")) throw new Error("El historial recibido no es válido.");
+      if (!Array.isArray(rows) || rows.some(row => !UUID.test(row.id) || (typeof row.encrypted_metadata !== "string"&&!/^[a-f0-9]{32}$/.test(row.metadata_revision||'')))) throw new Error("El historial recibido no es válido.");
       result.push(...rows);
       if (rows.length < 500) return result;
     }
@@ -2112,6 +2148,11 @@
     if (!Array.isArray(rows) || rows.length !== 1) throw new Error("No tienes acceso a este documento.");
     const meta = await decryptedRecord(rows[0], key);
     guard();
+    if(meta.imported_document){
+      if(!UUID.test(meta.import_reviewed_by||'')||!Number.isFinite(Date.parse(meta.import_reviewed_at)))throw new Error('Documento pendiente de revisión administrativa.');
+      const s=meta.imported_document;
+      return {products:s.rows.map(r=>({codigo:r.codigo,descripcion:r.descripcion,pventa:r.pventa===''?null:r.pventa,empaque:r.empaque,ref:r.ref,priceOrigin:r.priceOrigin})),salida:s.numero,archiveSalida:meta.salida_numero,invoiceDate:window.MobileCatalog.invoiceDate(s.fecha),kind:s.kind,format:s.format,reviewed:true,date:rows[0].created_at};
+    }
     let data;
     try {
       data = await getDocument(rows[0], "pdf", key, guard, signal);
@@ -2124,6 +2165,27 @@
   function priceGuard(epoch, key, signal) {
     assertAccount(epoch);
     if (!status().authenticated || master !== key || (signal && signal.aborted)) throw new Error('La consulta del precio se canceló.');
+  }
+  async function updateImport(rawId,source,expectedMetadata,signal){
+    const epoch=generation,key=master,id=String(rawId);priceGuard(epoch,key,signal);await requireAdmin(epoch);priceGuard(epoch,key,signal);
+    if(!UUID.test(id)||typeof expectedMetadata!=='string')throw new Error('Abre el documento desde el Archivo para corregir su lectura.');
+    const s=window.InvoiceFormats.validateSaved(source),signature=JSON.stringify(s);
+    let attempt=importUpdates.get(id);
+    if(!attempt||attempt.signature!==signature){
+      const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&id=eq.'+id+'&select=*&limit=2',{signal});priceGuard(epoch,key,signal);if(rows.length!==1)throw new Error('No existe el documento.');
+      const old=await decryptedRecord(rows[0],key);priceGuard(epoch,key,signal);
+      if(old.encryptedMetadata!==expectedMetadata)throw new Error('Otro administrador corrigió esta lectura. Ábrela nuevamente.');
+      if(old.imported_document){if(old.imported_document.pdfSha256!==s.pdfSha256)throw new Error('La lectura corresponde a otro PDF.');}
+      else{let pdf;try{pdf=await getDocument(rows[0],'pdf',key,()=>priceGuard(epoch,key,signal),signal);const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',pdf)),b=>b.toString(16).padStart(2,'0')).join('');if(digest!==s.pdfSha256)throw new Error('La lectura corresponde a otro PDF.');}finally{if(pdf)pdf.fill(0);}}
+      const metadata={salida_numero:s.numero,pdf_name:old.pdf_name,excel_name:old.excel_name,row_count:s.rows.length,total_units:Math.round(s.rows.reduce((n,r)=>n+r.salidas_unidades,0)*100)/100,username:old.username,user_display_name:old.user_display_name||old.username,imported_document:s};
+      const clear=new TextEncoder().encode(JSON.stringify(metadata));let cipher;try{cipher=base64(await key.encrypt(clear,id+'|metadata'));}finally{clear.fill(0);}
+      const tag=await key.blindIndex(s.numero);priceGuard(epoch,key,signal);attempt={signature,expected:expectedMetadata,cipher,tag,requestId:newIdempotencyKey()};importUpdates.set(id,attempt);
+    }
+    let row;
+    try{row=await request('/rest/v1/rpc/mega_audit_import_update',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_id:id,p_expected_metadata:attempt.expected,p_encrypted_metadata:attempt.cipher,p_salida_tag:attempt.tag,p_kind:s.kind,p_request_id:attempt.requestId}});}
+    catch(error){if(error.code==='40001')error.message='Otro administrador corrigió esta lectura. Ábrela nuevamente.';throw error;}
+    priceGuard(epoch,key,signal);if(!row||row.id!==id||row.encrypted_metadata!==attempt.cipher||row.import_reviewed_by!==session.user.id)throw new Error('No se confirmó la corrección. Reintenta antes de descargar.');
+    const saved=await decryptedRecord(row,key);priceGuard(epoch,key,signal);importUpdates.delete(id);window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return saved;
   }
   async function decryptedPrice(row, code, tag, key) {
     if (!row || row.workspace_id !== CONFIG.workspace || row.product_tag !== tag || !UUID.test(row.updated_by) || !Number.isSafeInteger(row.version) || row.version < 1 || !Number.isFinite(Date.parse(row.updated_at))) throw new Error('El precio compartido recibido no es válido.');
@@ -2180,7 +2242,10 @@
   }
   async function mobileLookup(code, signal) {
     const result = await getMobileCatalog().lookup(code, signal);
-    if (result.match) result.price = await mobilePrice(result.match.product.codigo, signal);
+    if(result.match&&result.match.ambiguousReference)return result;
+    if (result.match){const lookupCode=result.match.product.codigo||result.match.product.ref;result.match={...result.match,product:{...result.match.product,lookupCode}};result.price = await mobilePrice(lookupCode, signal);
+      if(result.match.doc.reviewed&&result.match.product.codigo&&result.match.product.ref&&!result.match.product.referenceAmbiguous&&!result.price.override){const byRef=await mobilePrice(result.match.product.ref,signal);if(byRef.override){result.price=byRef;result.match.product.lookupCode=result.match.product.ref;}}
+    }
     return result;
   }
   function upgradeError(error) {
@@ -2243,7 +2308,7 @@
     // Tickets contain ciphertext and official IDs only; no products, keys or tokens.
     return window.MobileCatalog.cache('query-pending|'+CONFIG.workspace+'|'+session.user.id+'|'+master.fingerprint);
   }
-  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,
+  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,
     queries: Object.freeze({ticket:queryTicket,add:queryAdd,list:queryList,queue:queryQueue}),
     mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });

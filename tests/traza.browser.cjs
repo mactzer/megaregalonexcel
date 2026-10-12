@@ -12,6 +12,7 @@ const { chromium } = require('playwright');
 const Crypto = require('../audit-crypto.js');
 const XLSX = require('../vendor/xlsx.full.min.js');
 const ExcelTable = require('../excel-table.js');
+const InvoiceFixtures=require('./fixtures/invoice-fixtures.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT = process.env.TRAZA_BROWSER_OUTPUT || path.join(os.tmpdir(), 'traza-browser-results');
@@ -365,6 +366,8 @@ test('desktop scanner: wide layout, sidebar icon, keyboard lookup and one scroll
   const queries=h.state.queryCalls;await h.page.locator('#audit-tab').click();await h.page.locator('#scanner-tab').click();
   await scanner.locator('#result .price').waitFor();assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);assert.equal(h.state.queryCalls,queries);
   await h.page.setViewportSize({width:390,height:844});await scanner.locator('.bottom').waitFor({state:'visible'});
+  // CSS responds before the asynchronous matchMedia/ResizeObserver callbacks.
+  await h.page.waitForFunction(()=>document.querySelector('#scanner-frame').style.height==='');
   assert.equal(await h.page.locator('#scanner-frame').evaluate(e=>e.style.height),'','Narrow screens restore their mobile viewport');
   assert.equal(await scanner.locator('.result-placeholder').isVisible(),false);await checkNoOverflow(h.page);
  }finally{await h.close();}
@@ -775,17 +778,25 @@ async function harness(options = {}) {
       if(state.role!=='admin'){await json({code:'42501'},403);return;}
       const body=request.postDataJSON(),row=state.records.find(r=>r.id===body.p_record_id);Object.assign(row,{document_tag:body.p_document_tag,duplicate_of:body.p_canonical_id,operation_kind:body.p_canonical_id?'legacy':'separate',reviewed_by:state.actor,reviewed_at:new Date().toISOString(),encrypted_review:body.p_encrypted_review});broadcast('mega_audit_records');await json(row);return;
     }
-    if (pathname === '/rest/v1/rpc/mega_audit_record_v2') {
+    if (pathname === '/rest/v1/rpc/mega_audit_record_v2'||pathname==='/rest/v1/rpc/mega_audit_record_import') {
       state.recordCalls++;
       if (state.slowRecord) await state.slowRecord;
       if (state.failRecord) { await json({ code: 'fictional_error' }, state.failRecord); return; }
       const body = request.postDataJSON();
+      if(pathname.endsWith('mega_audit_record_import')&&body.p_confirmed&&state.role!=='admin'){await json({code:'42501'},403);return;}
       let row = state.records.find(row => row.id === body.p_id);
       if (!row) { row = { id: body.p_id, created_by: state.actor, workspace_id: WORKSPACE, created_at: '2026-10-09T03:00:00.000Z', salida_tag: body.p_salida_tag, encrypted_metadata: body.p_encrypted_metadata,document_tag:body.p_document_tag,operation_kind:body.p_document_tag===body.p_operation_tag?'primary':'separate' }; state.records.unshift(row); }
+      if(pathname.endsWith('mega_audit_record_import'))Object.assign(row,{document_kind:body.p_kind,import_revision:1,import_request_id:body.p_id,import_reviewed_by:body.p_confirmed?state.actor:null,import_reviewed_at:body.p_confirmed?'2026-10-12T18:00:00Z':null});
       state.operations.set(body.p_operation_tag,{record_id:row.id});broadcast('mega_audit_records');
       await json(row); return;
     }
-    if (pathname === '/rest/v1/mega_audit_records') {
+    if(pathname==='/rest/v1/rpc/mega_audit_import_update'){
+      const b=request.postDataJSON(),r=state.records.find(r=>r.id===b.p_id);
+      if(state.role!=='admin'){await json({code:'42501'},403);return;}
+      if(r.import_request_id!==b.p_request_id&&r.encrypted_metadata!==b.p_expected_metadata){await json({code:'40001'},409);return;}
+      if(r.import_request_id!==b.p_request_id){Object.assign(r,{encrypted_metadata:b.p_encrypted_metadata,salida_tag:b.p_salida_tag,document_kind:b.p_kind,import_revision:(r.import_revision||0)+1,import_request_id:b.p_request_id,import_reviewed_by:state.actor,import_reviewed_at:'2026-10-12T19:00:00Z'});broadcast('mega_audit_records');}if(state.dropImportUpdate){await route.abort('failed');return;}await json(r);return;
+    }
+    if (pathname === '/rest/v1/mega_audit_records'||pathname==='/rest/v1/mega_audit_catalog_records') {
       if (state.slowConfirmation && url.searchParams.has('id')) await state.slowConfirmation;
       if (state.failList) { await json({ code: 'fictional_error' }, state.failList); return; }
       const eq = key => (url.searchParams.get(key) || '').replace(/^eq\./, '');
@@ -796,6 +807,7 @@ async function harness(options = {}) {
       for (const clause of url.searchParams.getAll('created_at')) { if (clause.startsWith('gte.')) rows = rows.filter(row => row.created_at >= new Date(clause.slice(4)).toISOString()); if (clause.startsWith('lt.')) rows = rows.filter(row => row.created_at < new Date(clause.slice(3)).toISOString()); }
       const total = rows.length, offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || total);
       rows = rows.slice(offset, offset + limit);
+      if(pathname.endsWith('mega_audit_catalog_records'))rows=rows.map(r=>({...r,metadata_revision:require('node:crypto').createHash('md5').update(r.encrypted_metadata).digest('hex')}));
       await json(rows, 200, state.noCount ? {} : { 'Content-Range': rows.length ? `${offset}-${offset + rows.length - 1}/${total}` : `*/${total}` }); return;
     }
     const storage = '/storage/v1/object/';
@@ -2259,4 +2271,84 @@ test('backups: ordinary users cannot access backup controls; remote revocation a
   await h.page.getByRole('button',{name:'Guardar o actualizar respaldo',exact:true}).click();await h.page.getByRole('dialog').waitFor({state:'detached'});
   assert.equal(h.state.requests.filter(r=>r.pathname==='/rest/v1/rpc/mega_audit_backup_snapshot').length,calls);assert.deepEqual(await h.page.evaluate(()=>Array.from(window.__directory.data.get('respaldo.megacontrol.json'))),old);
  }finally{await h.close();}
+});
+
+async function importFixture(h,format='nevada',buffer=InvoiceFixtures.pdf(format)){
+ await h.page.evaluate(()=>TrazaUI.navigate('converter'));
+ await h.page.locator('#file-input').setInputFiles({name:'Factura ficticia '+format+'.pdf',mimeType:'application/pdf',buffer});
+ await h.page.locator('#invoice-review').waitFor({state:'visible'});
+ await h.page.waitForFunction(()=>document.querySelector('#invoice-review select option'));
+ return h.page.locator('.invoice-row');
+}
+async function confirmImport(h,prices=[5.99,7.99]){
+ const rows=h.page.locator('.invoice-row');
+ for(let i=0;i<prices.length;i++)await rows.nth(i).locator('[data-field=pventa]').fill(String(prices[i]));
+ await h.page.locator('#invoice-confirm').check();await h.page.locator('#export-button:not([disabled])').waitFor();
+ return downloadAction(h,()=>h.page.locator('#export-button').click());
+}
+for(const format of ['nevada','feduro','skechers'])test('invoice originals: '+format+' reads text without OCR, distinguishes invoice cost and sale price, stores encrypted confirmed rows',async()=>{
+ const h=await harness();try{
+  await login(h.page);const ocr=[];h.page.on('request',r=>{if(r.url().includes('/vendor/ocr/'))ocr.push(r.url());});
+  const rows=await importFixture(h,format);assert.equal(await rows.count(),2);assert.equal(await h.page.locator('#export-button').isDisabled(),true);
+  assert.equal(await rows.first().locator('[data-field=salidas_unidades]').inputValue(),format==='feduro'?'6':'12');
+  assert.equal(await rows.first().locator('[data-field=costo]').inputValue(),format==='feduro'?'10':format==='skechers'?'35':'3');
+  assert.equal(await rows.first().locator('[data-field=pventa]').inputValue(),'');assert.equal(await h.page.locator('#invoice-review input').nth(1).inputValue(),'12/10/2026');
+  const result=await confirmImport(h);assert.ok(result.bytes.length>1000);assert.deepEqual(ocr,[]);
+  const record=h.state.records.find(r=>r.import_revision);assert.equal(record.import_reviewed_by,OWNER);assert.equal(record.document_kind,format==='nevada'?'pedido':'factura');
+  const data=await fixture.master.decrypt(new Uint8Array(Buffer.from(record.encrypted_metadata,'base64')),record.id+'|metadata');const metadata=JSON.parse(new TextDecoder().decode(data));data.fill(0);
+  assert.equal(metadata.imported_document.rows.length,2);assert.equal(metadata.imported_document.rows[0].pventa,5.99);assert.equal(metadata.imported_document.fecha,'12/10/2026');assert.equal(metadata.imported_document.rows[0].priceOrigin,'manual');
+  assert.doesNotMatch(h.state.requests.find(r=>r.pathname.endsWith('mega_audit_record_import')).body,/5\.99|FICTICIO|1234509876543/);
+  assert.ok(metadata.imported_document.rows[0].codigo||metadata.imported_document.rows[0].ref);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('invoice approval: member saves a draft, admin corrects it with lost-response retry; another device queries metadata without downloading PDFs',async()=>{
+ const member=await harness({role:'user'}),admin=await harness(),mobile=await harness({mobile:true,role:'user'});try{
+  await login(member.page,'index.html',{username:'colega'});const rows=await importFixture(member);assert.equal(await rows.first().locator('[data-field=pventa]').getAttribute('readonly'),'');
+  await member.page.locator('#invoice-confirm').check();await member.page.locator('#export-button:not([disabled])').waitFor();await downloadAction(member,()=>member.page.locator('#export-button').click());
+  const draft=member.state.records.find(r=>r.import_revision);assert.equal(draft.import_reviewed_by,null);
+  const originals=new Map([...member.state.storage].map(([k,v])=>[k,Buffer.from(v)]));admin.state.records=member.state.records;admin.state.storage=member.state.storage;admin.state.operations=member.state.operations;
+  await login(admin.page);await admin.page.getByRole('button',{name:'Revisar lectura de Pedido 55001',exact:true}).click();await admin.page.locator('#invoice-review').waitFor({state:'visible'});
+  await admin.page.locator('.invoice-row').nth(0).locator('[data-field=pventa]').fill('5.99');await admin.page.locator('.invoice-row').nth(1).locator('[data-field=pventa]').fill('7.99');await admin.page.locator('#invoice-confirm').check();
+  admin.state.dropImportUpdate=true;await admin.page.locator('#export-button').click();await admin.page.waitForFunction(()=>!document.querySelector('#export-button').disabled&&document.querySelector('#message').classList.contains('show'));
+  assert.equal(draft.import_revision,2);admin.state.dropImportUpdate=false;await downloadAction(admin,()=>admin.page.locator('#export-button').click());assert.equal(draft.import_revision,2);assert.equal(draft.import_reviewed_by,OWNER);assert.deepEqual(admin.state.storage,originals);
+  await downloadAction(admin,()=>admin.page.locator('#export-button').click());assert.equal(draft.import_revision,2,'Unchanged re-export does not update metadata');
+  mobile.state.records=[draft];mobile.state.storage=member.state.storage;await mobileLogin(mobile,'colega');assert.equal(mobile.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);await mobileLookup(mobile,'1234509876543');assert.match(await mobile.page.locator('.price').innerText(),/5\.99/);assert.match(await mobile.page.locator('#result').innerText(),/55001/);assert.equal(mobile.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);assert.equal(await mobile.page.locator('#edit-price').count(),0);
+ }finally{await member.close();await admin.close();await mobile.close();}
+});
+test('invoice scan: actual local WASM reads an image-only PDF; unconfirmed OCR cannot be saved and no external OCR requests occur',async()=>{
+ const h=await harness();try{
+  await login(h.page);const pdf=InvoiceFixtures.pdf('nevada');
+  const jpeg=await h.page.evaluate(async bytes=>{const task=pdfjsLib.getDocument({data:Uint8Array.from(bytes),isEvalSupported:false}),pdf=await task.promise,page=await pdf.getPage(1),vp=page.getViewport({scale:1.5}),c=document.createElement('canvas');c.width=vp.width;c.height=vp.height;await page.render({canvasContext:c.getContext('2d'),viewport:vp}).promise;const img=c.toDataURL('image/jpeg',.95);await pdf.destroy();return {data:img.split(',')[1],width:c.width,height:c.height};},[...pdf]);
+  const assets=[];h.page.on('request',r=>{if(r.url().includes('/vendor/ocr/'))assets.push(r.url());});
+  const rows=await importFixture(h,'nevada',InvoiceFixtures.raster(Buffer.from(jpeg.data,'base64'),jpeg.width,jpeg.height));assert.ok(await rows.count()>0);assert.ok(assets.some(s=>s.includes('traineddata')));assert.ok(assets.some(s=>s.includes('wasm.js')));assert.equal(await h.page.locator('#export-button').isDisabled(),true);assert.match(await h.page.locator('#invoice-review').innerText(),/puede omitir productos/);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('invoice manual fallback: unknown text layout opens original and permits adding reviewed rows with an admin group price',async()=>{
+ const h=await harness({viewport:{width:390,height:844}});try{
+  await login(h.page);await importFixture(h,'otro',Buffer.from(InvoiceFixtures.pdf('nevada').toString().replace(/NEVADA/g,'TIENDX')));
+  assert.equal(await h.page.locator('#export-button').isDisabled(),true);await h.page.getByRole('button',{name:'Añadir producto',exact:true}).click();const row=h.page.locator('.invoice-row').last();
+  await row.locator('[data-field=ref]').fill('NUEVO-01');await row.locator('[data-field=descripcion]').fill('Producto revisado');await row.locator('[data-field=salidas_unidades]').fill('2');await row.locator('input[type=checkbox]').check();
+  await h.page.getByLabel('Precio de venta para productos seleccionados').fill('9.99');await h.page.getByRole('button',{name:'Aplicar precio a productos seleccionados',exact:true}).click();assert.equal(await row.locator('[data-field=pventa]').inputValue(),'9.99');await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('invoice OCR cancellation: changing PDF while local engine loads cannot restore the previous review',async()=>{
+ const h=await harness();let release;try{
+  await login(h.page);const data=await h.page.evaluate(async bytes=>{const pdf=await pdfjsLib.getDocument({data:Uint8Array.from(bytes),isEvalSupported:false}).promise,p=await pdf.getPage(1),v=p.getViewport({scale:1}),c=document.createElement('canvas');c.width=v.width;c.height=v.height;await p.render({canvasContext:c.getContext('2d'),viewport:v}).promise;const out={jpeg:c.toDataURL('image/jpeg',.9).split(',')[1],width:c.width,height:c.height};await pdf.destroy();return out;},[...InvoiceFixtures.pdf('nevada')]);
+  const stalled=new Promise(r=>release=r);let requested=false;await h.context.route('**/vendor/ocr/tesseract.min.js',async route=>{requested=true;await stalled;await route.continue();});
+  await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Escaneo ficticio.pdf',mimeType:'application/pdf',buffer:InvoiceFixtures.raster(Buffer.from(data.jpeg,'base64'),data.width,data.height)});
+  for(let i=0;i<100&&!requested;i++)await h.page.waitForTimeout(20);assert.equal(requested,true);
+  await h.page.locator('#file-input').setInputFiles({name:'Original Skechers ficticio.pdf',mimeType:'application/pdf',buffer:InvoiceFixtures.pdf('skechers')});await h.page.locator('#invoice-review').waitFor({state:'visible'});release();await h.page.waitForTimeout(150);
+  assert.equal(await h.page.locator('.invoice-row').count(),2);assert.equal(await h.page.locator('#salida-number').inputValue(),'55003');assert.equal(await h.page.locator('#file-name').innerText(),'Original Skechers ficticio.pdf');assert.equal(await h.page.locator('#export-button').isDisabled(),true);assert.equal(h.state.recordCalls,0);
+ }finally{if(release)release();await h.close();}
+});
+test('invoice references: Skechers reference price remains editable after linking a barcode, without reopening the PDF',async()=>{
+ const h=await harness(),mobile=await harness({mobile:true});try{
+  await login(h.page);await importFixture(h,'skechers');await confirmImport(h);const record=h.state.records.find(r=>r.import_revision);
+  mobile.state.records=[record];mobile.state.storage=h.state.storage;await mobileLogin(mobile);await mobileLookup(mobile,'117775N/TOL0');assert.match(await mobile.page.locator('.price').innerText(),/5\.99/);
+  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('7.99');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  const bytes=await fixture.master.decrypt(new Uint8Array(Buffer.from(record.encrypted_metadata,'base64')),record.id+'|metadata'),source=JSON.parse(new TextDecoder().decode(bytes)).imported_document;bytes.fill(0);source.rows[0].codigo=source.rows[0].codigo_completo='1234509876543';
+  await h.page.evaluate(async args=>{await AuditCloud.updateImport(args.id,args.source,args.expected);},{id:record.id,source,expected:record.encrypted_metadata});
+  await mobile.page.locator('#refresh-catalog').click();await mobile.page.locator('#search:not([disabled])').waitFor();await mobileLookup(mobile,'1234509876543');assert.match(await mobile.page.locator('.price').innerText(),/7\.99/);
+  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('6.99');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/6\.99/.test(document.querySelector('.price').textContent));assert.equal(mobile.state.prices.size,1);assert.equal([...mobile.state.prices.values()][0].version,2);assert.equal(mobile.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);
+ }finally{await h.close();await mobile.close();}
 });

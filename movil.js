@@ -89,37 +89,40 @@
     if (found && found.length === 1) lookup(found[0].text);
   });
   function showProduct(match, failed, price) {
-    const { product, doc, history: sources, unverifiedDates, conflictingPrices } = match;
+    const { product, doc, history: sources, unverifiedDates, conflictingPrices,ambiguousReference } = match;
     const result = $('result'); result.className = failed || unverifiedDates || conflictingPrices ? 'card warning' : 'card'; result.replaceChildren(); result.hidden = false;
     result.append(element('p', 'PRODUCTO ENCONTRADO EN EL ARCHIVO', 'result-label'), element('h2', product.descripcion || 'Sin descripción en el PDF', 'product-name'));
     result.append(element('div', money(product.pventa), 'price'));
-    const sourceLabel = element('p', failed || unverifiedDates || conflictingPrices ? 'Precio del PDF de la salida seleccionada.' : 'Precio del PDF de la última salida.', 'note price-source');
+    const imported=doc.reviewed&&doc.kind!=='salida';
+    const sourceLabel = element('p', product.priceOrigin==='manual'?'Precio de venta confirmado por un administrador al importar.':imported?'Precio de venta confirmado en la lectura del documento.':failed || unverifiedDates || conflictingPrices ? 'Precio del PDF de la salida seleccionada.' : 'Precio del PDF de la última salida.', 'note price-source');
     sourceLabel.dataset.pdfLabel = sourceLabel.textContent; result.append(sourceLabel);
     const dl = document.createElement('dl');
-    for (const [name, value] of [['Código de barras', product.codigo], ['Empaque', product.empaque], ['Referencia', product.ref], ['Salida de origen', doc.salida], ['Fecha de factura', invoiceDate(doc.invoiceDate)]]) {
+    for (const [name, value] of [['Código de barras', product.codigo], ['Empaque', product.empaque], ['Referencia', product.ref], [imported?'Documento de origen':'Salida de origen', doc.salida], ['Fecha de factura', invoiceDate(doc.invoiceDate)]]) {
       dl.append(element('dt', name), element('dd', value || 'No disponible en el documento'));
     }
     if (doc.archiveSalida && doc.archiveSalida !== doc.salida) dl.append(element('dt', 'Número guardado en Archivo'), element('dd', doc.archiveSalida));
     result.append(dl);
+    if(ambiguousReference)result.append(element('p','Esta referencia corresponde a varios códigos de barras. Consulta el código exacto del producto para ver su precio.','note missing'));
     if (failed) result.append(element('p', 'Hay ' + failed + ' documentos sin verificar en el índice. Este resultado podría tener una versión posterior. Pulsa Actualizar para reintentar.', 'note missing'));
     if (unverifiedDates) result.append(element('p', 'Hay ' + unverifiedDates + ' coincidencias sin fecha de factura válida. No se puede confirmar cuál es la última salida; revisa esos PDF. Se da prioridad a las facturas con fecha verificada.', 'note missing'));
     if (conflictingPrices) result.append(element('p', 'La salida seleccionada tiene precios distintos para este código. Revisa las coincidencias en Salidas antes de fijar un precio.', 'note missing'));
     const section = element('section', '', 'product-salidas');
     section.setAttribute('aria-label', 'Salidas del producto');
-    section.append(element('h3', 'Salidas'), element('p', 'De más reciente a más antigua, según la fecha de la factura. A igual fecha, primero el número de salida mayor.', 'note'));
+    const mixed=sources.some(s=>s.doc.kind&&s.doc.kind!=='salida');
+    section.append(element('h3', mixed?'Salidas y facturas':'Salidas'), element('p', mixed?'Las salidas tienen prioridad. Las otras facturas se consultan cuando el producto no tiene una salida. Se usa la fecha impresa del documento.':'De más reciente a más antigua, según la fecha de la factura. A igual fecha, primero el número de salida mayor.', 'note'));
     const table = document.createElement('table');
     table.append(element('caption', sources.length + ' coincidencias del producto en facturas'));
     const head = document.createElement('thead'), headings = document.createElement('tr');
-    for (const title of ['Salida', 'Precio del PDF', 'Fecha de factura']) { const th = element('th', title); th.scope = 'col'; headings.append(th); }
+    for (const title of [mixed?'Documento':'Salida',mixed?'Precio confirmado':'Precio del PDF','Fecha de factura']) { const th = element('th', title); th.scope = 'col'; headings.append(th); }
     head.append(headings); table.append(head);
     const body = document.createElement('tbody');
     for (const [index, source] of sources.entries()) {
-      const row = document.createElement('tr'), number = element('td', source.doc.salida || 'No disponible');
-      if (index === 0 && !unverifiedDates && !failed && !conflictingPrices) { row.className = 'latest-salida'; number.append(element('small', 'Última salida')); }
+      const row = document.createElement('tr'), number = element('td', ((source.doc.kind&&source.doc.kind!=='salida')?({factura:'Factura ',pedido:'Pedido ',otro:'Documento '}[source.doc.kind]||'Documento '):'')+(source.doc.salida || 'No disponible'));
+      if (index === 0 && !unverifiedDates && !failed && !conflictingPrices) { row.className = 'latest-salida'; number.append(element('small', imported?'Documento usado':'Última salida')); }
       row.append(number, element('td', money(source.product.pventa)), element('td', invoiceDate(source.doc.invoiceDate))); body.append(row);
     }
     table.append(body); section.append(table); result.append(section);
-    window.dispatchEvent(new CustomEvent('mobile:product', { detail: { product, price } }));
+    if(!ambiguousReference)window.dispatchEvent(new CustomEvent('mobile:product', { detail: { product, price } }));
   }
   async function prepareCatalog() {
     if (busy || (window.MobilePriceEditor && MobilePriceEditor.busy) || !api || !api.status().authenticated) return;
@@ -150,10 +153,12 @@
     }
   }
   $('refresh-catalog').addEventListener('click', prepareCatalog);
-  let checkingUpdates = false;
-  setInterval(async () => {
+  let checkingUpdates = false,needsCatalogCheck=false,lastCatalogCheck=0;
+  async function checkCatalogUpdates(force=false) {
     if (!api || !api.status().authenticated || !catalogReady || busy || (window.MobilePriceEditor && MobilePriceEditor.busy) || checkingUpdates || document.hidden || MobileSession.currentSection !== 'scanner') return;
     checkingUpdates = true;
+    if(api.status().syncMode==='live'&&!force&&!needsCatalogCheck&&Date.now()-lastCatalogCheck<120000){checkingUpdates=false;return;}
+    needsCatalogCheck=false;lastCatalogCheck=Date.now();
     const epoch = api.status().generation;
     try {
       const changed = await api.mobile.hasUpdates();
@@ -161,7 +166,9 @@
     } catch (_) {
       if (api.status().authenticated) $('catalog-status').textContent = 'No se pudieron comprobar documentos nuevos. El índice conserva la última actualización; pulsa Actualizar para reintentar.';
     } finally { checkingUpdates = false; }
-  }, 30000);
+  }
+  setInterval(()=>checkCatalogUpdates(false),30000);
+  MobileSession.ready.then(owner=>{let timer;owner.addEventListener('audit:changed',event=>{if(!['mega_audit_records','all'].includes(event.detail.table))return;needsCatalogCheck=true;clearTimeout(timer);timer=setTimeout(()=>checkCatalogUpdates(true),250);});}).catch(()=>{});
   async function lookup(raw) {
     const code = String(raw).trim();
     if (!code || code.length > 80 || /[\x00-\x1f]/.test(code)) { status('Escribe un código válido.', true); return; }

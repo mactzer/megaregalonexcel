@@ -42,6 +42,7 @@ def validate(folder):
                          ('mega_product_queries', 'created_by'), ('mega_audit_operations', 'owner_id')]:
         authors.update(row[field] for row in rows[table])
     authors.update(row['reviewed_by'] for row in rows['mega_audit_records'] if row.get('reviewed_by'))
+    authors.update(row['import_reviewed_by'] for row in rows['mega_audit_records'] if row.get('import_reviewed_by'))
     if any(not re.fullmatch(UUID, a) for a in authors):
         raise ValueError('Identidad de autor inválida.')
     files = {}
@@ -96,7 +97,10 @@ def restore_sql(snapshot, restore_access=False):
     for table in TABLES:
         if not restore_access and table in ('mega_audit_members', 'mega_audit_user_keys'):
             continue
-        rows = literal(json.dumps(snapshot['tables'][table], ensure_ascii=True, separators=(',', ':')))
+        source_rows = snapshot['tables'][table]
+        if table == 'mega_audit_records':
+            source_rows = [dict(row, document_kind=row.get('document_kind') or 'salida', import_revision=row.get('import_revision') or 0) for row in source_rows]
+        rows = literal(json.dumps(source_rows, ensure_ascii=True, separators=(',', ':')))
         lines.append(f'insert into public.{table} select * from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) on conflict do nothing;')
     lines.append('update public.mega_audit_workspace set key_fingerprint=' + literal(fingerprint) + ' where id=' + literal(WORKSPACE) + '::uuid and key_fingerprint is null;')
     lines.extend(['alter table public.mega_audit_records enable trigger mega_audit_record_stamp;',

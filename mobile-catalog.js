@@ -39,14 +39,16 @@
     return a.length - b.length || (a > b ? 1 : a < b ? -1 : 0);
   }
   function newestFirst(a, b) {
+    const aSalida=(a.doc.kind||'salida')==='salida',bSalida=(b.doc.kind||'salida')==='salida';
+    if(aSalida!==bSalida)return aSalida?-1:1;
     const aDate = a.doc.invoiceDate || '', bDate = b.doc.invoiceDate || '';
     return (aDate > bDate ? -1 : aDate < bDate ? 1 : 0) || compareNumber(b.doc.salida, a.doc.salida) || a.id.localeCompare(b.id);
   }
   function create(client) {
-    let products = new Map(), documents = [], failed = 0, prepared = false, generation = 0, revision = '';
-    const signature = rows => JSON.stringify(rows.map(row => [row.id, row.created_at, row.encrypted_metadata]));
+    let products = new Map(),references=new Map(),documents = [], failed = 0, prepared = false, generation = 0, revision = '';
+    const signature = rows => JSON.stringify(rows.map(row => [row.id, row.created_at, row.metadata_revision||row.encrypted_metadata]));
     const guard = (epoch, signal) => { if (epoch !== generation || (signal && signal.aborted)) throw new Error('Preparación cancelada.'); };
-    function clear() { generation++; prepared = false; products.clear(); documents = []; failed = 0; revision = ''; }
+    function clear() { generation++; prepared = false; products.clear();references.clear(); documents = []; failed = 0; revision = ''; }
     async function prepare(progress, signal) {
       clear();
       const epoch = generation;
@@ -79,29 +81,35 @@
       }
       // Two workers keep PDF memory bounded on phones; invoice headers determine order.
       await Promise.all([worker(), worker()]); guard(epoch, signal);
-      const index = new Map();
+      const index = new Map(),refIndex=new Map();
       for (const entry of results) if (entry) {
         const seen = new Set();
         for (const product of entry.doc.products) {
           const code = canonical(product.codigo);
           const rowKey = JSON.stringify([code, product.pventa]);
-          if (!code || seen.has(rowKey)) continue;
-          seen.add(rowKey);
-          if (!index.has(code)) index.set(code, { history: [] });
-          index.get(code).history.push({ id: entry.id, product, doc: { salida: entry.doc.salida, archiveSalida: entry.doc.archiveSalida, invoiceDate: entry.doc.invoiceDate || '' } });
+          if ((!code&&!product.ref) || seen.has(rowKey+product.ref)) continue;
+          seen.add(rowKey+product.ref);
+          const item={id:entry.id,product,doc:{salida:entry.doc.salida,archiveSalida:entry.doc.archiveSalida,invoiceDate:entry.doc.invoiceDate||'',kind:entry.doc.kind||'salida',format:entry.doc.format||'',reviewed:entry.doc.reviewed||false}};
+          if(code){if(!index.has(code))index.set(code,{history:[]});index.get(code).history.push(item);}
+          if(product.ref){const r=String(product.ref).trim().toUpperCase();if(!refIndex.has(r))refIndex.set(r,{history:[]});refIndex.get(r).history.push(item);}
         }
       }
       // Sort during preparation, never download or sort PDFs when scanning.
-      for (const match of index.values()) {
+      for (const match of [...index.values(),...refIndex.values()]) {
         match.history.sort(newestFirst);
         const selected = match.history[0];
         match.product = selected.product; match.doc = selected.doc;
         match.unverifiedDates = match.history.filter(row => !row.doc.invoiceDate).length;
-        const sameInvoice = match.history.filter(row => row.doc.invoiceDate === selected.doc.invoiceDate && row.doc.salida === selected.doc.salida);
+        const sameInvoice = match.history.filter(row => row.doc.invoiceDate === selected.doc.invoiceDate && row.doc.kind===selected.doc.kind && (selected.doc.kind==='salida'?row.doc.salida===selected.doc.salida:true));
         match.conflictingPrices = sameInvoice.some(row => row.product.pventa !== selected.product.pventa);
         if (match.conflictingPrices) match.product = { ...selected.product, pventa: null };
       }
-      guard(epoch, signal); products = index; documents = results.filter(Boolean); failed = errors; prepared = true; revision = signature(snapshot);
+      for(const match of refIndex.values()){
+        const codes=new Set(match.history.map(r=>canonical(r.product.codigo)).filter(Boolean));
+        if(codes.size>1){match.ambiguousReference=true;match.product={...match.product,pventa:null};}
+      }
+      for(const match of index.values())if(refIndex.get(String(match.product.ref||'').trim().toUpperCase())?.ambiguousReference)match.product={...match.product,referenceAmbiguous:true};
+      guard(epoch, signal); products = index;references=refIndex; documents = results.filter(Boolean); failed = errors; prepared = true; revision = signature(snapshot);
       // Cache only authenticated ciphertext, never PDF bytes or clear product data.
       try {
         if (reused !== snapshot.length || previous.length !== snapshot.length) {
@@ -109,18 +117,18 @@
           await client.cache.write(ciphertext); guard(epoch, signal);
         }
       } catch (_) { guard(epoch, signal); }
-      return { products: products.size, documents: snapshot.length, failed, cached: reused };
+      return { products: products.size+[...references.values()].filter(r=>r.history.every(h=>!h.product.codigo)).length, documents: snapshot.length, failed, cached: reused };
     }
     async function lookup(code, signal) {
       const epoch = generation;
       if (!prepared) throw new Error('Prepara el índice antes de consultar productos.');
       await client.verifyAccess(signal); guard(epoch, signal);
-      return { match: products.get(canonical(code)) || null, failed, documents: documents.length + failed };
+      return { match: products.get(canonical(code)) || references.get(String(code).trim().toUpperCase()) || null, failed, documents: documents.length + failed };
     }
     async function hasUpdates(signal) {
       const epoch = generation;
       if (!prepared) return true;
-      const rows = await client.snapshot(signal); guard(epoch, signal);
+      const rows = await client.snapshot(signal,{light:true}); guard(epoch, signal);
       return signature(rows) !== revision;
     }
     return Object.freeze({ prepare, lookup, clear, hasUpdates });

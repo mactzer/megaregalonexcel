@@ -49,6 +49,7 @@ jobs:
           cp -R supabase _site/
           cp audit-realtime.js mobile-history.js supabase-consultas.html _site/
           cp audit-backup.js _site/
+          cp invoice-formats.js invoice-ocr.js invoice-review.js invoice-import.css _site/
           mkdir _site/tools
           cp tools/restore-megacontrol.py _site/tools/
           cp -R vendor _site/

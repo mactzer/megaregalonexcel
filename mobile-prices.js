@@ -19,7 +19,7 @@
     result.querySelector('.price').textContent = override ? money(override.cents / 100) : Number.isFinite(product.pventa) ? money(product.pventa) : 'Precio no disponible';
     const source = result.querySelector('.price-source');
     source.textContent = override ? 'Precio actualizado por un administrador · ' + new Intl.DateTimeFormat('es-PA', { timeZone: 'America/Panama', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(override.updatedAt)) : source.dataset.pdfLabel;
-    if (override) panel.append(node('p', 'Precio original del PDF: ' + (Number.isFinite(product.pventa) ? money(product.pventa) : 'No disponible'), 'note original-price'));
+    if (override) panel.append(node('p', (product.priceOrigin==='manual'?'Precio confirmado al importar: ':'Precio original del PDF: ') + (Number.isFinite(product.pventa) ? money(product.pventa) : 'No disponible'), 'note original-price'));
     if (!state.available) panel.append(node('p', 'Precios compartidos pendientes de activación. Se muestra únicamente el precio del PDF.', 'note missing'));
     result.insertBefore(panel, result.querySelector('.product-salidas'));
     if (api.status().user.role !== 'admin') return;
@@ -52,7 +52,7 @@
       const explanation = node('p', 'El propietario debe ejecutar el SQL de precios en Supabase. ', 'note');
       const link = node('a', 'Abrir SQL de activación'); link.href = 'supabase/precios.sql'; link.target = '_blank'; link.rel = 'noopener'; explanation.append(link); panel.append(explanation);
       const guide = node('a', 'Activar precios: copiar SQL y abrir Supabase'); guide.href = 'supabase-precios.html'; guide.target = '_blank'; guide.rel = 'noopener'; panel.append(guide);
-      const check = node('button', 'Comprobar activación', 'quiet'); check.id = 'check-prices'; panel.append(check); check.addEventListener('click', () => update(signal => api.mobile.price(product.codigo, signal), false)); return;
+      const check = node('button', 'Comprobar activación', 'quiet'); check.id = 'check-prices'; panel.append(check); check.addEventListener('click', () => update(signal => api.mobile.price(product.lookupCode||product.codigo, signal), false)); return;
     }
     const edit = node('button', 'Editar precio', 'quiet'); edit.id = 'edit-price';
     const form = document.createElement('form'); form.id = 'price-form'; form.className = 'price-editor'; form.hidden = true;
@@ -65,7 +65,7 @@
       event.preventDefault(); const match = /^(\d{1,7})(?:[.,](\d{1,2}))?$/.exec(input.value.trim());
       if (!match) { notice.textContent = 'Escribe un precio válido con hasta dos decimales, por ejemplo 7.99.'; return; }
       const cents = Number(match[1]) * 100 + Number((match[2] || '').padEnd(2, '0'));
-      update(signal => api.mobile.setPrice(product.codigo, cents, override ? override.version : 0, signal), true);
+      update(signal => api.mobile.setPrice(product.lookupCode||product.codigo, cents, override ? override.version : 0, signal), true);
     });
   }
 })();

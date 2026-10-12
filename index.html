@@ -7,6 +7,7 @@
   <link rel="icon" type="image/png" href="megacontrol-logo.png?v=megacontrol-logo-1">
   <link rel="stylesheet" href="audit.css?v=megacontrol-1">
   <link rel="stylesheet" href="audit-cloud.css?v=megacontrol-1">
+  <link rel="stylesheet" href="invoice-import.css?v=1">
   <style>
     :root {
       --ink: #191b22;
@@ -391,7 +392,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
-    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=8" title="Escáner de productos" allow="camera"></iframe></section>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=10" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -406,7 +407,7 @@
         <div>
           <div class="drop-icon">PDF</div>
           <h2>Arrastra aquí tu PDF</h2>
-          <p>La aplicación buscará la tabla, identificará sus columnas y te permitirá escoger qué datos pasar al Excel.</p>
+          <p>Carga una salida o una factura en PDF. Los documentos escaneados se leen como imágenes y se revisan antes de guardar.</p>
           <button class="button button-primary" id="choose-button" type="button">Seleccionar PDF</button>
           <input id="file-input" type="file" accept="application/pdf,.pdf">
         </div>
@@ -421,6 +422,7 @@
     </section>
 
     <section class="results" id="results">
+      <section id="invoice-review" hidden aria-label="Revisión del documento importado"></section>
       <div class="results-grid">
         <aside class="card panel">
           <h2>Columnas del Excel</h2>
@@ -484,10 +486,13 @@
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=shared-history-1"></script>
   <script src="audit-backup.js?v=1"></script>
+  <script src="invoice-formats.js?v=1"></script>
+  <script src="invoice-ocr.js?v=1"></script>
+  <script src="invoice-review.js?v=1"></script>
   <script src="audit-realtime.js?v=1"></script>
   <script src="traza.js?v=shared-navigation-1"></script>
-  <script src="mobile-catalog.js?v=2"></script>
-  <script src="audit-cloud.js?v=local-backups-1"></script>
+  <script src="mobile-catalog.js?v=pdf-imports-1-2"></script>
+  <script src="audit-cloud.js?v=pdf-imports-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -526,7 +531,8 @@
       completedAudit: null,
       excelNameEdited: false,
       archiveSource: null,
-      movementId: null
+      movementId: null,
+      importReview: null, imported: false
     };
 
     function clearPendingAudit() {
@@ -564,7 +570,7 @@
 
     function assertArchiveSource(source) {
       assertArchiveAccount(source);
-      if (state.archiveSource !== source || state.salidaNumero !== source.salidaNumero || $("#salida-number").value !== source.salidaNumero) {
+      if (state.archiveSource !== source || $("#salida-number").value !== state.salidaNumero || (!state.imported&&state.salidaNumero !== source.salidaNumero)) {
         throw staleConverterError("La salida cambió. Abre de nuevo el documento desde el Archivo.");
       }
     }
@@ -853,6 +859,7 @@
     function cancelConverterParse() {
       converterParseGeneration++;
       if (!activeParse) return;
+      if(activeParse.cancelOcr)activeParse.cancelOcr();
       if (activeParse.buffer && activeParse.buffer.byteLength) activeParse.buffer.fill(0);
       if (activeParse.task) activeParse.task.destroy().catch(() => {});
       activeParse = null;
@@ -893,6 +900,7 @@
         assertParseCurrent(context);
       const rows = [];
       const rawLines = [];
+      const textPages = [];
       let pagesWithTables = 0;
 
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
@@ -901,6 +909,7 @@
         const viewport = page.getViewport({ scale: 1 });
         const content = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
         assertParseCurrent(context);
+        textPages.push({page:pageNumber,width:viewport.width,height:viewport.height,words:content.items.filter(i=>i.str&&i.str.trim()).flatMap(i=>{const words=[...i.str.matchAll(/\S+/g)];return words.map(w=>({text:w[0],x0:i.transform[4]+(i.width||1)*w.index/i.str.length,x1:i.transform[4]+(i.width||1)*(w.index+w[0].length)/i.str.length,y0:viewport.height-i.transform[5]-(i.height||10),y1:viewport.height-i.transform[5],confidence:100}));})});
         const items = content.items.flatMap(item => {
           const transform = item.transform || [1, 0, 0, 1, 0, 0];
           const raw = { str: item.str, x: transform[4], y: viewport.height - transform[5], width: item.width || 0 };
@@ -920,7 +929,11 @@
       }
 
       if (!pagesWithTables || !rows.length) {
-        throw new Error("No se encontró una tabla de texto. Si el PDF es una imagen escaneada, necesitará OCR.");
+        if(context&&context.independent)throw new Error('Este PDF necesita una lectura revisada desde Nueva salida. No se ejecuta OCR durante las consultas.');
+        let imported;
+        try{imported=await window.InvoiceOCR.read(pdf,textPages,{...context,assertCurrent:()=>assertParseCurrent(context),progress:p=>{assertParseCurrent(context);$('#file-detail').textContent='Leyendo página '+p.page+' de '+p.total+' · '+Math.round(p.progress*100)+'%';},get cancelOcr(){return context.cancelOcr;},set cancelOcr(value){context.cancelOcr=value;}});}
+        catch(error){assertParseCurrent(context);imported=window.InvoiceFormats.extract(textPages);imported.rows=[];imported.ocrWarning='La lectura automática no se completó. Puedes ingresar y revisar los productos junto al PDF.';}
+        assertParseCurrent(context);imported.pdfSha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',data)),b=>b.toString(16).padStart(2,'0')).join('');imported.imported=true;return imported;
       }
       return { rows, rawLines, documentInfo: extractDocumentInfo(rawLines) };
       } finally {
@@ -1083,7 +1096,7 @@
         return `<tr>${cells}</tr>`;
       }).join("");
       tableWrap.innerHTML = `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
-      $("#export-button").disabled = state.exporting;
+      $("#export-button").disabled = state.exporting || (state.importReview && !state.importReview.valid());
       $("#export-hint").textContent = `${defs.length} columna${defs.length === 1 ? "" : "s"} seleccionada${defs.length === 1 ? "" : "s"}. Se exportarán ${state.rows.length} filas.`;
       updateStep(3);
     }
@@ -1097,7 +1110,8 @@
     }
 
     function defaultExcelName() {
-      return `Salida${state.salidaNumero ? " " + state.salidaNumero : ""}`;
+      const label=state.imported&&state.documentInfo.kind!=='salida'?(state.documentInfo.kind==='pedido'?'Pedido':state.documentInfo.kind==='factura'?'Factura':'Documento'):'Salida';
+      return `${label}${state.salidaNumero ? " " + state.salidaNumero : ""}`;
     }
 
     const converterBlobUrls = new Map();
@@ -1131,6 +1145,9 @@
 
     async function exportExcel() {
       if (state.exporting) return;
+      if(state.importReview&&!state.importReview.valid()){showMessage('Revisa los datos y confirma la lectura antes de guardar.','error');return;}
+      const importedSource=state.importReview?state.importReview.source():null;
+      if(importedSource&&(!window.AuditClient||typeof window.AuditClient.updateImport!=='function')){showMessage('La importación de facturas requiere la conexión de MegaControl con Supabase.','error');return;}
       const defs = selectedDefs();
       if (!defs.length || !state.rows.length) return;
       if (!/^\d+$/.test(state.salidaNumero)) {
@@ -1159,6 +1176,7 @@
       let fileBytes;
       let auditRecord = null;
       state.exporting = true;
+      if(state.importReview)state.importReview.setBusy(true);
       $("#export-button").disabled = true;
       $("#export-button").textContent = "Preparando Excel…";
       try {
@@ -1300,6 +1318,10 @@
         if (archiveSource) {
           clearPendingAudit();
           fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
+          if(importedSource&&state.importReview.adminConfirmed()&&(!archiveSource.importReviewed||JSON.stringify(importedSource)!==JSON.stringify(archiveSource.importedDocument))){
+            const corrected=await window.AuditClient.updateImport(archiveSource.id,importedSource,archiveSource.importMetadata);
+            assertExportCurrent();archiveSource.importMetadata=corrected.encryptedMetadata;archiveSource.salidaNumero=corrected.salida_numero;archiveSource.importedDocument=importedSource;archiveSource.importReviewed=true;
+          }
           if (typeof window.AuditClient.confirmArchivedRecord !== "function") throw new Error("No se pudo verificar la salida original. Actualiza la página y vuelve a abrirla desde el Archivo.");
           $("#export-button").textContent = "Verificando salida original…";
           const confirmed = await window.AuditClient.confirmArchivedRecord(archiveSource.id);
@@ -1338,6 +1360,7 @@
               totalUnits: totals.totalUnidades,
               idempotencyKey: window.AuditClient.newIdempotencyKey()
             };
+            if(importedSource){state.pendingAudit.importedDocument=importedSource;state.pendingAudit.importConfirmed=state.importReview.adminConfirmed();}
             if(state.movementId)state.pendingAudit.movementId=state.movementId;
           }
           $("#export-button").textContent = "Registrando salida…";
@@ -1357,7 +1380,7 @@
         updateStep(4);
         state.pendingAudit = null;
         const destination = "Se inició una sola descarga del Excel. Revisa el panel de descargas del navegador.";
-        const confirmation = (archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination;
+        const confirmation = (state.imported ? (archiveSource?'Lectura revisada y Excel preparado. ':auditRecord&&auditRecord.import_reviewed_by?'Documento aprobado y compartido. ':'Documento archivado. Sus precios quedan pendientes de aprobación administrativa. ') : archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination;
         showMessage(confirmation, "info");
         if (window.TrazaSavedFile) window.TrazaSavedFile.show({
           name: fileName,
@@ -1372,8 +1395,9 @@
         if (fileBytes && typeof fileBytes.fill === "function" &&
             (archiveSource || state.completedAudit || !state.pendingAudit || state.pendingAudit.excelBytes !== fileBytes)) fileBytes.fill(0);
         state.exporting = false;
+        if(state.importReview)state.importReview.setBusy(false);
         $("#export-button").textContent = "Descargar Excel";
-        $("#export-button").disabled = !selectedDefs().length || !state.rows.length;
+        $("#export-button").disabled = !selectedDefs().length || !state.rows.length || (state.importReview&&!state.importReview.valid());
       }
     }
 
@@ -1389,6 +1413,8 @@
       if (archiveSource) assertArchiveAccount(archiveSource);
       hideMessage();
       cancelConverterParse();
+      if(state.importReview)state.importReview.dispose();state.importReview=null;
+      if(state.imported)state.names=Object.fromEntries(COLUMN_DEFS.map(c=>[c.key,c.label]));state.imported=false;
       if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       clearArchiveSource();
       clearConverterDownloads();
@@ -1423,12 +1449,18 @@
       results.classList.remove("show");
       updateStep(1);
       try {
-        const parsed = await parsePdf(file, parseContext);
+        let parsed;
+        if(archiveSource&&archiveSource.importedDocument){
+          const saved=window.InvoiceFormats.validateSaved(archiveSource.importedDocument);
+          const actual=new Uint8Array(await file.arrayBuffer());try{const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',actual)),b=>b.toString(16).padStart(2,'0')).join('');if(digest!==saved.pdfSha256)throw new Error('El PDF no coincide con su lectura guardada.');}finally{actual.fill(0);}
+          parsed={rows:saved.rows,rawLines:saved.rows.map((r,i)=>({pagina:r.page||1,linea:i+1,texto:r.fila_original||r.descripcion})),documentInfo:{numero:saved.numero,fecha:saved.fecha,kind:saved.kind,format:saved.format},pdfSha256:saved.pdfSha256,imported:true};
+        }else parsed = await parsePdf(file, parseContext);
         assertParseCurrent(parseContext);
         state.rows = parsed.rows;
         state.rawLines = parsed.rawLines;
         state.documentInfo = parsed.documentInfo;
         state.originalFile = file;
+        state.imported=Boolean(parsed.imported);
         state.movementId=null;$('#new-movement').hidden=Boolean(archiveSource);
         state.salidaNumero = archiveSource ? archiveSource.salidaNumero : state.documentInfo.numero || "";
         $("#salida-number").value = state.salidaNumero;
@@ -1437,6 +1469,16 @@
         $("#tax-amount").value = "";
         state.available = new Set(COLUMN_DEFS.filter(def => state.rows.some(row => hasValue(row, def.key))).map(def => def.key));
         state.selected = new Set(COLUMN_DEFS.filter(def => def.default && state.available.has(def.key)).map(def => def.key));
+        if(parsed.imported){
+          $('#salida-number').readOnly=true;
+          state.selected=new Set(['codigo','ref','descripcion','salidas_unidades','costo','pventa','salidas_total']);
+          Object.assign(state.names,{salidas_unidades:'Cantidad',costo:'Precio de la factura',salidas_total:'Importe de la factura',pventa:'Precio de venta confirmado'});
+          $('#salida-number').previousElementSibling.textContent='Número del documento';
+          const account=window.AuditClient&&window.AuditClient.status();
+          state.importReview=window.InvoiceReview.create({host:$('#invoice-review'),parsed,file,readOnly:Boolean(archiveSource&&account&&account.user&&account.user.role!=='admin'),onChange:()=>{if(parseContext.generation!==converterParseGeneration)return;clearPendingAudit();clearCompletedAudit();state.salidaNumero=parsed.documentInfo.numero;$('#salida-number').value=state.salidaNumero;if(!state.excelNameEdited)$('#excel-file-name').value=safeFileName(defaultExcelName());renderPreview();}});
+          if(archiveSource){$('#converter-title').textContent='Revisar documento';$('#archive-source-message').textContent='Revisando la lectura del documento archivado. El PDF y el Excel originales se conservan. Solo un administrador puede aprobar correcciones.';}
+          if(parsed.ocrWarning)showMessage(parsed.ocrWarning,'info');
+        }
         if (!state.selected.size && state.available.size) state.selected.add([...state.available][0]);
         const totals = calculateTotals();
         const totalsLabel = [
@@ -1470,6 +1512,8 @@
     function resetApp(force) {
       if (state.exporting && force !== true) return;
       cancelConverterParse();
+      if(state.importReview)state.importReview.dispose();state.importReview=null;state.imported=false;
+      $('#salida-number').previousElementSibling.textContent='Salida';
       setLoading(false);
       if (window.TrazaSavedFile) window.TrazaSavedFile.clear();
       clearArchiveSource();
@@ -1578,6 +1622,7 @@
         const source = {
           id: String(record.id),
           salidaNumero: String(record.salida_numero),
+          importedDocument:record.imported_document||null,importMetadata:record.encryptedMetadata,importReviewed:Boolean(record.import_reviewed_by),
           authentication: authentication && { mode: authentication.mode, authenticated: authentication.authenticated, generation: authentication.generation, user: authentication.user && { id: authentication.user.id } }
         };
         assertArchiveAccount(source);
@@ -1639,7 +1684,7 @@
         clearCompletedAudit();
         cancelConverterParse();
         setLoading(false);
-        if (state.archiveSource) resetApp(true);
+        if (state.archiveSource||state.imported) resetApp(true);
       });
       window.addEventListener("traza-ui:navigated", () => {
         if (activeParse && activeParse.archiveSource && window.TrazaUI && window.TrazaUI.currentSection !== "converter") resetApp(true);
