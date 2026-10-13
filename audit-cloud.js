@@ -1663,51 +1663,108 @@
   }
 
   const versionValue=value=>value===null||value===undefined||value===''?'No detectado':typeof value==='number'?value.toLocaleString('es-PA',{maximumFractionDigits:8}):String(value);
+  const versionMoneyFields=new Set(['costo','pventa','salidas_total','entradas_total','descuento_unitario','descuento_total','impuesto_importe','importe_total','subtotal','impuesto','total_neto']);
+  function versionDate(value){const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value||''));return match?match[3]+'/'+match[2]+'/'+match[1]:versionValue(value);}
+  function versionFieldValue(field,value){
+    if(field==='fecha')return versionDate(value);
+    return versionMoneyFields.has(field)&&Number.isFinite(value)?'USD '+value.toLocaleString('es-PA',{minimumFractionDigits:2,maximumFractionDigits:8}):versionValue(value);
+  }
+  function versionIcon(kind){
+    const paths={history:'M3 11a9 9 0 1 1 2.6 7M3 4v7h7M12 7v5l3 2',file:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6'};
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS(svg.namespaceURI,'path');
+    for(const [name,value]of Object.entries({viewBox:'0 0 24 24',fill:'none',stroke:'currentColor','stroke-width':'1.7','stroke-linecap':'round','stroke-linejoin':'round','aria-hidden':'true'}))svg.setAttribute(name,value);
+    svg.classList.add('salida-history-icon');path.setAttribute('d',paths[kind]||paths.history);svg.append(path);return svg;
+  }
+  function versionFact(label,value){const fact=node('div',undefined,'salida-version-fact');fact.append(node('span',label),node('strong',value));return fact;}
+  function versionComparisonTable(fields,caption){
+    const table=node('table',undefined,'salida-comparison-table'),head=node('thead'),heading=node('tr'),body=node('tbody');
+    table.append(node('caption',caption,'salida-visually-hidden'));
+    for(const label of ['Campo','Antes','Ahora']){const cell=node('th',label);cell.scope='col';heading.append(cell);}head.append(heading);
+    for(const field of fields){
+      const row=node('tr'),label=node('th',field.label),before=node('td'),after=node('td');row.dataset.field=field.key;label.scope='row';
+      before.append(node('span',versionFieldValue(field.key,field.before),'salida-before-value'));
+      after.append(node('span',versionFieldValue(field.key,field.after),'salida-after-value'));
+      if(field.delta!==null&&field.delta!==undefined&&field.delta!==0){const delta=node('span',(field.delta>0?'+':'')+versionValue(field.delta),'salida-quantity-delta '+(field.delta>0?'is-increase':'is-decrease'));delta.setAttribute('aria-label',(field.delta>0?'Aumentó ':'Disminuyó ')+versionValue(Math.abs(field.delta))+' unidades');after.append(delta);}
+      row.append(label,before,after);body.append(row);
+    }
+    table.append(head,body);return table;
+  }
+  function versionProductIdentity(product){
+    const identity=node('div',undefined,'salida-product-identity');
+    if(product.ref)identity.append(node('span','Ref. '+product.ref));
+    if(product.codigo)identity.append(node('span','Código '+product.codigo));
+    if(!identity.childNodes.length)identity.append(node('span','Identificadores no detectados'));
+    return identity;
+  }
   function appendVersionChanges(target,changes){
-    const list=node('ul',undefined,'salida-change-list');
-    target.append(node('p',changes.added.length+' productos agregados · '+changes.removed.length+' eliminados · '+changes.changed.length+' modificados · '+changes.unchanged+' sin cambios.'));
-    for(const added of changes.added)list.append(node('li','Agregado: '+(added.descripcion||added.ref||added.codigo)+' · Cantidad '+versionValue(added.salidas_unidades)));
-    for(const removed of changes.removed)list.append(node('li','Eliminado: '+(removed.descripcion||removed.ref||removed.codigo)+' · Cantidad '+versionValue(removed.salidas_unidades)));
-    for(const change of changes.changed)for(const field of change.fields)list.append(node('li',(change.after.descripcion||change.after.ref||change.after.codigo)+' · '+field.label+': '+versionValue(field.before)+' → '+versionValue(field.after)+(field.delta!==null?' ('+(field.delta>0?'+':'')+versionValue(field.delta)+')':'')));
-    for(const field of changes.document)list.append(node('li',field.label+': '+versionValue(field.before)+' → '+versionValue(field.after)));
-    target.append(list);
+    const section=node('div',undefined,'salida-changes'),overview=node('div',undefined,'salida-change-overview'),filters=node('div',undefined,'salida-change-filters'),list=node('div',undefined,'salida-change-list'),status=node('p',undefined,'salida-filter-status');
+    const categories=[['changed','Modificados',changes.changed.length],['added','Agregados',changes.added.length],['removed','Eliminados',changes.removed.length],['unchanged','Sin cambios',changes.unchanged]];
+    overview.setAttribute('role','group');overview.setAttribute('aria-label','Resumen de cambios');
+    for(const [kind,label,count]of categories){const metric=node('div',undefined,'salida-change-metric is-'+kind);metric.dataset.kind=kind;metric.append(node('strong',String(count)),node('span',label));overview.append(metric);}
+    const cards=[];
+    function addProduct(product,kind,fields){
+      const card=node('article',undefined,'salida-change-card is-'+kind),header=node('div',undefined,'salida-change-card-header'),label=kind==='changed'?'Modificado':kind==='added'?'Agregado':'Eliminado';
+      card.dataset.changeKind=kind;card.dataset.productCode=product.codigo;header.append(node('span',label,'salida-change-type'),node('h5',product.descripcion||product.ref||product.codigo||'Producto sin descripción'));
+      card.append(header,versionProductIdentity(product));
+      if(fields)card.append(versionComparisonTable(fields,'Cambios de '+(product.descripcion||product.codigo||'producto')));
+      else{const facts=node('div',undefined,'salida-product-facts');for(const [field,name]of [['salidas_unidades','Cantidad'],['costo','Costo'],['pventa','P/Venta']])facts.append(versionFact(name,versionFieldValue(field,product[field])));card.append(facts);}
+      cards.push(card);list.append(card);
+    }
+    for(const change of changes.changed)addProduct(change.after,'changed',change.fields);
+    for(const product of changes.added)addProduct(product,'added');
+    for(const product of changes.removed)addProduct(product,'removed');
+    if(changes.document.length){const card=node('article',undefined,'salida-change-card is-document');card.dataset.changeKind='document';card.append(node('h5','Datos de factura'),versionComparisonTable(changes.document,'Cambios en los datos de factura'));cards.push(card);list.append(card);}
+    filters.setAttribute('role','group');filters.setAttribute('aria-label','Filtrar cambios');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+    const choices=[['all','Todos',cards.length],...categories.filter(item=>item[0]!=='unchanged')];if(changes.document.length)choices.push(['document','Factura',1]);
+    const controls=[];
+    function filter(kind){for(const control of controls)control.setAttribute('aria-pressed',String(control.dataset.filter===kind));let visible=0;for(const card of cards){card.hidden=kind!=='all'&&card.dataset.changeKind!==kind;if(!card.hidden)visible++;}status.textContent=cards.length?visible+' '+(visible===1?'registro de cambio':'registros de cambios'):'No hay modificaciones entre estas versiones.';}
+    for(const [kind,label,count]of choices){const control=button(label+(kind==='all'?'':' ('+count+')'),true);control.className='salida-change-filter';control.dataset.filter=kind;control.disabled=count===0;control.addEventListener('click',()=>filter(kind));controls.push(control);filters.append(control);}
+    section.append(overview);if(cards.length){section.append(filters);list.tabIndex=0;list.setAttribute('role','region');list.setAttribute('aria-label','Cambios agrupados por producto');}section.append(status,list);filter('all');target.append(section);
+  }
+  function appendVersionProducts(target,data){
+    const details=node('details',undefined,'salida-version-products'),summary=node('summary','Ver productos de esta versión ('+data.rows.length+')'),wrap=node('div',undefined,'salida-products-scroll'),table=node('table',undefined,'salida-products-table'),head=node('thead'),heading=node('tr'),body=node('tbody');
+    const columns=[['codigo','Código de barras'],['descripcion','Descripción'],['ref','Referencia'],['salidas_unidades','Cantidad'],['costo','Costo'],['pventa','P/Venta'],['iv','I.V.'],['salidas_total','Importe'],['empaque','Empaque'],['estilo','Estilo']];
+    wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Productos de la versión; desplázate para ver todas las columnas');table.append(node('caption','Productos de esta versión','salida-visually-hidden'));
+    for(const [,label]of columns){const cell=node('th',label);cell.scope='col';heading.append(cell);}head.append(heading);
+    for(const product of data.rows){const row=node('tr');for(const [field,label]of columns){const cell=node('td',versionFieldValue(field,product[field]));cell.dataset.label=label;row.append(cell);}body.append(row);}table.append(head,body);wrap.append(table);details.append(summary,wrap);target.append(details);
   }
   async function renderSalidaHistory(view,detail,current,key,guard,result,before){
     const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&salida_identity_tag=eq.'+current.salida_identity_tag+'&select=*&order=salida_version.asc,created_at.asc,id.asc',{signal:detail.controller.signal});guard();
     const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});guard();const names=new Map(authors.map(r=>[r.user_id,r.username]));
     const records=await Promise.all(rows.map(r=>decryptedRecord(r,key)));guard();
-    const section=node('section',undefined,'salida-version-history');section.append(node('h3','Historial de versiones y modificaciones'));
+    const section=node('section',undefined,'salida-version-history'),sectionHeader=node('div',undefined,'salida-history-heading'),title=node('h3','Historial de versiones y modificaciones');title.prepend(versionIcon('history'));sectionHeader.append(title);section.append(sectionHeader);
     const grouped=new Map();for(const record of records){if(!grouped.has(record.salida_version))grouped.set(record.salida_version,[]);grouped.get(record.salida_version).push(record);}
     const representatives=new Map();for(const [version,items]of grouped)representatives.set(version,items.find(r=>r.id===current.id)||items[0]);
+    sectionHeader.append(node('span',grouped.size+' '+(grouped.size===1?'versión':'versiones'),'salida-history-count'));
     for(const [version,items]of [...grouped].sort((a,b)=>a[0]-b[0])){
-      const record=representatives.get(version),box=node('details',undefined,'salida-version'),summary=node('summary','Versión '+version+(record.id===current.id?' · Actual':version===1?' · Original':'')),content=node('div'),when=formatWhen(record.created_at);
-      box.append(summary,node('p','@'+(names.get(record.created_by)||'Autor no disponible')+' · '+when.date+' '+when.time,'audit-muted'),content);
-      for(const item of items){const files=node('div',undefined,'audit-documents');files.append(node('span',items.length>1?'Registro '+formatWhen(item.created_at).date+' '+formatWhen(item.created_at).time:'Documentos originales','audit-muted'),documentButton(item,'pdf','Guardar PDF de versión '+version,result,view,detail),documentButton(item,'excel','Guardar Excel de versión '+version,result,view,detail));box.append(files);}
+      const record=representatives.get(version),isCurrent=record.id===current.id,box=node('details',undefined,'salida-version'+(isCurrent?' is-current':'')),summary=node('summary'),heading=node('span',undefined,'salida-version-heading'),name=node('span',undefined,'salida-version-title'),meta=node('span',undefined,'salida-version-meta'),content=node('div',undefined,'salida-version-content'),when=formatWhen(record.created_at);
+      name.append(node('strong','Versión '+version),node('span',isCurrent?'Actual':version===1?'Original':'Anterior','salida-version-state'));
+      meta.append(node('span','@'+(names.get(record.created_by)||'Autor no disponible')),node('span',when.date+' · '+when.time));heading.append(name,meta);summary.append(node('span',String(version),'salida-version-number'),heading,node('span',undefined,'salida-version-chevron'));box.append(summary,content);
+      const documents=node('div',undefined,'salida-version-files');documents.append(node('h4','Documentos originales'));
+      for(const item of items){const files=node('div',undefined,'salida-version-file-row');if(items.length>1)files.append(node('span','@'+(names.get(item.created_by)||'Autor no disponible')+' · '+formatWhen(item.created_at).date+' '+formatWhen(item.created_at).time,'salida-version-copy'));
+        const pdf=documentButton(item,'pdf','Guardar PDF de versión '+version,result,view,detail),excel=documentButton(item,'excel','Guardar Excel de versión '+version,result,view,detail);pdf.setAttribute('aria-label','Guardar PDF de versión '+version);excel.setAttribute('aria-label','Guardar Excel de versión '+version);pdf.textContent='Guardar PDF';excel.textContent='Guardar Excel';pdf.prepend(versionIcon('file'));excel.prepend(versionIcon('file'));files.append(pdf,excel);documents.append(files);}box.append(documents);
       let loaded=false,loading=false;
       box.addEventListener('toggle',async()=>{
         if(!box.open||loaded||loading)return;loading=true;content.replaceChildren(node('p','Leyendo los productos y comparando la versión…','audit-muted'));
         try{
           const snapshot=await readSalidaSnapshot(record,key,guard,detail.controller.signal);guard();const data=snapshot.manifest;
           const quantities=data.rows.map(r=>r.salidas_unidades),units=quantities.every(Number.isFinite)?quantities.reduce((a,b)=>a+b,0):null;
-          content.replaceChildren(node('p',data.rows.length+' productos · '+versionValue(units)+' unidades · Fecha de factura: '+versionValue(data.info.fecha),'audit-muted'));
+          const facts=node('div',undefined,'salida-version-facts');facts.append(versionFact('Productos',String(data.rows.length)),versionFact('Unidades',versionValue(units)),versionFact('Fecha de factura',versionDate(data.info.fecha)));content.replaceChildren(facts);
           const previous=representatives.get(version-1);
           if(previous){
             const prior=await readSalidaSnapshot(previous,key,guard,detail.controller.signal);guard();
-            content.append(node('p','Cambios respecto a la versión '+(version-1),'audit-muted'));appendVersionChanges(content,window.SalidaVersions.compare(prior.manifest,data));
-          }else content.append(node('p','Salida original. Las modificaciones siguientes se muestran en sus versiones.','audit-muted'));
+            content.append(node('h4','Cambios respecto a la versión '+(version-1),'salida-comparison-heading'));appendVersionChanges(content,window.SalidaVersions.compare(prior.manifest,data));
+          }else content.append(node('p','Primera versión registrada.','salida-version-original-note'));
           if(record.id!==current.id){
             const compare=button('Comparar con versión actual',true),comparison=node('div',undefined,'salida-current-comparison');
             compare.addEventListener('click',async()=>{
               compare.disabled=true;comparison.replaceChildren(node('p','Comparando con la versión actual…','audit-muted'));
-              try{const latest=await readSalidaSnapshot(current,key,guard,detail.controller.signal);guard();comparison.replaceChildren(node('p','Versión '+version+' → Versión '+current.salida_version+' (actual)','audit-muted'));appendVersionChanges(comparison,window.SalidaVersions.compare(data,latest.manifest));}
+              try{const latest=await readSalidaSnapshot(current,key,guard,detail.controller.signal);guard();comparison.replaceChildren(node('h4','Versión '+version+' → Versión '+current.salida_version+' (actual)','salida-comparison-heading'));appendVersionChanges(comparison,window.SalidaVersions.compare(data,latest.manifest));}
               catch(error){try{guard();comparison.replaceChildren(node('p','No se pudo comparar. '+errorText(error),'audit-muted'));}catch(_){}}
               finally{compare.disabled=false;}
             });content.append(compare,comparison);
           }
-          const wrap=node('div',undefined,'audit-table-wrap'),table=node('table',undefined,'audit-table'),head=node('thead'),tr=node('tr'),body=node('tbody');
-          const columns=[['codigo','Código de barras'],['descripcion','Descripción'],['ref','Referencia'],['salidas_unidades','Cantidad'],['costo','Costo (USD)'],['pventa','P/Venta (USD)'],['iv','I.V.'],['salidas_total','Importe']];
-          for(const [,label]of columns){const th=node('th',label);th.scope='col';tr.append(th);}head.append(tr);
-          for(const product of data.rows){const row=node('tr');for(const [field,label]of columns){const cell=node('td',versionValue(product[field]));cell.dataset.label=label;row.append(cell);}body.append(row);}table.append(head,body);wrap.append(table);content.append(wrap);loaded=true;
+          appendVersionProducts(content,data);loaded=true;
         }catch(error){try{guard();content.replaceChildren(node('p','No se pudo comprobar esta versión. '+errorText(error),'audit-muted'));}catch(_){} }
         finally{loading=false;}
       });

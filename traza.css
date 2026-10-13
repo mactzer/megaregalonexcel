@@ -289,9 +289,103 @@ tbody tr:hover td { background: #f3f8f5; }
   .traza-archive-panel > .traza-quick-filters { padding: 4px 16px 16px; }
 }
 .salida-version-badge{display:block;width:fit-content;margin-top:5px;padding:3px 7px;border-radius:6px;background:#e7f4ef;color:#17674f;font-size:11px;font-weight:600}
-.salida-version-history{margin-top:16px;border-top:1px solid #dbe6e2;padding-top:14px}
-.salida-version{padding:12px 0;border-bottom:1px solid #e2ebe7}
-.salida-version>summary{cursor:pointer;font-weight:650}
-.salida-version .audit-documents{margin-top:10px;flex-wrap:wrap}
-.salida-change-list{padding-left:20px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
-.salida-version .audit-table-wrap{max-height:400px;overflow:auto;margin-top:12px}
+.salida-version-history { container: salida-history / inline-size; min-width: 0; margin-top: 20px; border-top: 1px solid var(--line); padding-top: 18px; }
+.salida-history-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.salida-history-heading h3 { display: flex; align-items: center; gap: 9px; flex: 1; margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; letter-spacing: -.02em; }
+.salida-history-icon { width: 19px; height: 19px; flex-shrink: 0; color: var(--green); }
+.salida-history-count { padding: 4px 8px; border-radius: 6px; background: #f1f4f2; color: #55645d; font-size: 10px; white-space: nowrap; }
+.salida-version { min-width: 0; margin: 10px 0; border: 1px solid var(--line); border-radius: 11px; background: #fff; overflow: hidden; }
+.salida-version.is-current { border-color: #b5d7c7; }
+.salida-version > summary { display: flex; align-items: center; gap: 11px; padding: 14px; cursor: pointer; list-style: none; }
+.salida-version > summary::-webkit-details-marker { display: none; }
+.salida-version > summary:hover { background: #f7faf8; }
+.salida-version > summary:focus-visible { outline-offset: -3px; }
+.salida-version[open] > summary { border-bottom: 1px solid var(--line); }
+.salida-version-number { display: grid; place-items: center; flex: 0 0 34px; height: 36px; border-radius: 9px; background: #f0f3f2; color: #637369; font-size: 17px; font-weight: 700; }
+.is-current > summary .salida-version-number { background: #e4f2eb; color: #14775b; }
+.salida-version-heading { display: block; flex: 1; min-width: 0; }
+.salida-version-title { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 13px; }
+.salida-version-state { border-radius: 5px; padding: 2px 6px; background: #f2f4f3; color: #627168; font-size: 10px; font-weight: 600; }
+.is-current > summary .salida-version-state { color: #116448; background: #e4f2eb; }
+.salida-version-meta { display: flex; flex-wrap: wrap; gap: 3px 9px; margin-top: 5px; color: #65736c; font-size: 10px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.salida-version-chevron { width: 7px; height: 7px; flex: 0 0 7px; border-right: 1.5px solid #738178; border-bottom: 1.5px solid #738178; transform: rotate(-45deg); margin-right: 3px; }
+.salida-version[open] > summary .salida-version-chevron { transform: rotate(45deg); }
+.salida-version-content { min-width: 0; padding: 14px; }
+.salida-version-content:empty { padding: 0; }
+.salida-version-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; padding: 11px; background: #f6f8f7; border-radius: 8px; }
+.salida-version-fact { min-width: 0; }
+.salida-version-fact > span { display: block; font-size: 10px; color: #66746d; line-height: 1.5; }
+.salida-version-fact > strong { display: block; margin-top: 3px; font-size: 12px; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.salida-comparison-heading { margin: 17px 0 10px; font-size: 12px; font-weight: 650; }
+.salida-change-overview { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 7px; }
+.salida-change-metric { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 10px; border: 1px solid #e3e8e5; border-radius: 8px; background: #f8faf9; }
+.salida-change-metric > strong { font-size: 21px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.salida-change-metric > span { font-size: 10px; line-height: 1.3; }
+.salida-change-metric.is-changed { color: #305f89; background: #f2f7fc; border-color: #dce7f2; }
+.salida-change-metric.is-added { color: #1d7153; background: #f0f8f3; border-color: #d5e9dd; }
+.salida-change-metric.is-removed { color: #a0504a; background: #fcf5f4; border-color: #efdfdc; }
+.salida-change-metric.is-unchanged { color: #6b756e; }
+.salida-change-filters { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 13px; }
+.salida-change-filter { min-height: 32px; padding: 6px 9px; border: 1px solid #dfe5e1; border-radius: 6px; color: #56675d; background: #fff; font-size: 10px; font-weight: 600; cursor: pointer; }
+.salida-change-filter[aria-pressed="true"] { background: #14775b; color: #fff; border-color: #14775b; }
+.salida-change-filter:hover:not(:disabled):not([aria-pressed="true"]) { background: #eef5f1; }
+.salida-change-filter:disabled { color: #9da69f; cursor: default; }
+.salida-filter-status { margin: 9px 0; color: #6b7870; font-size: 10px; line-height: 1.5; }
+.salida-change-list { display: grid; gap: 10px; max-height: 540px; overflow: auto; overscroll-behavior: contain; padding: 1px; }
+.salida-change-card { min-width: 0; padding: 12px; border: 1px solid #dfe5e1; border-radius: 9px; background: #fff; }
+.salida-change-card-header { display: flex; align-items: flex-start; flex-direction: column; gap: 7px; }
+.salida-change-card h5 { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.5; font-weight: 650; overflow-wrap: anywhere; }
+.salida-change-type { padding: 3px 6px; border-radius: 4px; font-size: 9px; line-height: 1.2; font-weight: 650; }
+.is-changed .salida-change-type { color: #305f89; background: #eaf2fa; }
+.is-added .salida-change-type { color: #1d7153; background: #e8f5ed; }
+.is-removed .salida-change-type { color: #a0504a; background: #faecea; }
+.salida-product-identity { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 6px 0 10px; color: #65746b; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.salida-comparison-table { width: 100%; margin-top: 8px; table-layout: fixed; border-collapse: collapse; font-size: 11px; line-height: 1.5; }
+.salida-comparison-table th, .salida-comparison-table td { padding: 8px 6px; text-align: left; vertical-align: top; overflow-wrap: anywhere; white-space: normal; text-transform: none; letter-spacing: normal; border-bottom: 1px solid #edf0ee; }
+.salida-comparison-table thead th { background: #f5f7f6; color: #64736a; font-size: 10px; font-weight: 600; }
+.salida-comparison-table th:first-child { width: 34%; }
+.salida-comparison-table tbody th { color: #55645b; font-weight: 500; }
+.salida-comparison-table tbody tr:last-child > * { border-bottom: 0; }
+.salida-before-value { color: #657268; font-variant-numeric: tabular-nums; }
+.salida-after-value { color: #213b2d; font-weight: 650; font-variant-numeric: tabular-nums; }
+.salida-quantity-delta { display: inline-block; margin: 3px 0 0 5px; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.salida-quantity-delta.is-increase { color: #1a7450; background: #e7f4eb; }
+.salida-quantity-delta.is-decrease { color: #a0504a; background: #faecea; }
+.salida-product-facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; padding-top: 9px; border-top: 1px solid #edf0ee; }
+.salida-version-original-note { color: #6b7870; font-size: 11px; margin: 13px 0; }
+.salida-current-comparison { margin-top: 12px; }
+.salida-version-products { margin-top: 14px; border: 1px solid var(--line); border-radius: 8px; }
+.salida-version-products > summary { padding: 11px; font-size: 11px; color: #46634f; font-weight: 600; cursor: pointer; }
+.salida-products-scroll { max-height: 380px; overflow: auto; overscroll-behavior: contain; }
+.salida-products-table { width: 100%; min-width: 900px; border-collapse: collapse; font-size: 11px; line-height: 1.5; }
+.salida-products-table th, .salida-products-table td { padding: 9px 10px; text-align: left; border-top: 1px solid #e9eeeb; }
+.salida-products-table th { color: #65746b; background: #f3f6f4; font-size: 10px; font-weight: 600; white-space: nowrap; }
+.salida-products-table td { font-variant-numeric: tabular-nums; }
+.salida-products-table td:nth-child(2) { min-width: 190px; }
+.salida-version-files { padding: 12px 14px; border-top: 1px solid #e8ede9; background: #fafcfb; }
+.salida-version-files h4 { margin: 0 0 8px; color: #627468; font-size: 10px; font-weight: 600; }
+.salida-version-file-row { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.salida-version-file-row + .salida-version-file-row { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.salida-version-copy { flex-basis: 100%; font-size: 10px; color: #69786f; }
+.salida-version-file-row .audit-button { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 6px 9px; font-size: 10px; background: #fff; }
+.salida-version-file-row .salida-history-icon { width: 14px; height: 14px; color: #5c7868; }
+.salida-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@container salida-history (min-width: 550px) {
+  .salida-change-overview { grid-template-columns: repeat(4,minmax(0,1fr)); }
+}
+@media (max-width: 600px) {
+  .salida-history-heading h3 { flex-basis: 100%; font-size: 15px; }
+  .salida-version > summary { padding: 12px; gap: 9px; }
+  .salida-version-content { padding: 11px; }
+  .salida-change-filter { min-height: 40px; }
+  .salida-change-list { max-height: 440px; }
+  .salida-change-card { padding: 10px; }
+  .salida-version-fact > strong { font-size: 11px; }
+  .salida-products-table { display: block; min-width: 0; }
+  .salida-products-table thead { display: none; }
+  .salida-products-table tbody, .salida-products-table tr { display: block; }
+  .salida-products-table tr { padding: 9px 11px; border-top: 1px solid var(--line); }
+  .salida-products-table td { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 8px; border: 0; padding: 5px 0; overflow-wrap: anywhere; }
+  .salida-products-table td::before { content: attr(data-label); color: #748078; font-size: 10px; }
+  .salida-products-table td:nth-child(2) { min-width: 0; }
+}
