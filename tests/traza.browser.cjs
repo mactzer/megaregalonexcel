@@ -33,6 +33,7 @@ function fakePdf(options = {}) {
   if(options.price)product[7]=options.price;
   if(options.code)product[0]=options.code;
   if(options.ref)product[4]=options.ref;
+  if(options.emptyQuantity)product[8]='';
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
   const fractional = ['0000000000025', 'Producto fraccionario ficticio', 'Unidad', 'Estilo C', 'REF-003', '0%', '0.40', '0.50', '2.5', '1.00', '0', '0.00'];
   const bulkQuantity = options.bulkUnits || '1,800.00';
@@ -42,10 +43,11 @@ function fakePdf(options = {}) {
     ...cells.flatMap(([, x], i) => options.splitGroupedUnits && i === 8
       ? [text('1,', x, 395), text('800.00', x + 10, 395, 8)] : [text(bulk[i], x, 395)])
   ] : [];
-  const footer = options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
+  if(options.wideTotals){product[8]='96.00';product[9]='1,487.81';exempt[5]='7%';exempt[8]='192.00';exempt[9]='2,975.61';}
+  const footer = options.wideTotals ? [['SubTotal: 4463.42', 400], ['Impuesto 312.44', 380], ['Total Neto: 4775.86', 360]] : options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
     : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
   const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),...(options.printDate?[text('Fecha: '+options.printDate,800,526)]:[]),
-    ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], x, 455)), ...cells.map(([, x], i) => text(exempt[i], x, 435)),
+    ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, 455)), ...cells.map(([, x], i) => text(exempt[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, 435)),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
   const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
   const mediaBox = options.portrait ? '595 842' : '1020 595';
@@ -889,6 +891,20 @@ async function convert(page) {
 }
 
 async function waitNotBusy(page) { await page.locator('#export-button:not([disabled])').waitFor(); }
+
+test('converter wide amounts: totals beginning before their headings keep every quantity and calculate tax in the exported Excel',async()=>{
+ const h=await harness();try{
+  await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida ficticia con importes grandes.pdf',mimeType:'application/pdf',buffer:fakePdf({wideTotals:true})});await waitNotBusy(h.page);
+  const read=await h.page.evaluate(()=>({rows:state.rows,totals:calculateTotals()}));assert.equal(read.rows.length,2);assert.equal(read.rows[0].salidas_unidades,96);assert.equal(read.rows[1].salidas_unidades,192);assert.equal(read.rows[0].salidas_total,1487.81);assert.equal(read.rows[1].salidas_total,2975.61);assert.equal(read.totals.totalUnidades,288);assert.equal(read.totals.impuesto,312.44);assert.equal(read.totals.lineasSinUnidades,0);assert.equal(read.totals.lineasSinTotal,0);
+  const saved=await downloadAction(h,()=>h.page.locator('#export-button').click());const wb=XLSX.read(saved.bytes,{type:'buffer'}),data=XLSX.utils.sheet_to_json(wb.Sheets.Datos,{header:1}),units=data[0].indexOf('Salidas - Unidades'),total=data[0].indexOf('Salidas - Total');assert.equal(data[1][units],96);assert.equal(data[2][units],192);assert.equal(data[1][total],1487.81);assert.equal(data[2][total],2975.61);assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Resumen,{header:1})[2][1],312.44);
+ }finally{await h.close();}
+});
+test('converter incomplete quantities: prevents recording or downloading a partial Salida',async()=>{
+ const h=await harness();try{
+  await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida ficticia incompleta.pdf',mimeType:'application/pdf',buffer:fakePdf({emptyQuantity:true})});await waitNotBusy(h.page);
+  await h.page.locator('#export-button').click();await h.page.getByText(/Faltan cantidades en 1 filas/).waitFor();assert.equal(h.state.recordCalls,0);assert.equal(h.state.downloads.length,0);
+ }finally{await h.close();}
+});
 async function profile(page) { await page.locator('#app-profile button').first().click(); }
 async function checkNoOverflow(page) { assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Viewport must not scroll horizontally'); }
 

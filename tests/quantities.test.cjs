@@ -43,6 +43,16 @@ test('no convierte separadores inválidos en una cantidad parcial', () => {
   }
 });
 
+test('cantidades e importes alineados a la derecha no se mezclan cuando el total supera mil',()=>{
+ context.fixture={header:[['Codigo',18],['Descripción',68],['Empaque',191],['Ref.',279],['I.V.',322],['Costo',350],['P/Venta',387],['Unidades',432],['Total',492],['Unidades',520],['Total',574]],pairs:[[96,1487.81],[192,2975.61],[48,1440.31],[96,2912.55],[48,2007.06],[72,1438.37]]};
+ const rows=vm.runInContext(`(()=>{
+   const line=(blocks,y)=>groupLines(blocks.flatMap(([str,x,width])=>splitTextItem({str,x,width:width||str.length*3,y})))[0];
+   const geometry=buildGeometry([line(fixture.header,10)],0);
+   return fixture.pairs.map(([qty,total],index)=>parseRow(line([['01 00012345',11,40],['PRODUCTO FICTICIO',65,80],['REF-001',268,25],['G 7.00',309,24],['15.50',361,17.5],['19.99',393,17.5],[qty.toFixed(2),450,14],[total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}),482,32]],30+index*12),geometry));
+ })()`,context);
+ for(let i=0;i<rows.length;i++){assert.equal(rows[i].salidas_unidades,context.fixture.pairs[i][0]);assert.equal(rows[i].salidas_total,context.fixture.pairs[i][1]);assert.equal(rows[i].costo,15.5);assert.equal(rows[i].pventa,19.99);assert.equal(rows[i].codigo,'00012345');}
+});
+
 test('conserva la última fila con miles, su código textual y los totales de unidades', () => {
   // Datos ficticios: mismas columnas del reporte, sin información empresarial.
   context.fixture = {
