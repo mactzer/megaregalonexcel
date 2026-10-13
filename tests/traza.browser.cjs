@@ -33,6 +33,7 @@ function fakePdf(options = {}) {
   if(options.price)product[7]=options.price;
   if(options.code)product[0]=options.code;
   if(options.ref)product[4]=options.ref;
+  if(options.description)product[1]=options.description;
   if(options.emptyQuantity)product[8]='';
   if(options.cost!==undefined)product[6]=options.cost;
   if(options.quantity!==undefined)product[8]=options.quantity;
@@ -50,7 +51,7 @@ function fakePdf(options = {}) {
   const footer = options.wideTotals ? [['SubTotal: 4463.42', 400], ['Impuesto 312.44', 380], ['Total Neto: 4775.86', 360]] : options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
     : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
   const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),...(options.printDate?[text('Fecha: '+options.printDate,800,526)]:[]),
-    ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, 455)), ...cells.map(([, x], i) => text(exempt[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, 435)),
+    ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, options.reverseRows?435:455)), ...cells.map(([, x], i) => text(exempt[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, options.reverseRows?455:435)),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
   const content = options.portrait ? `q\n0.55 0 0 1 0 247 cm\n${textContent}\nQ` : textContent;
   const mediaBox = options.portrait ? '595 842' : '1020 595';
@@ -211,14 +212,14 @@ test('upgrade operations: double save, changed export and another user reuse one
   const created=a.state.records.find(r=>r.document_tag),originalMetadata=created.encrypted_metadata,originalPdf=Buffer.from(a.state.storage.get(`${WORKSPACE}/${OWNER}/${created.id}/pdf.bin`));
   await a.page.locator('#excel-file-name').fill('Otra presentación.xlsx');await downloadAction(a,()=>a.page.locator('#export-button').click());assert.equal(a.state.recordCalls,1);assert.equal(a.state.records.length,2);
   await a.page.reload();await login(a.page);await convert(a.page);await downloadAction(a,()=>a.page.locator('#export-button').click());assert.equal(a.state.recordCalls,1);
-  b.state.records=a.state.records;b.state.storage=a.state.storage;b.state.operations=a.state.operations;b.state.sockets=a.state.sockets;
+  b.state.records=a.state.records;b.state.storage=a.state.storage;b.state.operations=a.state.operations;b.state.salidas=a.state.salidas;b.state.sockets=a.state.sockets;
   await login(b.page,'index.html',{username:'colega'});await convert(b.page);await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,0);assert.equal(b.state.records.length,2);
   assert.equal(created.encrypted_metadata,originalMetadata);assert.deepEqual(a.state.storage.get(`${WORKSPACE}/${OWNER}/${created.id}/pdf.bin`),originalPdf);
-  await b.page.locator('#new-movement').click();await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);assert.equal(b.state.records.length,3);assert.equal(b.state.records.filter(r=>r.operation_kind==='separate').length,1);
+  await b.page.locator('#traza-document-detail').waitFor({state:'visible'});await b.page.evaluate(()=>TrazaUI.navigate('converter'));await b.page.locator('#new-movement').click();await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);assert.equal(b.state.records.length,3);assert.equal(b.state.records.filter(r=>r.operation_kind==='separate').length,1);
   await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);
-  await a.page.evaluate(()=>TrazaUI.navigate('archive'));await a.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===3);
+  await a.page.evaluate(()=>TrazaUI.navigate('archive'));await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await a.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
   for(const socket of a.state.sockets)for(let n=0;n<2;n++)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table:'mega_audit_records',record:{workspace_id:WORKSPACE}}}}));
-  await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await waitUnits(a.page);assert.equal(await a.page.locator('.audit-table tbody tr').count(),3);
+  await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await waitUnits(a.page);assert.equal(await a.page.locator('.audit-table tbody tr').count(),2);
  }finally{await a.close();await b.close();}
 });
 
@@ -232,10 +233,11 @@ test('upgrade history: missing migration is actionable and tampered ciphertext i
  }finally{await h.close();}
 });
 
-test('upgrade duplicates: byte verification plus explicit admin decision links a true legacy duplicate while preserving distinct movements and original files',async()=>{
+test('legacy review before automatic migration: byte verification and explicit admin decision preserve distinct movements and original files',async()=>{
  const h=await harness();try{
+  h.state.missingAutomatic=true;
   await setArchivedPdf(h,2,{number:'00123'},{salida_numero:'00123'});h.state.records=[h.state.records[0],h.state.records[2],h.state.records[3]];const storage=new Map([...h.state.storage].map(([name,data])=>[name,Buffer.from(data)]));
-  await login(h.page);await h.page.locator('#review-duplicates').click();await h.page.locator('.duplicate-group').waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);
+  await login(h.page);await h.page.getByText('Herramientas de revisión',{exact:true}).click();await h.page.locator('#review-duplicates').click();await h.page.locator('.duplicate-group').waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);
   const candidate=h.page.locator('.duplicate-record').last();await candidate.locator('input:not([type=checkbox])').fill('Mismo documento y misma operación confirmada por el administrador.');await candidate.locator('input[type=checkbox]').check();await candidate.getByRole('button',{name:'Vincular como duplicado',exact:true}).click();await candidate.getByText('Duplicado vinculado.',{exact:false}).waitFor();
   const linked=h.state.records.find(row=>row.duplicate_of);assert.ok(linked);assert.equal(h.state.records.length,3);assert.deepEqual(h.state.storage,storage);
   await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
@@ -251,15 +253,54 @@ async function correctedSalidaFixture(h){
  for(const row of [old.row,corrected.row])row.salida_tag=await fixture.master.blindIndex('29390');
  h.state.records=[old.row,corrected.row];return{old,corrected};
 }
+async function automaticSalidaInput(h,options){
+ await h.page.evaluate(()=>TrazaUI.navigate('converter'));
+ await h.page.locator('#file-input').setInputFiles({name:'Salida automática ficticia.pdf',mimeType:'application/pdf',buffer:fakePdf(options)});await h.page.locator('#export-button:not([disabled])').waitFor();
+}
+for(const viewport of [{width:1440,height:1000},{width:390,height:844}])test('automatic salidas '+viewport.width+'px: normalized repeat opens existing record, changes create linked versions and the complete history survives reload',async()=>{
+ const h=await harness({viewport});try{
+  h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await automaticSalidaInput(h,{number:'1050',quantity:'10',cost:'5.00',price:'9.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.records.length,1);assert.equal(h.state.records[0].salida_version,1);const original=h.state.records[0],files=new Map(h.state.storage);
+  await automaticSalidaInput(h,{number:'1050',quantity:'10',cost:'5.00',price:'9.99',printDate:'20/10/2026',variant:'REIMPRESION FICTICIA',reverseRows:true,description:'Producto   ficticio de descripcion completa'});await downloadAction(h,()=>h.page.locator('#export-button').click());await h.page.locator('#traza-document-detail').waitFor({state:'visible'});assert.match(await h.page.locator('#traza-document-detail').innerText(),/no presenta cambios/);assert.equal(h.state.recordCalls,1);assert.equal(h.state.records.length,1);assert.deepEqual(h.state.storage,files);
+  await automaticSalidaInput(h,{number:'1050',quantity:'12',cost:'7.00',price:'8.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.records.length,2);const current=h.state.records.find(r=>!r.duplicate_of);assert.equal(current.salida_version,2);assert.equal(original.duplicate_of,current.id);
+  await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);assert.match(await h.page.locator('.salida-version-badge').innerText(),/Versión 2.*Actualizada/);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();await h.page.locator('.salida-version').last().locator('summary').click();try{await h.page.waitForFunction(()=>{const box=[...document.querySelectorAll('.salida-version')].at(-1);return box.querySelector('.salida-change-list')||box.textContent.includes('No se pudo comprobar');});}catch(error){throw new Error(JSON.stringify(await h.page.locator('.salida-version').evaluateAll(boxes=>boxes.map(box=>({open:box.open,text:box.textContent})))));}assert.match(await h.page.locator('.salida-version').last().innerText(),/Cantidad: 10 → 12 \(\+2\)/);assert.match(await h.page.locator('.salida-change-list').innerText(),/Costo: 5 → 7/);assert.match(await h.page.locator('.salida-change-list').innerText(),/Precio de venta: 9\.99 → 8\.99/);
+  await h.page.reload();await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
+  await h.page.locator('.salida-version').first().locator('summary').click();await h.page.locator('.salida-version').first().getByRole('button',{name:'Comparar con versión actual',exact:true}).click();await h.page.locator('.salida-current-comparison .salida-change-list').waitFor();assert.match(await h.page.locator('.salida-current-comparison').innerText(),/Cantidad: 10 → 12 \(\+2\)/);
+  await automaticSalidaInput(h,{number:'1050',quantity:'10',cost:'5.00',price:'9.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());await h.page.locator('#traza-document-detail').waitFor({state:'visible'});assert.equal(h.state.records.length,2);assert.equal(h.state.records.find(r=>!r.duplicate_of).id,current.id);assert.equal(h.state.storage.size,4);
+ }finally{await h.close();}
+});
+test('automatic salidas: historical corrected and reprinted PDFs consolidate before listing and current scanner prices follow that single source',async()=>{
+ const h=await harness();try{
+  const {old,corrected}=await correctedSalidaFixture(h);const files=new Map(h.state.storage);await login(h.page);await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);assert.equal(old.row.duplicate_of,corrected.row.id);assert.equal(corrected.row.salida_version,2);assert.deepEqual(h.state.storage,files);assert.equal(h.state.recordCalls,0);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
+ }finally{await h.close();}
+});
+test('automatic salidas: a phone opened directly consolidates legacy corrections before preparing its product prices',async()=>{
+ const h=await harness({mobile:true});try{
+  const {old,corrected}=await correctedSalidaFixture(h);const files=new Map(h.state.storage);await mobileLogin(h);await mobileLookup(h);
+  assert.match(await h.page.locator('.price').innerText(),/7\.99/);assert.equal(await h.page.locator('.product-salidas tbody tr').count(),1);
+  assert.equal(old.row.duplicate_of,corrected.row.id);assert.equal(corrected.row.salida_version,2);assert.deepEqual(h.state.storage,files);assert.equal(h.state.recordCalls,0);
+ }finally{await h.close();}
+});
+test('automatic salidas: two users register the same changed output concurrently and share one committed version across independent browsers',async()=>{
+ const a=await harness(),b=await harness({role:'user'});let release;try{
+  a.state.records=[];a.state.storage.clear();for(const key of ['records','storage','operations','salidas','sockets'])b.state[key]=a.state[key];await login(a.page,'index.html',{empty:true});await login(b.page,'index.html',{username:'colega',empty:true});
+  await automaticSalidaInput(a,{number:'1999',price:'7.99'});await automaticSalidaInput(b,{number:'1999',price:'7.99',variant:'REIMPRESION DE LA MISMA SALIDA'});
+  a.state.slowRecord=new Promise(resolve=>{release=resolve;});await a.page.locator('#export-button').click();await a.page.waitForFunction(()=>document.querySelector('#export-button').disabled);await b.page.locator('#export-button').click();
+  await new Promise(resolve=>setTimeout(resolve,300));release();await a.page.locator('#traza-saved-file-name').waitFor({state:'visible'});await b.page.locator('#traza-document-detail').waitFor({state:'visible',timeout:20000});assert.equal(a.state.records.length,1);assert.equal(a.state.storage.size,2);assert.equal(a.state.recordCalls,1);assert.equal(b.state.recordCalls,0);assert.equal(a.state.records[0].created_by,OWNER);
+ }finally{if(release)release();await a.close();await b.close();}
+});
 async function chooseCorrectedVersion(page){
+ await page.getByText('Herramientas de revisión',{exact:true}).click();
  await page.locator('#review-duplicates').click();const group=page.locator('.duplicate-group[data-kind="version"]');await group.waitFor();
  const previous=group.locator('.duplicate-record').last();await previous.locator('input:not([type=checkbox])').fill('La primera versión no tenía costos; se confirmó la factura corregida.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();
  await page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();
 }
-test('salida versions: different costs and quantities are detected, admin chooses the corrected source and old original can be reuploaded without another record',async()=>{
+test('legacy manual versions before automatic migration: costs and quantities are detected and historical files remain accessible',async()=>{
  const h=await harness();try{
+  h.state.missingAutomatic=true;
   const {old,corrected}=await correctedSalidaFixture(h),storage=new Map(h.state.storage);await login(h.page);await waitUnits(h.page);assert.equal(await h.page.locator('.audit-table tbody tr').count(),2);
-  await h.page.locator('#review-duplicates').click();const group=h.page.locator('.duplicate-group[data-kind="version"]');await group.waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);assert.equal(await group.locator('select').inputValue(),corrected.row.id);
+  await h.page.getByText('Herramientas de revisión',{exact:true}).click();await h.page.locator('#review-duplicates').click();const group=h.page.locator('.duplicate-group[data-kind="version"]');await group.waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);assert.equal(await group.locator('select').inputValue(),corrected.row.id);
   assert.match(await group.innerText(),/Unidades: 432/);assert.match(await group.innerText(),/Unidades: 1152/);assert.match(await group.innerText(),/Costos: 0 con importe · 0 en cero · 2 sin detectar/);assert.match(await group.innerText(),/Costos: 2 con importe · 0 en cero · 0 sin detectar/);
   assert.ok(h.state.records.every(r=>!r.duplicate_of),'Opening the review cannot choose a source');
   const previous=group.locator('.duplicate-record').last();await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Describe el motivo de la corrección', {exact:false}).waitFor();assert.ok(!old.row.duplicate_of);
@@ -267,27 +308,30 @@ test('salida versions: different costs and quantities are detected, admin choose
   assert.equal(old.row.duplicate_of,corrected.row.id);assert.deepEqual(h.state.storage,storage);assert.equal(h.state.records.length,2);
   await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===1);assert.match(await h.page.locator('.audit-table tbody tr').innerText(),/1,152/);
   await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await h.page.locator('.linked-records').waitFor();await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);assert.deepEqual(Buffer.from((await h.page.evaluate(()=>window.__picker.files[0])).bytes),old.pdf);
-  await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida 29390 anterior.pdf',mimeType:'application/pdf',buffer:old.pdf});await h.page.locator('#export-button:not([disabled])').waitFor();await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
+  assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
  }finally{await h.close();}
 });
-test('salida versions: returning from archive immediately refreshes the mobile catalog and uses the corrected price, preserving the previous PDF',async()=>{
+test('legacy manual versions before automatic migration: returning from archive immediately refreshes the mobile catalog',async()=>{
  const h=await harness({mobile:true});try{
+  h.state.missingAutomatic=true;
   const {old,corrected}=await correctedSalidaFixture(h);await mobileLogin(h);await mobileLookup(h);assert.match(await h.page.locator('#result').innerText(),/precios distintos/);
   await h.page.locator('.bottom [data-mobile-section="archive"]').click();const owner=h.page.frameLocator('#engine');await owner.locator('#audit-page').waitFor({state:'visible'});await chooseCorrectedVersion(owner);
   await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#search:not([disabled])').waitFor();await mobileLookup(h);assert.match(await h.page.locator('.price').innerText(),/7\.99/);assert.equal(await h.page.locator('.product-salidas tbody tr').count(),1);assert.equal(old.row.duplicate_of,corrected.row.id);
   assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);await checkNoOverflow(h.page);
  }finally{await h.close();}
 });
-test('salida versions: mismatched printed number is not offered as a corrected version, and incomplete SQL activation leaves both originals active',async()=>{
+test('legacy manual versions before automatic migration: mismatched printed number and incomplete activation preserve original records',async()=>{
  const h=await harness();try{
-  const {old}=await correctedSalidaFixture(h);await setArchivedPdf(h,0,{number:'99999'},{salida_numero:'29390'});await login(h.page);await h.page.locator('#review-duplicates').click();await h.page.getByText('No se pudo confirmar el número de 1 PDF', {exact:false}).waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),0);assert.ok(h.state.records.every(r=>!r.duplicate_of));await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();
+  h.state.missingAutomatic=true;
+  const {old}=await correctedSalidaFixture(h);await setArchivedPdf(h,0,{number:'99999'},{salida_numero:'29390'});await login(h.page);await h.page.getByText('Herramientas de revisión',{exact:true}).click();await h.page.locator('#review-duplicates').click();await h.page.getByText('No se pudo confirmar el número de 1 PDF', {exact:false}).waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),0);assert.ok(h.state.records.every(r=>!r.duplicate_of));await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();
   await setArchivedPdf(h,0,old.pdf);h.state.missingVersions=true;await h.page.locator('#review-duplicates').click();const previous=h.page.locator('.duplicate-group[data-kind="version"] .duplicate-record').last();await previous.waitFor();await previous.locator('input:not([type=checkbox])').fill('Versión corregida con los costos confirmados.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('supabase/versiones-salidas.sql',{exact:false}).waitFor();assert.ok(h.state.records.every(r=>!r.duplicate_of));assert.equal(h.state.records.length,2);
  }finally{await h.close();}
 });
-test('salida versions: a lost confirmation retries the same encrypted review and cannot duplicate or replace original documents',async()=>{
+test('legacy manual versions before automatic migration: lost confirmation retains its idempotent encrypted review',async()=>{
  const h=await harness();try{
+  h.state.missingAutomatic=true;
   const {old,corrected}=await correctedSalidaFixture(h),storage=new Map(h.state.storage);await login(h.page);h.state.dropVersionResponse=true;
-  await h.page.locator('#review-duplicates').click();const previous=h.page.locator('.duplicate-group[data-kind="version"] .duplicate-record').last();await previous.waitFor();await previous.locator('input:not([type=checkbox])').fill('Factura corregida y costos revisados por el administrador.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();
+  await h.page.getByText('Herramientas de revisión',{exact:true}).click();await h.page.locator('#review-duplicates').click();const previous=h.page.locator('.duplicate-group[data-kind="version"] .duplicate-record').last();await previous.waitFor();await previous.locator('input:not([type=checkbox])').fill('Factura corregida y costos revisados por el administrador.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();
   await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).waitFor({state:'visible'});await h.page.waitForFunction(()=>document.querySelector('.duplicate-record:last-child button').disabled===false);assert.equal(old.row.duplicate_of,corrected.row.id);const encrypted=old.row.encrypted_review;
   h.state.dropVersionResponse=false;await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();assert.equal(old.row.encrypted_review,encrypted);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
  }finally{await h.close();}
@@ -726,7 +770,7 @@ async function harness(options = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowRecord: null, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
-  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),sockets:new Set()});
+  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),salidas:new Map(),sockets:new Set()});
   const broadcast=table=>{for(const socket of state.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table,type:'INSERT',record:{workspace_id:WORKSPACE}}}}));};
   await context.routeWebSocket('wss://aixsnmsmgyejcbtuilwt.supabase.co/**',socket=>{
     state.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:[{id:1}]}}}));});socket.onClose(()=>state.sockets.delete(socket));
@@ -850,6 +894,36 @@ async function harness(options = {}) {
       if(body.p_existing_id){state.operations.set(body.p_operation_tag,{record_id:body.p_existing_id});await json({record:state.records.find(row=>row.id===body.p_existing_id)});return;}
       const reserved={id:body.p_request_id,owner_id:state.actor};state.operations.set(body.p_operation_tag,reserved);await json(reserved);return;
     }
+    if(pathname==='/rest/v1/mega_salidas'){
+      const identity=(url.searchParams.get('identity_tag')||'').replace(/^eq\./,'');await json(identity?(state.salidas.has(identity)?[state.salidas.get(identity)]:[]):[...state.salidas.values()]);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_salida_seed'){
+      const b=request.postDataJSON();if(state.missingAutomatic){await json({code:'PGRST202'},404);return;}
+      let group=state.salidas.get(b.p_identity_tag);if(group?.current_record_id){await json(group);return;}if(group?.pending_id){await json({code:'40001'},409);return;}
+      group=group||{workspace_id:WORKSPACE,identity_tag:b.p_identity_tag,current_record_id:null,current_version:0};state.salidas.set(b.p_identity_tag,group);
+      const entries=b.p_entries.map(e=>({e,row:state.records.find(r=>r.id===e.id)}));if(entries.some(({e,row})=>!row||row.encrypted_metadata!==e.encrypted_metadata||row.salida_tag!==e.salida_tag)){await json({code:'40001'},409);return;}
+      if(entries.length){
+        entries.sort((a,b)=>a.row.created_at.localeCompare(b.row.created_at)||a.row.id.localeCompare(b.row.id));const unique=new Map();for(const item of entries)if(!unique.has(item.e.content_tag))unique.set(item.e.content_tag,item);
+        const roots=entries.filter(item=>!item.row.duplicate_of),principal=roots.length===1?roots[0]:[...unique.values()].at(-1),versions=[...unique.values()].filter(item=>item.e.content_tag!==principal.e.content_tag).concat(principal);
+        for(const {e,row}of entries)Object.assign(row,{salida_identity_tag:b.p_identity_tag,salida_content_tag:e.content_tag,document_tag:e.document_tag,salida_version:versions.findIndex(v=>v.e.content_tag===e.content_tag)+1,duplicate_of:row.id===principal.row.id?null:principal.row.id,salida_previous_id:null});
+        for(let n=1;n<versions.length;n++)for(const item of entries)if(item.e.content_tag===versions[n].e.content_tag)item.row.salida_previous_id=versions[n-1].row.id;
+        Object.assign(group,{current_record_id:principal.row.id,current_version:versions.length});broadcast('mega_audit_records');
+      }await json(group);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_salida_prepare'){
+      if(state.missingAutomatic){await json({code:'PGRST202'},404);return;}const b=request.postDataJSON();let group=state.salidas.get(b.p_identity_tag);if(!group){group={workspace_id:WORKSPACE,identity_tag:b.p_identity_tag,current_version:0,current_record_id:null};state.salidas.set(b.p_identity_tag,group);}
+      const match=state.records.find(r=>r.salida_identity_tag===b.p_identity_tag&&r.salida_content_tag===b.p_content_tag);if(match){await json({action:'existing',record:state.records.find(r=>r.id===group.current_record_id),matched_record:match});return;}
+      if(group.pending_id&&group.pending_id!==b.p_request_id){await json({code:'40001'},409);return;}
+      Object.assign(group,{pending_id:b.p_request_id,pending_owner:state.actor,pending_content_tag:b.p_content_tag,pending_document_tag:b.p_document_tag});state.operations.set(b.p_content_tag,{id:b.p_request_id,owner_id:state.actor});await json({action:group.current_version?'updated':'new',id:b.p_request_id,owner_id:state.actor,version:group.current_version+1});return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_salida_commit'){
+      state.recordCalls++;if(state.slowRecord)await state.slowRecord;if(state.failRecord){await json({code:'fictional_error'},state.failRecord);return;}
+      const b=request.postDataJSON(),group=state.salidas.get(b.p_identity_tag);let row=state.records.find(r=>r.id===b.p_id);
+      if(!row){row={id:b.p_id,created_by:state.actor,workspace_id:WORKSPACE,created_at:'2026-10-13T03:00:00.000Z',salida_tag:b.p_salida_tag,encrypted_metadata:b.p_encrypted_metadata,document_tag:b.p_document_tag,operation_kind:'primary',salida_identity_tag:b.p_identity_tag,salida_content_tag:b.p_content_tag,salida_version:group.current_version+1,salida_previous_id:group.current_record_id};
+        if(b.p_approved_import)Object.assign(row,{document_kind:'salida',import_revision:1,import_reviewed_by:state.actor,import_reviewed_at:row.created_at,import_request_id:row.id});
+        for(const previous of state.records)if(previous.salida_identity_tag===b.p_identity_tag||(group.current_record_id&&previous.duplicate_of===group.current_record_id))previous.duplicate_of=row.id;state.records.unshift(row);Object.assign(group,{current_record_id:row.id,current_version:row.salida_version,pending_id:null,pending_owner:null});state.operations.set(b.p_content_tag,{record_id:row.id});broadcast('mega_audit_records');}
+      if(state.dropRecordResponse){await route.abort('failed');return;}await json(row);return;
+    }
     if(pathname==='/rest/v1/rpc/mega_audit_review_duplicate'){
       if(state.role!=='admin'){await json({code:'42501'},403);return;}
       const body=request.postDataJSON(),row=state.records.find(r=>r.id===body.p_record_id);Object.assign(row,{document_tag:body.p_document_tag,duplicate_of:body.p_canonical_id,operation_kind:body.p_canonical_id?'legacy':'separate',reviewed_by:state.actor,reviewed_at:new Date().toISOString(),encrypted_review:body.p_encrypted_review});broadcast('mega_audit_records');await json(row);return;
@@ -887,8 +961,11 @@ async function harness(options = {}) {
       const eq = key => (url.searchParams.get(key) || '').replace(/^eq\./, '');
       let rows = state.records.filter(row => (!eq('id') || row.id === eq('id')) && (!eq('salida_tag') || row.salida_tag === eq('salida_tag')) && (!eq('created_by') || row.created_by === eq('created_by')));
       const duplicate=url.searchParams.get('duplicate_of');if(duplicate==='is.null')rows=rows.filter(row=>!row.duplicate_of);else if(duplicate)rows=rows.filter(row=>row.duplicate_of===eq('duplicate_of'));
+      const identity=url.searchParams.get('salida_identity_tag');if(identity==='is.null')rows=rows.filter(row=>!row.salida_identity_tag);else if(identity)rows=rows.filter(row=>row.salida_identity_tag===eq('salida_identity_tag'));
+      if(eq('document_kind'))rows=rows.filter(row=>(row.document_kind||'salida')===eq('document_kind'));
+      if((url.searchParams.get('order')||'').includes('salida_version.asc'))rows.sort((a,b)=>(a.salida_version||0)-(b.salida_version||0)||a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
       if(url.searchParams.get('operation_kind')==='neq.separate')rows=rows.filter(row=>row.operation_kind!=='separate');
-      if((url.searchParams.get('order')||'').includes('created_at.asc'))rows.sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
+      if((url.searchParams.get('order')||'').includes('created_at.asc')&&!(url.searchParams.get('order')||'').includes('salida_version.asc'))rows.sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id));
       for (const clause of url.searchParams.getAll('created_at')) { if (clause.startsWith('gte.')) rows = rows.filter(row => row.created_at >= new Date(clause.slice(4)).toISOString()); if (clause.startsWith('lt.')) rows = rows.filter(row => row.created_at < new Date(clause.slice(3)).toISOString()); }
       const total = rows.length, offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || total);
       rows = rows.slice(offset, offset + limit);
@@ -917,6 +994,7 @@ async function login(page, filename = 'index.html', options = {}) {
   await page.locator('#audit-cloud-login-password').fill(PASSWORD);
   await page.locator('#audit-bar').getByRole('button', { name: 'Iniciar sesión', exact: true }).click();
   await page.waitForFunction(() => window.AuditCloud && typeof window.AuditCloud.status === 'function' && window.AuditCloud.status().authenticated);
+  if(options.empty){await page.getByText('El archivo está vacío.',{exact:false}).waitFor();return;}
   await page.getByRole('button', { name: /^Abrir detalle de salida / }).first().waitFor();
   if (options.waitUnits !== false) await waitUnits(page);
 }
@@ -946,7 +1024,7 @@ async function convert(page) {
   await page.evaluate(() => window.TrazaUI.navigate('converter'));
   assert.equal(await page.locator('#drop-zone').isVisible(), true);
   assert.equal(await page.locator('#converter-title').innerText(), 'Nueva salida');
-  await page.locator('#file-input').setInputFiles({ name: 'Salida ficticia 00123.pdf', mimeType: 'application/pdf', buffer: fakePdf({variant:'MegaControl - FACTURA ENTRANTE FICTICIA, SIN VALOR COMERCIAL'}) });
+  await page.locator('#file-input').setInputFiles({ name: 'Salida ficticia 00123.pdf', mimeType: 'application/pdf', buffer: fakePdf({variant:'MegaControl - FACTURA ENTRANTE FICTICIA, SIN VALOR COMERCIAL',price:'13.00'}) });
   await page.locator('#export-button:not([disabled])').waitFor();
   assert.equal(await page.locator('#salida-number').inputValue(), '00123');
 }
@@ -1351,7 +1429,7 @@ test('converter: navigation keeps loaded PDF and session; native Excel table and
     const saved = await downloadAction(h, () => h.page.locator('#export-button').click());
     const result = await h.page.evaluate(() => ({ picker: window.__picker, events: window.__events }));
     assert.equal(result.picker.calls.length, 0, 'Excel uses browser downloads even when the native folder picker is available');
-    const auditPosition = result.events.indexOf('fetch:/rest/v1/rpc/mega_audit_record_v2');
+    const auditPosition = result.events.indexOf('fetch:/rest/v1/rpc/mega_salida_commit');
     const downloadPosition = result.events.indexOf('download:Salida 00123 revisada.xlsx');
     assert.ok(auditPosition >= 0 && downloadPosition > auditPosition, 'The browser download starts only after audit registration');
     assert.equal(h.state.recordCalls, 1);
@@ -1419,7 +1497,7 @@ for (const splitGroupedUnits of [false, true]) {
       assert.equal(rows[4][amountColumn], 630, 'The bulk row amount remains unchanged');
       assert.ok(XLSX.CFB.find(XLSX.CFB.read(bytes, { type: 'buffer' }), '/xl/tables/table1.xml'), 'The exported products use an actual native Excel table');
       assert.equal(h.state.recordCalls, 1);
-      const registered = h.state.records.find(row => row.id !== fixture.records[0].id && row.created_at === '2026-10-09T03:00:00.000Z');
+      const registered = h.state.records.find(row => row.salida_version === 2);
       const clear = await fixture.master.decrypt(new Uint8Array(Buffer.from(registered.encrypted_metadata, 'base64')), `${registered.id}|metadata`);
       try { assert.equal(JSON.parse(new TextDecoder().decode(clear)).total_units, 1807.5); }
       finally { clear.fill(0); }
@@ -1468,12 +1546,12 @@ test('converter: audit HTTP 500, network failure and session 401 never produce a
     assert.equal(h.state.records.length, fixture.records.length);
     assert.match(await h.page.locator('#message').innerText(), /Supabase|500|operación/i);
     h.state.failRecord = 0;
-    await h.context.route('**/rest/v1/rpc/mega_audit_record_v2', route => route.abort('failed'));
+    await h.context.route('**/rest/v1/rpc/mega_salida_commit', route => route.abort('failed'));
     await h.page.locator('#export-button').click(); await waitNotBusy(h.page);
     assert.equal(await h.page.evaluate(() => window.__picker.files.length), 0);
     assert.equal(h.state.downloads.length, 0);
     assert.match(await h.page.locator('#message').innerText(), /conectar|conexión/i);
-    await h.context.unroute('**/rest/v1/rpc/mega_audit_record_v2');
+    await h.context.unroute('**/rest/v1/rpc/mega_salida_commit');
     h.state.failRecord = 401;
     await h.page.locator('#export-button').click();
     await h.page.waitForFunction(() => !window.AuditCloud.status().authenticated);
@@ -1490,7 +1568,7 @@ test('converter: an audit response arriving after logout cannot start an Excel d
     await login(h.page); await convert(h.page);
     h.state.slowRecord = new Promise(resolve => { release = resolve; });
     await h.page.locator('#export-button').click();
-    await h.page.waitForFunction(() => window.__events.some(event => event === 'fetch:/rest/v1/rpc/mega_audit_record_v2'));
+    await h.page.waitForFunction(() => window.__events.some(event => event === 'fetch:/rest/v1/rpc/mega_salida_commit'));
     await profile(h.page);
     await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
     release(); h.state.slowRecord = null;
@@ -2398,6 +2476,17 @@ for(const format of ['nevada','feduro','skechers'])test('invoice originals: '+fo
   assert.equal(metadata.imported_document.rows.length,2);assert.equal(metadata.imported_document.rows[0].pventa,5.99);assert.equal(metadata.imported_document.fecha,'12/10/2026');assert.equal(metadata.imported_document.rows[0].priceOrigin,'manual');
   assert.doesNotMatch(h.state.requests.find(r=>r.pathname.endsWith('mega_audit_record_import')).body,/5\.99|FICTICIO|1234509876543/);
   assert.ok(metadata.imported_document.rows[0].codigo||metadata.imported_document.rows[0].ref);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('automatic salidas: correcting an approved imported Salida creates a version and preserves its encrypted original reading and files',async()=>{
+ const h=await harness();try{
+  h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await importFixture(h);await h.page.locator('#invoice-review .invoice-fields select').first().selectOption('salida');await confirmImport(h);
+  assert.equal(h.state.records.length,1);const original=h.state.records[0],cipher=original.encrypted_metadata,files=new Map(h.state.storage);assert.equal(original.salida_version,1);
+  await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Revisar lectura de Salida 55001',exact:true}).click();await h.page.locator('#invoice-review').waitFor({state:'visible'});
+  await h.page.locator('.invoice-row').first().locator('[data-field=pventa]').fill('4.99');await h.page.locator('#invoice-confirm').check();await downloadAction(h,()=>h.page.locator('#export-button').click());
+  assert.equal(h.state.records.length,2);const current=h.state.records.find(r=>!r.duplicate_of);assert.equal(current.salida_version,2);assert.equal(original.duplicate_of,current.id);assert.equal(original.encrypted_metadata,cipher);for(const [name,bytes]of files)assert.deepEqual(h.state.storage.get(name),bytes);
+  assert.equal(h.state.requests.filter(r=>r.pathname.endsWith('mega_audit_import_update')).length,0);
+  await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 55001',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);
  }finally{await h.close();}
 });
 test('invoice approval: member saves a draft, admin corrects it with lost-response retry; another device queries metadata without downloading PDFs',async()=>{

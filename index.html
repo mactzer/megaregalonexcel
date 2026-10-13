@@ -364,7 +364,7 @@
     }
     .traza-scanner-frame{display:block;width:100%;height:calc(100dvh - 165px);min-height:460px;border:0;border-radius:16px}
   </style>
-  <link rel="stylesheet" href="traza.css?v=shared-history-1">
+  <link rel="stylesheet" href="traza.css?v=automatic-salidas-1">
 </head>
 <body>
   <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
@@ -392,7 +392,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
-    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=15" title="Escáner de productos" allow="camera"></iframe></section>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=16" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -485,14 +485,15 @@
   <script src="excel-table.js?v=megacontrol-1"></script>
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=shared-history-1"></script>
-  <script src="audit-backup.js?v=1"></script>
+  <script src="audit-backup.js?v=2"></script>
   <script src="invoice-formats.js?v=3"></script>
   <script src="invoice-ocr.js?v=1"></script>
   <script src="invoice-review.js?v=2"></script>
   <script src="audit-realtime.js?v=1"></script>
   <script src="traza.js?v=shared-navigation-1"></script>
   <script src="mobile-catalog.js?v=explicit-product-lookup-1"></script>
-  <script src="audit-cloud.js?v=salida-versions-1"></script>
+  <script src="salida-versions.js?v=1"></script>
+  <script src="audit-cloud.js?v=automatic-salidas-1"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -804,7 +805,9 @@
       const subtotalMatch = text.match(/SubTotal:\s*([\d,]+(?:\.\d{2})?)/i);
       const taxMatch = text.match(/Impuesto\s+([\d,]+(?:\.\d{2})?)/i);
       const netTotalMatch = text.match(/Tota(?:l)?\s*Neto\s*:?\s*([\d,]+(?:\.\d{2})?)/i);
+      const issuerLine=rawLines.slice(0,20).find(line=>/^[\p{L}\d &.,'()-]+\b(?:S\.?\s*A\.?|S\.?\s*R\.?\s*L\.?|INC\.?)\s*$/iu.test(line.texto));
       return {
+        emisor:issuerLine?cleanText(issuerLine.texto):'',
         numero: numberMatch ? cleanText(numberMatch[1]) : "",
         fecha: verifiedInvoiceDate !== undefined ? verifiedInvoiceDate : dateMatch ? dateMatch[1] : "",
         referencia: cleanText(referenceValue),
@@ -1182,6 +1185,7 @@
       const uiGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
       const authSnapshot = window.AuditClient && typeof window.AuditClient.status === "function" ? window.AuditClient.status() : null;
       const archiveSource = state.archiveSource;
+      const registerImportedVersion=Boolean(archiveSource&&archiveSource.importReviewed&&importedSource&&importedSource.kind==='salida'&&archiveSource.importedDocument&&archiveSource.importedDocument.kind==='salida'&&state.importReview.adminConfirmed()&&JSON.stringify(importedSource)!==JSON.stringify(archiveSource.importedDocument));
       const originalFile = state.originalFile;
       function assertExportCurrent() {
         const viewChanged = window.TrazaUI && (window.TrazaUI.currentSection !== "converter" || window.TrazaUI.generation !== uiGeneration);
@@ -1196,6 +1200,7 @@
       }
       let fileBytes;
       let auditRecord = null;
+      let openExisting = null;
       state.exporting = true;
       if(state.importReview)state.importReview.setBusy(true);
       $("#export-button").disabled = true;
@@ -1336,7 +1341,7 @@
       backupWorksheet["!cols"] = [{ wch: 10 }, { wch: 10 }, { wch: 120 }];
       XLSX.utils.book_append_sheet(workbook, backupWorksheet, "Respaldo original");
         const signature = JSON.stringify({ salida: state.salidaNumero, excelName: fileName, columns: defs.map(def => def.key), headers, rows: state.rows, info: state.documentInfo, movementId: state.movementId });
-        if (archiveSource) {
+        if (archiveSource&&!registerImportedVersion) {
           clearPendingAudit();
           fileBytes = ExcelTable.write(XLSX, workbook, { sheetName: "Datos", headers });
           if(importedSource&&state.importReview.adminConfirmed()&&(!archiveSource.importReviewed||JSON.stringify(importedSource)!==JSON.stringify(archiveSource.importedDocument))){
@@ -1379,6 +1384,7 @@
               excelBytes: fileBytes,
               rowCount: state.rows.length,
               totalUnits: totals.totalUnidades,
+              salidaSource: {rows:state.rows.map(row=>({...row})),info:{...state.documentInfo}},
               idempotencyKey: window.AuditClient.newIdempotencyKey()
             };
             if(importedSource){state.pendingAudit.importedDocument=importedSource;state.pendingAudit.importConfirmed=state.importReview.adminConfirmed();}
@@ -1401,7 +1407,9 @@
         updateStep(4);
         state.pendingAudit = null;
         const destination = "Se inició una sola descarga del Excel. Revisa el panel de descargas del navegador.";
-        const confirmation = (state.imported ? (archiveSource?'Lectura revisada y Excel preparado. ':auditRecord&&auditRecord.import_reviewed_by?'Documento aprobado y compartido. ':'Documento archivado. Sus precios quedan pendientes de aprobación administrativa. ') : archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "") + destination;
+        const automaticNotice=auditRecord&&auditRecord.automaticAction==='existing'?'Esta salida ya se encuentra registrada y no presenta cambios. Se abrirá el registro existente. ':auditRecord&&auditRecord.automaticAction==='updated'?`Salida ${auditRecord.salida_numero} actualizada · Versión ${auditRecord.salida_version}. Las anteriores se conservan en su historial. `:'';
+        const confirmation = (automaticNotice||(state.imported ? (archiveSource?'Lectura revisada y Excel preparado. ':auditRecord&&auditRecord.import_reviewed_by?'Documento aprobado y compartido. ':'Documento archivado. Sus precios quedan pendientes de aprobación administrativa. ') : archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "")) + destination;
+        if(auditRecord&&auditRecord.automaticAction==='existing')openExisting=auditRecord.id;
         showMessage(confirmation, "info");
         if (window.TrazaSavedFile) window.TrazaSavedFile.show({
           name: fileName,
@@ -1414,11 +1422,14 @@
         if (!error.trazaStale) showMessage(error.message || "No se pudo guardar la salida. Intenta descargar de nuevo.", "error");
       } finally {
         if (fileBytes && typeof fileBytes.fill === "function" &&
-            (archiveSource || state.completedAudit || !state.pendingAudit || state.pendingAudit.excelBytes !== fileBytes)) fileBytes.fill(0);
+            ((archiveSource&&!registerImportedVersion) || state.completedAudit || !state.pendingAudit || state.pendingAudit.excelBytes !== fileBytes)) fileBytes.fill(0);
         state.exporting = false;
         if(state.importReview)state.importReview.setBusy(false);
         $("#export-button").textContent = "Descargar Excel";
         $("#export-button").disabled = !selectedDefs().length || !state.rows.length || (state.importReview&&!state.importReview.valid());
+      }
+      if(openExisting&&window.AuditClient&&typeof window.AuditClient.openRecordedSalida==='function'){
+        try{assertExportCurrent();await window.AuditClient.openRecordedSalida(openExisting);}catch(error){if(!error.trazaStale)showMessage(error.message,'error');}
       }
     }
 
@@ -1607,6 +1618,7 @@
           const documentNumber = String(parsed.documentInfo.numero || "");
           return {
             rowCount: parsed.rows.length,
+            salida: options.includeSalida ? {rows:parsed.rows.map(row=>({...row})),info:{...parsed.documentInfo}} : undefined,
             products: options.includeProducts ? parsed.rows.map(row => ({ codigo: row.codigo, descripcion: row.descripcion, pventa: row.pventa, empaque: row.empaque, ref: row.ref })) : undefined,
             costs: options.includeCosts ? {
               withAmount: parsed.rows.filter(row => Number.isFinite(row.costo) && row.costo !== 0).length,

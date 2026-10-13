@@ -27,7 +27,7 @@ def validate(folder):
     if snapshot.get('version') != 1 or snapshot.get('workspace_id') != WORKSPACE or inventory.get('workspace') != WORKSPACE:
         raise ValueError('Esta herramienta solo restaura el equipo original de MegaControl.')
     rows = snapshot['tables']
-    if set(rows) != set(TABLES) or len(rows['mega_audit_workspace']) != 1:
+    if set(rows) not in (set(TABLES), set(TABLES) | {'mega_salidas'}) or len(rows['mega_audit_workspace']) != 1:
         raise ValueError('Las tablas del respaldo están incompletas.')
     for table, items in rows.items():
         for row in items:
@@ -43,6 +43,7 @@ def validate(folder):
         authors.update(row[field] for row in rows[table])
     authors.update(row['reviewed_by'] for row in rows['mega_audit_records'] if row.get('reviewed_by'))
     authors.update(row['import_reviewed_by'] for row in rows['mega_audit_records'] if row.get('import_reviewed_by'))
+    authors.update(row['pending_owner'] for row in rows.get('mega_salidas', []) if row.get('pending_owner'))
     if any(not re.fullmatch(UUID, a) for a in authors):
         raise ValueError('Identidad de autor inválida.')
     files = {}
@@ -94,14 +95,21 @@ def restore_sql(snapshot, restore_access=False):
              'end $mega_restore$;',
              'alter table public.mega_audit_records disable trigger mega_audit_record_stamp;',
              'alter table public.mega_audit_records disable trigger mega_audit_operation_guard;']
-    for table in TABLES:
+    for table in TABLES + (('mega_salidas',) if snapshot['tables'].get('mega_salidas') else ()):
         if not restore_access and table in ('mega_audit_members', 'mega_audit_user_keys'):
             continue
         source_rows = snapshot['tables'][table]
         if table == 'mega_audit_records':
-            source_rows = [dict(row, document_kind=row.get('document_kind') or 'salida', import_revision=row.get('import_revision') or 0) for row in source_rows]
+            source_rows = [dict(row, document_kind=row.get('document_kind') or 'salida', import_revision=row.get('import_revision') or 0, salida_version=row.get('salida_version') or 0) for row in source_rows]
         rows = literal(json.dumps(source_rows, ensure_ascii=True, separators=(',', ':')))
-        lines.append(f'insert into public.{table} select * from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) on conflict do nothing;')
+        if table == 'mega_audit_records' and any(row.get('salida_identity_tag') for row in source_rows):
+            lines.extend([
+                f'create temporary table mega_restore_records on commit drop as select * from jsonb_populate_recordset(null::public.{table},{rows}::jsonb);',
+                'update mega_restore_records r set duplicate_of=s.current_record_id from public.mega_salidas s join public.mega_audit_records current on current.id=s.current_record_id where r.workspace_id=s.workspace_id and r.salida_identity_tag=s.identity_tag and r.id<>s.current_record_id;',
+                f'insert into public.{table} select * from mega_restore_records on conflict do nothing;'
+            ])
+        else:
+            lines.append(f'insert into public.{table} select * from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) on conflict do nothing;')
     lines.append('update public.mega_audit_workspace set key_fingerprint=' + literal(fingerprint) + ' where id=' + literal(WORKSPACE) + '::uuid and key_fingerprint is null;')
     lines.extend(['alter table public.mega_audit_records enable trigger mega_audit_record_stamp;',
                   'alter table public.mega_audit_records enable trigger mega_audit_operation_guard;', 'commit;'])

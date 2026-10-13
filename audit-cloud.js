@@ -28,6 +28,8 @@
   let pageGeneration = 0;
   let generation = 0;
   let archiveView = null;
+  const salidaSnapshots=new Map();
+  let legacyInventory=null,legacyInventoryEpoch=-1,automaticLegacySignature='',automaticLegacyTask=null;
   let profileCleanup = null;
   const openDialogs = new Set();
   const requests = new Set();
@@ -170,6 +172,7 @@
     clearPending();
     pendingMembers.clear();
     verifiedUnitSummaries.clear();
+    salidaSnapshots.clear();legacyInventory=null;legacyInventoryEpoch=-1;automaticLegacySignature='';automaticLegacyTask=null;
     Object.assign(archiveFilters, { query: "", from: "", to: "", author: "", page: 1 });
     window.dispatchEvent(new CustomEvent("audit:logout"));
     window.dispatchEvent(new CustomEvent("traza:session-cleared"));
@@ -550,7 +553,7 @@
       metadata.imported_document=window.InvoiceFormats.validateSaved(metadata.imported_document);
       if(metadata.imported_document.kind!==(record.document_kind||'salida')||metadata.imported_document.numero!==String(metadata.salida_numero)||record.import_revision<1)throw new Error('La lectura importada no coincide con su registro.');
     }
-    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id,encryptedMetadata:record.encrypted_metadata,document_kind:record.document_kind||'salida',import_reviewed_by:record.import_reviewed_by,import_reviewed_at:record.import_reviewed_at,import_revision:record.import_revision||0, document_tag:record.document_tag,operation_kind:record.operation_kind,duplicate_of:record.duplicate_of,reviewed_by:record.reviewed_by,reviewed_at:record.reviewed_at });
+    return Object.assign({}, metadata, { id: record.id, created_by: record.created_by, created_at: record.created_at, workspace_id: record.workspace_id,encryptedMetadata:record.encrypted_metadata,document_kind:record.document_kind||'salida',import_reviewed_by:record.import_reviewed_by,import_reviewed_at:record.import_reviewed_at,import_revision:record.import_revision||0, document_tag:record.document_tag,operation_kind:record.operation_kind,duplicate_of:record.duplicate_of,reviewed_by:record.reviewed_by,reviewed_at:record.reviewed_at,salida_identity_tag:record.salida_identity_tag,salida_content_tag:record.salida_content_tag,salida_version:record.salida_version||0,salida_previous_id:record.salida_previous_id });
   }
 
   async function getDocument(record, kind, key, guard, signal) {
@@ -642,6 +645,116 @@
     }
   }
 
+  function automaticError(error){
+    if(['PGRST202','PGRST204','42P01','42703'].includes(error.code))error.message='Activa las versiones automáticas ejecutando supabase/salidas-automaticas.sql en MegaControl. Los documentos se conservan.';
+    return error;
+  }
+  async function salidaTags(manifest,key,guard){
+    const identity=new TextEncoder().encode(manifest.identity),content=new TextEncoder().encode(JSON.stringify(['mega-salida-content-v1',manifest.identity,manifest.canonical]));
+    try{const tags=await Promise.all([key.documentIndex(identity),key.documentIndex(content)]);guard();return{identityTag:tags[0],contentTag:tags[1]};}finally{identity.fill(0);content.fill(0);}
+  }
+  async function readSalidaSnapshot(record,key,guard,signal){
+    guard();const revision=record.encryptedMetadata||record.encrypted_metadata,cached=salidaSnapshots.get(record.id);
+    if(cached&&cached.revision===revision){if(record.document_tag&&record.document_tag!==cached.value.documentTag)throw new Error('La huella del PDF cambió. Actualiza el archivo.');guard();return cached.value;}
+    let data,source,documentTag;
+    try{
+      if(record.imported_document){
+        if(!record.import_reviewed_by)throw new Error('La lectura de esta salida está pendiente de aprobación.');
+        const s=record.imported_document;source={rows:s.rows,info:{numero:s.numero,fecha:s.fecha,format:s.format,...s.totals}};
+      }
+      data=await getDocument(record,'pdf',key,guard,signal);guard();documentTag=await key.documentIndex(data);guard();
+      if(record.document_tag&&record.document_tag!==documentTag)throw new Error('El PDF no coincide con su huella guardada.');
+      if(!source){
+        const parsed=await window.TrazaConverter.analyzeUnits({data,expectedNumber:record.salida_numero,includeSalida:true,signal,assertCurrent:guard});guard();source=parsed.salida;
+        if(!source||!/^\d{1,60}$/.test(String(source.info.numero||'')))throw new Error('No se pudo verificar el número original de la salida.');
+      }
+      const manifest=window.SalidaVersions.create(source,record.salida_numero),tags=await salidaTags(manifest,key,guard);
+      const value={manifest,documentTag,...tags};guard();salidaSnapshots.set(record.id,{revision,value});
+      if(salidaSnapshots.size>20)salidaSnapshots.delete(salidaSnapshots.keys().next().value);return value;
+    }finally{if(data)data.fill(0);}
+  }
+  async function legacySalidaRows(key,guard,signal,refresh=false){
+    if(refresh||legacyInventoryEpoch!==generation){legacyInventory=null;legacyInventoryEpoch=generation;}
+    if(!legacyInventory){
+      legacyInventory=(async()=>{
+        const rows=[];
+        for(let offset=0;;offset+=500){const page=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&document_kind=eq.salida&salida_identity_tag=is.null&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset='+offset,{signal});guard();if(!Array.isArray(page))throw new Error('No se pudo leer el archivo de salidas.');rows.push(...page.filter(r=>!r.salida_identity_tag&&(r.document_kind||'salida')==='salida'&&r.operation_kind!=='separate'));if(page.length<500)break;}
+        const decoded=await Promise.allSettled(rows.map(row=>decryptedRecord(row,key)));guard();
+        return decoded.filter(r=>r.status==='fulfilled').map(r=>r.value).filter(r=>!r.imported_document||r.import_reviewed_by);
+      })();
+      legacyInventory.catch(()=>{legacyInventory=null;});
+    }
+    const rows=await legacyInventory;guard();return rows;
+  }
+  async function seedSalidaGroup(identityTag,entries,guard,signal){
+    let result;
+    try{result=await request('/rest/v1/rpc/mega_salida_seed',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_identity_tag:identityTag,p_entries:entries}});}catch(error){throw automaticError(error);}
+    guard();return result;
+  }
+  async function seedForIncoming(manifest,identityTag,key,guard,signal){
+    const known=await request('/rest/v1/mega_salidas?workspace_id=eq.'+CONFIG.workspace+'&identity_tag=eq.'+identityTag+'&select=current_record_id,current_version&limit=2',{signal});guard();
+    if(!Array.isArray(known))throw new Error('No se pudo comprobar la identidad de la salida.');if(known.length)return;
+    for(let retry=0;retry<3;retry++){
+      const legacy=await legacySalidaRows(key,guard,signal,retry>0),entries=[];
+      for(const record of legacy){if(window.SalidaVersions.identifier(record.salida_numero)!==manifest.number)continue;const value=await readSalidaSnapshot(record,key,guard,signal);if(value.identityTag!==identityTag)continue;
+        entries.push({id:record.id,encrypted_metadata:record.encryptedMetadata,salida_tag:await key.blindIndex(record.salida_numero),document_tag:value.documentTag,content_tag:value.contentTag});guard();}
+      try{await seedSalidaGroup(identityTag,entries,guard,signal);return;}catch(error){if(error.code!=='40001'||retry===2)throw error;await new Promise(resolve=>setTimeout(resolve,250));guard();}
+    }
+  }
+  async function consolidateHistoricalSalidas(guard,signal){
+    if(automaticLegacyTask){await automaticLegacyTask;guard();return;}
+    const epoch=generation,key=master;
+    const callerGuard=guard;guard=()=>priceGuard(epoch,key);signal=undefined;
+    automaticLegacyTask=(async()=>{
+      const rows=await legacySalidaRows(key,guard,signal),signature=JSON.stringify(rows.map(r=>[r.id,r.encryptedMetadata,r.duplicate_of]));
+      if(signature===automaticLegacySignature)return;
+      const candidates=new Map();
+      for(const record of rows){const id=window.SalidaVersions.identifier(record.salida_numero);if(!candidates.has(id))candidates.set(id,[]);candidates.get(id).push(record);}
+      for(const records of candidates.values())if(records.length>1){
+        const groups=new Map();
+        for(const record of records){const value=await readSalidaSnapshot(record,key,guard,signal);if(!groups.has(value.identityTag))groups.set(value.identityTag,[]);groups.get(value.identityTag).push({id:record.id,encrypted_metadata:record.encryptedMetadata,salida_tag:await key.blindIndex(record.salida_numero),document_tag:value.documentTag,content_tag:value.contentTag});guard();}
+        for(const [tag,entries]of groups)if(entries.length>1)await seedSalidaGroup(tag,entries,guard,signal);
+      }
+      guard();if(generation===epoch)automaticLegacySignature=signature;
+    })();
+    try{await automaticLegacyTask;callerGuard();}finally{if(generation===epoch)automaticLegacyTask=null;}
+  }
+  async function recordAutomaticSalida(options,account,viewGeneration){
+    const epoch=generation,key=master,owner=session.user.id,id=String(options.idempotencyKey||newIdempotencyKey()).toLowerCase();
+    const guard=()=>{assertAccount(epoch);if(!status().authenticated||master!==key||account.generation!==epoch||(window.TrazaUI&&window.TrazaUI.generation!==viewGeneration))throw new Error('La sesión o la sección cambió. Vuelve a guardar desde Nueva salida.');};
+    if(!UUID.test(id)||!options.pdfFile||typeof options.pdfFile.arrayBuffer!=='function'||options.pdfFile.size>FILE_LIMIT)throw new Error('Carga un PDF válido antes de registrar la salida.');
+    if(!window.SalidaVersions)throw new Error('Actualiza la página para comparar las versiones de la salida.');
+    if(options.importedDocument&&options.importConfirmed){await requireAdmin(epoch);guard();}
+    let data,snapshot=pending.get(id);
+    try{
+      data=new Uint8Array(await options.pdfFile.arrayBuffer());guard();let source=options.salidaSource;
+      if(!source){const parsed=await window.TrazaConverter.analyzeUnits({data,expectedNumber:String(options.salidaNumero),includeSalida:true,assertCurrent:guard});guard();source=parsed.salida;}
+      const manifest=window.SalidaVersions.create(source,options.salidaNumero),{identityTag,contentTag}=await salidaTags(manifest,key,guard),documentTag=await key.documentIndex(data);guard();
+      try{await seedForIncoming(manifest,identityTag,key,guard);}catch(error){throw automaticError(error);}
+      let claim;
+      for(let attempt=0;attempt<120;attempt++){
+        try{claim=await rpc('mega_salida_prepare',{p_workspace_id:CONFIG.workspace,p_identity_tag:identityTag,p_content_tag:contentTag,p_document_tag:documentTag,p_request_id:id});guard();break;}
+        catch(error){guard();if(error.code!=='40001'||attempt===119)throw automaticError(error);await new Promise(resolve=>setTimeout(resolve,500));guard();}
+      }
+      if(claim?.action==='existing'){
+        if(!claim.record||!claim.matched_record)throw new Error('No se pudo comprobar la salida existente.');
+        const matched=await decryptedRecord(claim.matched_record,key),previous=await readSalidaSnapshot(matched,key,guard);guard();
+        if(previous.identityTag!==identityTag||previous.contentTag!==contentTag||previous.manifest.canonical!==manifest.canonical)throw new Error('La salida existente tiene otro contenido. No se reutilizó el registro.');
+        const saved=await decryptedRecord(claim.record,key);guard();clearPending();saved.automaticAction='existing';saved.matchedVersion=matched.salida_version;
+        window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));return saved;
+      }
+      if(!claim||claim.id!==id||claim.owner_id!==owner||!['new','updated'].includes(claim.action))throw new Error('No se pudo reservar la versión de esta salida.');
+      if(!snapshot){clearPending();snapshot=await prepareRecord(options,id,key,owner,guard);guard();pending.set(id,snapshot);}
+      if(snapshot.owner!==owner||snapshot.metadata.salida_numero!==String(options.salidaNumero))throw new Error('Este intento corresponde a otra salida.');
+      await putDocument(recordPath({id,created_by:owner},'pdf'),snapshot.encryptedPdf,guard);guard();
+      await putDocument(recordPath({id,created_by:owner},'excel'),snapshot.encryptedExcel,guard);guard();
+      let row;try{row=await rpc('mega_salida_commit',{p_workspace_id:CONFIG.workspace,p_identity_tag:identityTag,p_content_tag:contentTag,p_document_tag:documentTag,p_id:id,p_salida_tag:snapshot.tag,p_encrypted_metadata:snapshot.encryptedMetadata,p_approved_import:Boolean(options.importedDocument&&options.importConfirmed)});}catch(error){throw automaticError(error);}
+      guard();if(!row||row.id!==id||row.created_by!==owner||row.encrypted_metadata!==snapshot.encryptedMetadata||row.salida_identity_tag!==identityTag||row.salida_content_tag!==contentTag||row.salida_version!==claim.version)throw new Error('No se confirmó la versión de la salida. Reintenta sin cambiar el PDF.');
+      const saved=await decryptedRecord(row,key);guard();salidaSnapshots.set(id,{revision:row.encrypted_metadata,value:{manifest,identityTag,contentTag,documentTag}});legacyInventory=null;clearPending();saved.automaticAction=claim.action;
+      window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return saved;
+    }finally{if(data)data.fill(0);if(snapshot){if(snapshot.pdf)snapshot.pdf.fill(0);if(snapshot.excel)snapshot.excel.fill(0);snapshot.pdf=snapshot.excel=null;}}
+  }
+
   async function record(options) {
     const viewGeneration = window.TrazaUI ? window.TrazaUI.generation : null;
     const account = await ready();
@@ -650,6 +763,7 @@
       if (input) input.focus();
       throw new Error("Inicia sesión en la auditoría antes de descargar el Excel.");
     }
+    if(!options.movementId&&(!options.importedDocument||(options.importedDocument.kind==='salida'&&options.importConfirmed)))return recordAutomaticSalida(options,account,viewGeneration);
     const id = String(options.idempotencyKey || newIdempotencyKey()).toLowerCase();
     if (!UUID.test(id)) throw new Error("El identificador de esta descarga no es válido. Vuelve a cargar el PDF.");
     const epoch = generation;
@@ -1515,6 +1629,7 @@
     const key = master;
     (async function(){
       try{
+        if(record.salida_identity_tag){await renderSalidaHistory(view,detail,record,key,guard,result,preview.element);return;}
         const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=eq.'+record.id+'&select=*&order=created_at.asc,id.asc',{signal:detail.controller.signal});guard();
         if(!Array.isArray(rows)||!rows.length)return;
         const linked=node('section',undefined,'linked-records');linked.append(node('h3','Registros vinculados'),node('p','Copias y versiones anteriores confirmadas de la misma operación. Se conservan sus documentos y fechas originales.','audit-muted'));
@@ -1547,6 +1662,71 @@
     })();
   }
 
+  const versionValue=value=>value===null||value===undefined||value===''?'No detectado':typeof value==='number'?value.toLocaleString('es-PA',{maximumFractionDigits:8}):String(value);
+  function appendVersionChanges(target,changes){
+    const list=node('ul',undefined,'salida-change-list');
+    target.append(node('p',changes.added.length+' productos agregados · '+changes.removed.length+' eliminados · '+changes.changed.length+' modificados · '+changes.unchanged+' sin cambios.'));
+    for(const added of changes.added)list.append(node('li','Agregado: '+(added.descripcion||added.ref||added.codigo)+' · Cantidad '+versionValue(added.salidas_unidades)));
+    for(const removed of changes.removed)list.append(node('li','Eliminado: '+(removed.descripcion||removed.ref||removed.codigo)+' · Cantidad '+versionValue(removed.salidas_unidades)));
+    for(const change of changes.changed)for(const field of change.fields)list.append(node('li',(change.after.descripcion||change.after.ref||change.after.codigo)+' · '+field.label+': '+versionValue(field.before)+' → '+versionValue(field.after)+(field.delta!==null?' ('+(field.delta>0?'+':'')+versionValue(field.delta)+')':'')));
+    for(const field of changes.document)list.append(node('li',field.label+': '+versionValue(field.before)+' → '+versionValue(field.after)));
+    target.append(list);
+  }
+  async function renderSalidaHistory(view,detail,current,key,guard,result,before){
+    const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&salida_identity_tag=eq.'+current.salida_identity_tag+'&select=*&order=salida_version.asc,created_at.asc,id.asc',{signal:detail.controller.signal});guard();
+    const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});guard();const names=new Map(authors.map(r=>[r.user_id,r.username]));
+    const records=await Promise.all(rows.map(r=>decryptedRecord(r,key)));guard();
+    const section=node('section',undefined,'salida-version-history');section.append(node('h3','Historial de versiones y modificaciones'));
+    const grouped=new Map();for(const record of records){if(!grouped.has(record.salida_version))grouped.set(record.salida_version,[]);grouped.get(record.salida_version).push(record);}
+    const representatives=new Map();for(const [version,items]of grouped)representatives.set(version,items.find(r=>r.id===current.id)||items[0]);
+    for(const [version,items]of [...grouped].sort((a,b)=>a[0]-b[0])){
+      const record=representatives.get(version),box=node('details',undefined,'salida-version'),summary=node('summary','Versión '+version+(record.id===current.id?' · Actual':version===1?' · Original':'')),content=node('div'),when=formatWhen(record.created_at);
+      box.append(summary,node('p','@'+(names.get(record.created_by)||'Autor no disponible')+' · '+when.date+' '+when.time,'audit-muted'),content);
+      for(const item of items){const files=node('div',undefined,'audit-documents');files.append(node('span',items.length>1?'Registro '+formatWhen(item.created_at).date+' '+formatWhen(item.created_at).time:'Documentos originales','audit-muted'),documentButton(item,'pdf','Guardar PDF de versión '+version,result,view,detail),documentButton(item,'excel','Guardar Excel de versión '+version,result,view,detail));box.append(files);}
+      let loaded=false,loading=false;
+      box.addEventListener('toggle',async()=>{
+        if(!box.open||loaded||loading)return;loading=true;content.replaceChildren(node('p','Leyendo los productos y comparando la versión…','audit-muted'));
+        try{
+          const snapshot=await readSalidaSnapshot(record,key,guard,detail.controller.signal);guard();const data=snapshot.manifest;
+          const quantities=data.rows.map(r=>r.salidas_unidades),units=quantities.every(Number.isFinite)?quantities.reduce((a,b)=>a+b,0):null;
+          content.replaceChildren(node('p',data.rows.length+' productos · '+versionValue(units)+' unidades · Fecha de factura: '+versionValue(data.info.fecha),'audit-muted'));
+          const previous=representatives.get(version-1);
+          if(previous){
+            const prior=await readSalidaSnapshot(previous,key,guard,detail.controller.signal);guard();
+            content.append(node('p','Cambios respecto a la versión '+(version-1),'audit-muted'));appendVersionChanges(content,window.SalidaVersions.compare(prior.manifest,data));
+          }else content.append(node('p','Salida original. Las modificaciones siguientes se muestran en sus versiones.','audit-muted'));
+          if(record.id!==current.id){
+            const compare=button('Comparar con versión actual',true),comparison=node('div',undefined,'salida-current-comparison');
+            compare.addEventListener('click',async()=>{
+              compare.disabled=true;comparison.replaceChildren(node('p','Comparando con la versión actual…','audit-muted'));
+              try{const latest=await readSalidaSnapshot(current,key,guard,detail.controller.signal);guard();comparison.replaceChildren(node('p','Versión '+version+' → Versión '+current.salida_version+' (actual)','audit-muted'));appendVersionChanges(comparison,window.SalidaVersions.compare(data,latest.manifest));}
+              catch(error){try{guard();comparison.replaceChildren(node('p','No se pudo comparar. '+errorText(error),'audit-muted'));}catch(_){}}
+              finally{compare.disabled=false;}
+            });content.append(compare,comparison);
+          }
+          const wrap=node('div',undefined,'audit-table-wrap'),table=node('table',undefined,'audit-table'),head=node('thead'),tr=node('tr'),body=node('tbody');
+          const columns=[['codigo','Código de barras'],['descripcion','Descripción'],['ref','Referencia'],['salidas_unidades','Cantidad'],['costo','Costo (USD)'],['pventa','P/Venta (USD)'],['iv','I.V.'],['salidas_total','Importe']];
+          for(const [,label]of columns){const th=node('th',label);th.scope='col';tr.append(th);}head.append(tr);
+          for(const product of data.rows){const row=node('tr');for(const [field,label]of columns){const cell=node('td',versionValue(product[field]));cell.dataset.label=label;row.append(cell);}body.append(row);}table.append(head,body);wrap.append(table);content.append(wrap);loaded=true;
+        }catch(error){try{guard();content.replaceChildren(node('p','No se pudo comprobar esta versión. '+errorText(error),'audit-muted'));}catch(_){} }
+        finally{loading=false;}
+      });
+      section.append(box);
+    }
+    guard();detail.panel.insertBefore(section,before);
+  }
+  async function openRecordedSalida(id){
+    if(!UUID.test(String(id)))throw new Error('Salida inválida.');const epoch=generation,key=master;await approvedMember(epoch,key);priceGuard(epoch,key);
+    window.TrazaUI.navigate('archive');const view=archiveView;if(!view)throw new Error('No se pudo abrir el Archivo.');await view.initialLoad;assertView(view);
+    const guard=()=>{priceGuard(epoch,key,view.controller.signal);assertView(view);};
+    const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&id=eq.'+id+'&select=*&limit=2',{signal:view.controller.signal});guard();if(rows.length!==1)throw new Error('La salida no está disponible.');
+    const record=await decryptedRecord(rows[0],key),authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});guard();
+    const source=await readSalidaSnapshot(record,key,guard,view.controller.signal);guard();const units=source.manifest.rows.map(r=>r.salidas_unidades),complete=units.every(Number.isFinite);
+    record.unitCheck={state:complete?'verified':'unverified',originalUnits:record.total_units,originalRowCount:record.row_count,documentNumber:source.manifest.printedNumber,invoiceDate:source.manifest.info.fecha,message:complete?'':'Hay unidades sin detectar.',changed:complete&&units.reduce((a,b)=>a+b,0)!==record.total_units};record.row_count=source.manifest.rows.length;if(complete)record.total_units=units.reduce((a,b)=>a+b,0);
+    openDetail(view,record,authors.find(a=>a.user_id===record.created_by)?.username,document.getElementById('audit-tab'));
+    view.detail.panel.insertBefore(node('p','Esta salida ya se encuentra registrada y no presenta cambios. Se ha abierto el registro existente.','audit-muted'),view.detail.panel.children[1]);
+  }
+
   function renderAuditPage() {
     const page = document.getElementById("audit-page");
     if (!page) return;
@@ -1564,7 +1744,7 @@
     newOutput.addEventListener("click", function () { if (window.TrazaUI) window.TrazaUI.navigate("converter"); else location.href = "index.html#nueva-salida"; });
     header.append(heading, newOutput);
     if(status().user.role==='admin'){
-      const review=button('Revisar duplicados',true);review.id='review-duplicates';review.addEventListener('click',()=>openDuplicateReview(review));heading.append(review);
+      const tools=node('details'),label=node('summary','Herramientas de revisión');tools.append(label);const review=button('Revisar duplicados',true);review.id='review-duplicates';review.addEventListener('click',()=>openDuplicateReview(review));tools.append(review);heading.append(tools);
     }
     panel.append(header);
     const form = node("form", undefined, "audit-form audit-search");
@@ -1638,6 +1818,7 @@
       totalText.textContent = unitsText.textContent = "";
       submit.disabled = clear.disabled = refresh.disabled = true;
       try {
+        try{await consolidateHistoricalSalidas(guard,controller.signal);guard();}catch(error){guard();feedback(result,'Hay documentos pendientes de consolidación automática. '+errorText(automaticError(error)),true);}
         let path = "/rest/v1/mega_audit_records?workspace_id=eq." + CONFIG.workspace + "&select=*&order=created_at.desc,id.desc&limit=" + PAGE_SIZE + "&offset=" + ((archiveFilters.page - 1) * PAGE_SIZE);
         if (archiveFilters.query) {
           const tag = await key.blindIndex(archiveFilters.query);
@@ -1729,6 +1910,7 @@
               cells[0].append(node("strong", documentLabel(record)));
               if(record.imported_document)cells[0].append(node('small',record.import_reviewed_by?'Lectura aprobada':'Pendiente de aprobación','audit-muted'));
               if(record.operation_kind==='separate')cells[0].append(node('span','Movimiento distinto','audit-muted'));
+              if(record.salida_version>0)cells[0].append(node('small','Versión '+record.salida_version+(record.salida_version>1?' · Actualizada':' · Actual'),'salida-version-badge'));
               cells[3].textContent = unitsTextFor(record);
               cells[3].dataset.unitState = "checking";
               unitCells.push({ record, cell: cells[3] });
@@ -1849,7 +2031,7 @@
       });
       quick.append(shortcut);
     }
-    loadRecords();
+    view.initialLoad=loadRecords();
   }
   function recordSignature(rows){return JSON.stringify(rows.map(row=>[row.id,row.encrypted_metadata,row.duplicate_of,row.operation_kind,row.reviewed_at]));}
   function documentLabel(record){const kind=record.document_kind||'salida';return ({salida:'Salida',factura:'Factura',pedido:'Pedido',otro:'Documento'}[kind]||'Documento')+' '+record.salida_numero;}
@@ -2043,7 +2225,7 @@
           } else {
             feedback(notice,'Preparando la instantánea de datos…',false);
             const snapshot=await request('/rest/v1/rpc/mega_audit_backup_snapshot',{method:'POST',body:{p_workspace_id:CONFIG.workspace},signal:controller.signal});guard();
-            const sources=await Promise.all(['audit-crypto.js?v=shared-history-1','audit-backup.js?v=1'].map(async path=>{
+            const sources=await Promise.all(['audit-crypto.js?v=shared-history-1','audit-backup.js?v=2'].map(async path=>{
               const response=await fetch(path,{signal:controller.signal,credentials:'omit',redirect:'error'});if(!response.ok)throw new Error('No se pudo preparar la herramienta de recuperación.');return response.text();
             }));guard();
             const result=await window.AuditBackup.save({folder,password:secret,snapshot,key,recovery:recoveryKey,guard,progress,
@@ -2137,6 +2319,10 @@
     const epoch = generation;
     assertAccount(epoch);
     if (!status().authenticated) throw new Error("Inicia sesión para consultar productos.");
+    if(!(options&&options.light)){
+      const key=master,guard=()=>priceGuard(epoch,key,signal);
+      try{await consolidateHistoricalSalidas(guard,signal);}catch(error){guard();if(!['PGRST202','PGRST204','42P01','42703'].includes(error.code))throw error;}
+    }
     const result = [];
     for (let offset = 0; ; offset += 500) {
       let rows;
@@ -2359,7 +2545,7 @@
     // Tickets contain ciphertext and official IDs only; no products, keys or tokens.
     return window.MobileCatalog.cache('query-pending|'+CONFIG.workspace+'|'+session.user.id+'|'+master.fingerprint);
   }
-  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,
+  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,openRecordedSalida,
     queries: Object.freeze({ticket:queryTicket,add:queryAdd,list:queryList,queue:queryQueue}),
     mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });

@@ -288,3 +288,10 @@ tbody tr:hover td { background: #f3f8f5; }
   .traza-archive-panel > .audit-form > .audit-button { width: auto; flex: 1; }
   .traza-archive-panel > .traza-quick-filters { padding: 4px 16px 16px; }
 }
+.salida-version-badge{display:block;width:fit-content;margin-top:5px;padding:3px 7px;border-radius:6px;background:#e7f4ef;color:#17674f;font-size:11px;font-weight:600}
+.salida-version-history{margin-top:16px;border-top:1px solid #dbe6e2;padding-top:14px}
+.salida-version{padding:12px 0;border-bottom:1px solid #e2ebe7}
+.salida-version>summary{cursor:pointer;font-weight:650}
+.salida-version .audit-documents{margin-top:10px;flex-wrap:wrap}
+.salida-change-list{padding-left:20px;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.salida-version .audit-table-wrap{max-height:400px;overflow:auto;margin-top:12px}

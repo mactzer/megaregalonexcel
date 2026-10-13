@@ -51,6 +51,18 @@ test('backup: real encryption, exact offline restoration, complete data and key,
     const previous=await Backup.open(f.folder,PASSWORD,undefined,undefined,true);assert.equal(previous.decoded.records.length,1);
   }finally{await f.close();}
 });
+test('backup: automatic salida identity and full version pointers survive encrypted offline recovery',async()=>{
+ const f=await fixture();try{
+  await f.add(2);const [old,current]=f.snapshot.tables.mega_audit_records,tag='a'.repeat(64);
+  Object.assign(old,{salida_identity_tag:tag,salida_content_tag:'b'.repeat(64),salida_version:1,salida_previous_id:null,duplicate_of:current.id});
+  Object.assign(current,{salida_identity_tag:tag,salida_content_tag:'c'.repeat(64),salida_version:2,salida_previous_id:old.id,duplicate_of:null});
+  f.snapshot.tables.mega_salidas=[{workspace_id:WS,identity_tag:tag,current_record_id:current.id,current_version:2}];
+  await Backup.save(f.options);const opened=await Backup.open(f.folder,PASSWORD);assert.deepEqual(opened.manifest.snapshot.tables,f.snapshot.tables);
+  const out=await f.folder.getDirectoryHandle('version-restored',{create:true}),result=await Backup.restore(f.folder,PASSWORD,out);
+  const recovered=JSON.parse(await fs.readFile(path.join(f.root,'version-restored',result.folder,'datos-recuperados.json'),'utf8'));
+  assert.deepEqual(recovered.snapshot.tables,f.snapshot.tables);assert.equal(result.files,4);assert.equal((await Backup.save(f.options)).downloaded,0);
+ }finally{await f.close();}
+});
 test('backup: wrong password and different workspace do not change the prior valid copy',async()=>{
  const f=await fixture();try{await Backup.save(f.options);const before=await fs.readFile(path.join(f.root,'respaldo.megacontrol.json'));
   await assert.rejects(Backup.save({...f.options,password:'Contraseña equivocada ficticia'}),/contraseña/);
