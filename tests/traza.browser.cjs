@@ -154,19 +154,19 @@ async function fictionalPrice(cents,version=1){
  const code='0001234567890',tag=await fixture.master.productIndex(code),encrypted=await fixture.master.encrypt(new TextEncoder().encode(JSON.stringify({code,cents})),`product-price-v1|${tag}|${version}`);
  return {workspace_id:WORKSPACE,product_tag:tag,encrypted_price:Buffer.from(encrypted).toString('base64'),version,updated_by:OWNER,updated_at:'2026-10-10T03:00:00.000Z'};
 }
-test('upgrade details: mobile and tablet open immediately above the list, close and Escape preserve scroll; desktop keeps its panel',async()=>{
+test('upgrade details: large desktop dialog and full-screen phone keep actions visible, preserve scroll and close with Escape',async()=>{
  for(const width of [390,820,1440]){
   const h=await harness({viewport:{width,height:900}});try{
    h.state.records=h.state.records.filter((_,i)=>i!==1).slice(0,9);await login(h.page);
    const opener=h.page.getByRole('button',{name:/^Abrir detalle de salida /}).last();await opener.scrollIntoViewIfNeeded();await opener.evaluate(e=>window.__detailOpener=e);const before=await h.page.evaluate(()=>window.scrollY);
    await opener.click();await h.page.locator('#traza-document-detail').waitFor();
-   if(width<1151){assert.equal(await h.page.locator('.traza-detail-dialog[open]').count(),1);const box=await h.page.locator('#traza-document-title').boundingBox();assert.ok(box.y>=0&&box.y<900);assert.equal(await h.page.getByRole('button',{name:'Cerrar detalle',exact:true}).isVisible(),true);}
-   else assert.equal(await h.page.locator('.traza-detail-dialog').count(),0);
+   assert.equal(await h.page.locator('.traza-detail-dialog[open]').count(),1);const box=await h.page.locator('.traza-detail-dialog').boundingBox();assert.ok(box.y>=0&&box.y<900);assert.equal(await h.page.getByRole('button',{name:'Cerrar detalle',exact:true}).isVisible(),true);if(width===1440)assert.ok(box.width>=1100);if(width===390){assert.equal(Math.round(box.width),390);assert.equal(Math.round(box.height),900);}
+   for(const name of ['Guardar PDF','Guardar Excel'])assert.equal(await h.page.locator('#traza-document-detail').getByRole('button',{name,exact:true}).isVisible(),true);assert.equal(await h.page.locator('#traza-document-detail').getByRole('button',{name:/Editar Excel/}).isVisible(),true);
    assert.match(await h.page.locator('#traza-document-detail').innerText(),/Fecha de factura/);
    if(width===390)await h.page.screenshot({path:path.join(OUTPUT,'archive-mobile-modal.png')});
    await h.page.getByRole('button',{name:'Cerrar detalle',exact:true}).click();await h.page.locator('#traza-document-detail').waitFor({state:'detached'});
    assert.ok(Math.abs(await h.page.evaluate(()=>window.scrollY)-before)<2);assert.equal(await h.page.evaluate(()=>document.activeElement===window.__detailOpener),true);
-   if(width<1151){await opener.click();await h.page.keyboard.press('Escape');await h.page.locator('.traza-detail-dialog').waitFor({state:'detached'});assert.ok(Math.abs(await h.page.evaluate(()=>window.scrollY)-before)<2);}
+   await opener.click();await h.page.keyboard.press('Escape');await h.page.locator('.traza-detail-dialog').waitFor({state:'detached'});assert.ok(Math.abs(await h.page.evaluate(()=>window.scrollY)-before)<2);
    await checkNoOverflow(h.page);
   }finally{await h.close();}
  }
@@ -217,7 +217,7 @@ test('upgrade operations: double save, changed export and another user reuse one
   assert.equal(created.encrypted_metadata,originalMetadata);assert.deepEqual(a.state.storage.get(`${WORKSPACE}/${OWNER}/${created.id}/pdf.bin`),originalPdf);
   await b.page.locator('#traza-document-detail').waitFor({state:'visible'});await b.page.evaluate(()=>TrazaUI.navigate('converter'));await b.page.locator('#new-movement').click();await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);assert.equal(b.state.records.length,3);assert.equal(b.state.records.filter(r=>r.operation_kind==='separate').length,1);
   await downloadAction(b,()=>b.page.locator('#export-button').click());assert.equal(b.state.recordCalls,1);
-  await a.page.evaluate(()=>TrazaUI.navigate('archive'));await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await a.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
+  if(await a.page.locator('.traza-detail-dialog[open]').count())await a.page.keyboard.press('Escape');await a.page.evaluate(()=>TrazaUI.navigate('archive'));await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await a.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
   for(const socket of a.state.sockets)for(let n=0;n<2;n++)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table:'mega_audit_records',record:{workspace_id:WORKSPACE}}}}));
   await a.page.getByRole('button',{name:'Actualizar',exact:true}).click();await waitUnits(a.page);assert.equal(await a.page.locator('.audit-table tbody tr').count(),2);
  }finally{await a.close();await b.close();}
@@ -241,7 +241,7 @@ test('legacy review before automatic migration: byte verification and explicit a
   const candidate=h.page.locator('.duplicate-record').last();await candidate.locator('input:not([type=checkbox])').fill('Mismo documento y misma operación confirmada por el administrador.');await candidate.locator('input[type=checkbox]').check();await candidate.getByRole('button',{name:'Vincular como duplicado',exact:true}).click();await candidate.getByText('Duplicado vinculado.',{exact:false}).waitFor();
   const linked=h.state.records.find(row=>row.duplicate_of);assert.ok(linked);assert.equal(h.state.records.length,3);assert.deepEqual(h.state.storage,storage);
   await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
-  await h.page.getByRole('button',{name:'Abrir detalle de salida 00123',exact:true}).click();await h.page.locator('.linked-records').waitFor();
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 00123',exact:true}).click();await openHistory(h.page);await h.page.locator('.linked-records').waitFor();
   await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);const saved=await h.page.evaluate(()=>window.__picker.files[0]);assert.deepEqual(Buffer.from(saved.bytes),fixture.pdf);assert.equal(h.state.recordCalls,0);
  }finally{await h.close();}
 });
@@ -263,11 +263,11 @@ for(const viewport of [{width:1440,height:1000},{width:390,height:844}])test('au
   await automaticSalidaInput(h,{number:'1050',quantity:'10',cost:'5.00',price:'9.99',printDate:'20/10/2026',variant:'REIMPRESION FICTICIA',reverseRows:true,description:'Producto   ficticio de descripcion completa'});await downloadAction(h,()=>h.page.locator('#export-button').click());await h.page.locator('#traza-document-detail').waitFor({state:'visible'});assert.match(await h.page.locator('#traza-document-detail').innerText(),/no presenta cambios/);assert.equal(h.state.recordCalls,1);assert.equal(h.state.records.length,1);assert.deepEqual(h.state.storage,files);
   await automaticSalidaInput(h,{number:'1050',quantity:'12',cost:'7.00',price:'8.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.records.length,2);const current=h.state.records.find(r=>!r.duplicate_of);assert.equal(current.salida_version,2);assert.equal(original.duplicate_of,current.id);
   await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);assert.match(await h.page.locator('.salida-version-badge').innerText(),/Versión 2.*Actualizada/);
-  await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();await h.page.locator('.salida-version').last().locator('summary').click();
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await openHistory(h.page);await h.page.locator('.salida-version-history').waitFor();await h.page.locator('.salida-version').last().locator('summary').click();
   const changed=h.page.locator('.salida-version').last().locator('.salida-change-card[data-product-code="0001234567890"]');await changed.waitFor();
   assert.equal(await changed.locator('[data-field=salidas_unidades] .salida-before-value').innerText(),'10');assert.equal(await changed.locator('[data-field=salidas_unidades] .salida-after-value').innerText(),'12');assert.equal(await changed.locator('.salida-quantity-delta').innerText(),'+2');
   assert.equal(await changed.locator('[data-field=costo] .salida-before-value').innerText(),'USD 5.00');assert.equal(await changed.locator('[data-field=costo] .salida-after-value').innerText(),'USD 7.00');assert.equal(await changed.locator('[data-field=pventa] .salida-after-value').innerText(),'USD 8.99');
-  await h.page.reload();await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
+  await h.page.reload();await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);await h.page.getByRole('button',{name:'Abrir detalle de salida 1050',exact:true}).click();await openHistory(h.page);await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
   await h.page.locator('.salida-version').first().locator('summary').click();await h.page.locator('.salida-version').first().getByRole('button',{name:'Comparar con versión actual',exact:true}).click();await h.page.locator('.salida-current-comparison .salida-change-list').waitFor();assert.equal(await h.page.locator('.salida-current-comparison .salida-change-card[data-product-code="0001234567890"] [data-field=salidas_unidades] .salida-after-value').innerText(),'12');
   await automaticSalidaInput(h,{number:'1050',quantity:'10',cost:'5.00',price:'9.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());await h.page.locator('#traza-document-detail').waitFor({state:'visible'});assert.equal(h.state.records.length,2);assert.equal(h.state.records.find(r=>!r.duplicate_of).id,current.id);assert.equal(h.state.storage.size,4);
  }finally{await h.close();}
@@ -277,7 +277,7 @@ for(const width of [1440,390])test('version history '+width+'px: grouped before/
   h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await automaticSalidaInput(h,{number:'1090',quantity:'10',cost:'0.00',price:'9.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());
   const original=h.state.records[0],cipher=original.encrypted_metadata,files=new Map(h.state.storage);
   await automaticSalidaInput(h,{number:'1090',quantity:'12',cost:'5.35',price:'8.99',groupedUnits:true,omitExempt:true});await downloadAction(h,()=>h.page.locator('#export-button').click());
-  await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1090',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();
+  await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Abrir detalle de salida 1090',exact:true}).click();await openHistory(h.page);await h.page.locator('.salida-version-history').waitFor();
   const version=h.page.locator('.salida-version').last();assert.match(await version.locator('.salida-version-meta').innerText(),/@administrador.*12\/10\/2026/s);await version.locator('summary').first().click();await version.locator('.salida-change-card').first().waitFor();
   assert.equal(await version.locator('.salida-version-fact').filter({hasText:'Fecha de factura'}).innerText(),'Fecha de factura\n08/10/2026');
   for(const [kind,count]of [['changed','1'],['added','2'],['removed','1'],['unchanged','0']])assert.equal(await version.locator('.salida-change-metric[data-kind='+kind+'] strong').innerText(),count);
@@ -292,10 +292,30 @@ for(const width of [1440,390])test('version history '+width+'px: grouped before/
   await version.getByRole('button',{name:'Guardar PDF de versión 2',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);const saved=await h.page.evaluate(()=>window.__picker.files[0]);assert.deepEqual(Buffer.from(saved.bytes),fakePdf({number:'1090',quantity:'12',cost:'5.35',price:'8.99',groupedUnits:true,omitExempt:true}));assert.equal(h.state.recordCalls,2);
  }finally{await h.close();}
 });
+for(const width of [1440,390])test('detail tabs '+width+'px: lazy history, keyboard navigation, exact downloads and editing from either tab keep one registered output',async()=>{
+ const h=await harness({viewport:{width,height:900}});try{
+  h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await automaticSalidaInput(h,{number:'1091',quantity:'10',cost:'5.00',price:'9.99'});await downloadAction(h,()=>h.page.locator('#export-button').click());
+  const options={number:'1091',quantity:'12',cost:'7.00',price:'8.99'};await automaticSalidaInput(h,options);await downloadAction(h,()=>h.page.locator('#export-button').click());await h.page.evaluate(()=>TrazaUI.navigate('archive'));
+  const before=h.state.requests.length;await h.page.getByRole('button',{name:'Abrir detalle de salida 1091',exact:true}).click();await h.page.getByText('Página 1 de 1',{exact:true}).waitFor();
+  const panel=h.page.locator('#traza-document-detail'),documentTab=panel.getByRole('tab',{name:'Documento',exact:true}),historyTab=panel.getByRole('tab',{name:'Historial de versiones',exact:true});
+  assert.equal(await documentTab.getAttribute('aria-selected'),'true');assert.equal(h.state.requests.slice(before).filter(r=>r.pathname==='/rest/v1/mega_audit_records'&&r.search.includes('salida_identity_tag=eq.')).length,0,'Opening the document does not read version history');
+  const pdfReads=()=>h.state.requests.filter(r=>r.pathname.startsWith('/storage/')&&r.method==='GET').length;const initialPdfReads=pdfReads();
+  await documentTab.focus();await h.page.keyboard.press('ArrowRight');await h.page.locator('#traza-detail-pane-history[aria-busy=false]').waitFor();assert.equal(await historyTab.getAttribute('aria-selected'),'true');assert.equal(await historyTab.evaluate(e=>e===document.activeElement),true);
+  const version=panel.locator('.salida-version').last();await version.locator('summary').first().click();await version.locator('.salida-change-card').first().waitFor();
+  for(const name of ['Guardar PDF','Guardar Excel'])assert.equal(await panel.getByRole('button',{name,exact:true}).isVisible(),true);
+  await h.page.screenshot({path:path.join(OUTPUT,'detail-history-tab-'+width+'.png')});const historyRequests=h.state.requests.length;
+  await historyTab.focus();await h.page.keyboard.press('ArrowLeft');assert.equal(await documentTab.getAttribute('aria-selected'),'true');await panel.locator('[data-testid=pdf-preview]').waitFor({state:'visible'});await openHistory(h.page);assert.equal(h.state.requests.length,historyRequests);assert.equal(pdfReads(),initialPdfReads,'Tab changes reuse the existing PDF and parsed version content');
+  const record=h.state.records.find(r=>!r.duplicate_of),excelCipher=h.state.storage.get(`${WORKSPACE}/${OWNER}/${record.id}/excel.bin`),excel=await fixture.master.decrypt(new Uint8Array(excelCipher),record.id+'|excel');
+  try{const downloaded=await downloadAction(h,()=>panel.getByRole('button',{name:'Guardar Excel',exact:true}).click());assert.deepEqual(downloaded.bytes,Buffer.from(excel));}finally{excel.fill(0);}
+  assert.equal(await h.page.locator('.traza-detail-dialog #traza-save-notice').count(),1);await h.page.getByRole('button',{name:'Cerrar confirmación de guardado',exact:true}).click();
+  await panel.getByRole('button',{name:'Guardar PDF',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);const copy=await downloadAction(h,()=>h.page.getByRole('button',{name:'Descargar una copia',exact:true}).click());assert.deepEqual(copy.bytes,fakePdf(options));await h.page.getByRole('button',{name:'Cerrar confirmación de guardado',exact:true}).click();
+  await documentTab.click();await h.page.screenshot({path:path.join(OUTPUT,'detail-document-tab-'+width+'.png')});await openHistory(h.page);await panel.getByRole('button',{name:/Editar Excel/}).click();await h.page.locator('#export-button:not([disabled])').waitFor();assert.equal(await h.page.locator('#salida-number').inputValue(),'1091');assert.equal(await h.page.locator('#salida-number').evaluate(e=>e.readOnly),true);assert.equal(await h.page.locator('.traza-detail-dialog').count(),0);assert.equal(h.state.records.length,2);assert.equal(h.state.recordCalls,2);
+ }finally{await h.close();}
+});
 test('automatic salidas: historical corrected and reprinted PDFs consolidate before listing and current scanner prices follow that single source',async()=>{
  const h=await harness();try{
   const {old,corrected}=await correctedSalidaFixture(h);const files=new Map(h.state.storage);await login(h.page);await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).waitFor();assert.equal(await h.page.locator('.audit-table tbody tr').count(),1);assert.equal(old.row.duplicate_of,corrected.row.id);assert.equal(corrected.row.salida_version,2);assert.deepEqual(h.state.storage,files);assert.equal(h.state.recordCalls,0);
-  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await openHistory(h.page);await h.page.locator('.salida-version-history').waitFor();assert.equal(await h.page.locator('.salida-version').count(),2);
  }finally{await h.close();}
 });
 test('automatic salidas: a phone opened directly consolidates legacy corrections before preparing its product prices',async()=>{
@@ -330,7 +350,7 @@ test('legacy manual versions before automatic migration: costs and quantities ar
   await previous.locator('input:not([type=checkbox])').fill('La primera versión no tenía costos; esta factura fue corregida.');await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();
   assert.equal(old.row.duplicate_of,corrected.row.id);assert.deepEqual(h.state.storage,storage);assert.equal(h.state.records.length,2);
   await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===1);assert.match(await h.page.locator('.audit-table tbody tr').innerText(),/1,152/);
-  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await h.page.locator('.linked-records').waitFor();await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);assert.deepEqual(Buffer.from((await h.page.evaluate(()=>window.__picker.files[0])).bytes),old.pdf);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await openHistory(h.page);await h.page.locator('.linked-records').waitFor();await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);assert.deepEqual(Buffer.from((await h.page.evaluate(()=>window.__picker.files[0])).bytes),old.pdf);
   assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
  }finally{await h.close();}
 });
@@ -1067,7 +1087,8 @@ test('converter incomplete quantities: prevents recording or downloading a parti
   await h.page.locator('#export-button').click();await h.page.getByText(/Faltan cantidades en 1 filas/).waitFor();assert.equal(h.state.recordCalls,0);assert.equal(h.state.downloads.length,0);
  }finally{await h.close();}
 });
-async function profile(page) { await page.locator('#app-profile button').first().click(); }
+async function profile(page) { while(await page.locator('.traza-detail-dialog[open]').count())await page.keyboard.press('Escape');await page.locator('#app-profile button').first().click(); }
+async function openHistory(page){await page.getByRole('tab',{name:'Historial de versiones',exact:true}).click();await page.locator('#traza-detail-pane-history[aria-busy=false]').waitFor();}
 async function checkNoOverflow(page) { assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Viewport must not scroll horizontally'); }
 
 async function downloadAction(h, action) {
@@ -1332,8 +1353,7 @@ for (const enlarge of [false, true]) {
       await h.page.getByRole('button', { name: enlarge ? 'Ver PDF ampliado' : 'Ampliar vista previa', exact: true }).click();
       await h.page.waitForFunction(() => window.__previewWaiting);
       if (enlarge) await h.page.keyboard.press('Escape');
-      await profile(h.page);
-      await h.page.getByRole('button', { name: 'Cerrar sesión', exact: true }).click();
+      await h.page.evaluate(()=>window.AuditCloud.mobile.logout());
       assert.equal(await h.page.evaluate(() => window.AuditCloud.status().authenticated), false);
       await h.page.evaluate(() => {
         window.__holdPreview = false;
@@ -1832,7 +1852,7 @@ test('detail: closing a pending PDF restores focus and rejects the late preview'
     assert.equal(await h.page.locator('[data-testid="pdf-preview"]').count(), 0);
     await selected.click();
     await h.page.getByText('Página 1 de 1', { exact: true }).waitFor();
-    await h.page.getByRole('button', { name: 'Limpiar', exact: true }).click();
+    await h.page.keyboard.press('Escape');await h.page.getByRole('button', { name: 'Limpiar', exact: true }).click();
     assert.equal(await h.page.locator('#traza-document-detail').count(), 0);
   } finally { await h.close(); }
 });

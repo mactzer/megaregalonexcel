@@ -148,7 +148,8 @@ tbody tr:hover td { background: #f3f8f5; }
 .audit-cloud-unreadable td { color: #953139; background: #fff7f6; }
 .audit-pagination { font-size: 11px; gap: 12px; }
 .traza-detail { min-width: 0; position: sticky; top: 20px; margin: 0; padding: 21px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); }
-.traza-detail-dialog{border:0;padding:0;width:min(640px,calc(100% - 24px));max-width:none;max-height:calc(100dvh - 24px);border-radius:12px;overscroll-behavior:contain;box-shadow:0 20px 70px #102e2a40}.traza-detail-dialog::backdrop{background:#102e2a80}.traza-detail-dialog .traza-detail{position:static;border:0}.traza-detail-dialog .traza-detail-header{position:sticky;top:-18px;background:#fff;z-index:1;padding:12px 0;margin-top:-12px}.traza-detail-dialog .traza-detail-header button{min-height:44px}
+.traza-detail-dialog { border: 1px solid #dbe5df; padding: 0; width: min(1180px,calc(100vw - 64px)); height: min(920px,calc(100dvh - 48px)); max-width: none; max-height: none; border-radius: 15px; overflow: hidden; box-shadow: 0 24px 90px #102e2a40; }
+.traza-detail-dialog::backdrop { background: #102e2a80; }
 .duplicate-group{margin:16px 0}.duplicate-group select,.duplicate-group input:not([type=checkbox]){width:100%;max-width:100%;min-height:44px}.duplicate-record{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}.duplicate-record label{display:block;font-size:12px;margin:12px 0}.duplicate-record button{margin:5px 8px 5px 0}.duplicate-record input[type=checkbox]{width:auto;min-height:0}.linked-records{margin-top:20px;padding-top:16px;border-top:1px solid var(--line)}
 .traza-detail h2, .traza-detail h3 { margin: 0 0 9px; font-size: 19px; font-weight: 650; letter-spacing: -.02em; }
 .traza-detail .traza-dialog-header { margin-bottom: 20px; }
@@ -388,4 +389,59 @@ tbody tr:hover td { background: #f3f8f5; }
   .salida-products-table td { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 8px; border: 0; padding: 5px 0; overflow-wrap: anywhere; }
   .salida-products-table td::before { content: attr(data-label); color: #748078; font-size: 10px; }
   .salida-products-table td:nth-child(2) { min-width: 0; }
+}
+.traza-detail-dialog .traza-detail { position: static; display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
+.traza-detail-dialog .traza-detail-header { flex-shrink: 0; align-items: center; padding: 20px 24px 13px; margin: 0; background: #fff; }
+.traza-detail-dialog .traza-detail-header h3 { margin: 0; font-size: 23px; line-height: 1.3; }
+.traza-detail-heading { min-width: 0; }
+.traza-detail-heading h3 { overflow-wrap: anywhere; }
+.traza-detail-subtitle { margin: 5px 0 0; color: #66766c; font-size: 11px; }
+.traza-detail-dialog .traza-detail-header > .audit-button { min-height: 40px; padding: 8px 12px; font-size: 11px; }
+.traza-detail-actions { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 8px; padding: 0 24px 16px; }
+.traza-detail-actions .audit-button { min-height: 40px; padding: 9px 14px; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; }
+.traza-detail-actions .is-primary { background: var(--green); color: #fff; border-color: var(--green); }
+.traza-detail-feedback { flex-shrink: 0; padding: 0 24px; max-height: 100px; overflow: auto; }
+.traza-detail-feedback:empty { display: none; }
+.traza-detail-feedback .audit-message { margin: 0 0 12px; font-size: 11px; }
+.traza-detail-tabs { display: flex; flex-shrink: 0; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--line); background: #fff; }
+.traza-detail-tab { padding: 13px 15px; min-height: 46px; border: 0; border-bottom: 3px solid transparent; border-radius: 0; color: #64766b; background: transparent; font-size: 12px; font-weight: 600; cursor: pointer; }
+.traza-detail-tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); }
+.traza-detail-tab:hover { background: #f1f7f3; }
+.traza-detail-tab:focus-visible { outline-offset: -3px; }
+.traza-detail-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 22px 24px; background: #f6f8f7; }
+.traza-detail-body > [role="tabpanel"] { min-width: 0; }
+.traza-detail-dialog .traza-detail-facts { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
+.traza-detail-fact { min-width: 0; padding: 13px 15px; border: 1px solid #e0e7e2; border-radius: 9px; background: #fff; }
+.traza-detail-dialog .traza-detail-facts dt { font-size: 11px; margin-bottom: 6px; }
+.traza-detail-dialog .traza-detail-facts dd { font-size: 13px; font-variant-numeric: tabular-nums; }
+.traza-detail-file-names { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.traza-detail-file-names .traza-document-name { margin: 0; padding: 12px 15px; border: 1px solid #e0e7e2; border-radius: 9px; background: #fff; }
+.traza-detail-file-names .traza-file-name { margin-bottom: 0 !important; }
+.traza-detail-dialog .traza-detail-preview { margin-top: 16px; background: #fff; border-radius: 10px; }
+.traza-detail-dialog .traza-save-notice { position: absolute; right: 18px; bottom: 18px; margin: 0; max-height: 55%; overflow: auto; }
+.traza-detail-history .salida-version-history { margin: 0; padding: 0; border: 0; }
+.traza-detail-history .salida-history-heading h3 { font-size: 17px; margin: 0; }
+.traza-detail-history .linked-records { margin: 0; padding: 0; border: 0; }
+.traza-detail-history .linked-records .traza-document-name { padding: 15px; margin: 12px 0; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+@container salida-history (min-width: 750px) {
+  .salida-change-list { grid-template-columns: repeat(2,minmax(0,1fr)); align-items: start; }
+  .salida-change-card.is-document { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .traza-detail-dialog { inset: 0; margin: 0; width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .traza-detail-dialog .traza-detail-header { padding: max(12px,env(safe-area-inset-top)) 12px 10px; gap: 8px; }
+  .traza-detail-dialog .traza-detail-header h3 { font-size: 20px; }
+  .traza-detail-actions { flex-wrap: nowrap; gap: 6px; padding: 0 12px 12px; }
+  .traza-detail-actions .audit-button { flex: 1; min-width: 0; min-height: 44px; padding: 8px 5px; font-size: 11px; white-space: normal; }
+  .traza-detail-feedback { padding: 0 12px; max-height: 90px; }
+  .traza-detail-tabs { padding: 0 12px; gap: 0; }
+  .traza-detail-tab { flex: 1; padding: 12px 6px; font-size: 11px; }
+  .traza-detail-body { padding: 12px 12px max(18px,env(safe-area-inset-bottom)); }
+  .traza-detail-dialog .traza-detail-facts { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; }
+  .traza-detail-fact { padding: 11px; }
+  .traza-detail-dialog .traza-detail-facts dt { font-size: 10px; }
+  .traza-detail-dialog .traza-detail-facts dd { font-size: 12px; }
+  .traza-detail-file-names { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  .traza-detail-history .salida-history-heading h3 { font-size: 15px; }
+  .traza-detail-dialog .traza-save-notice { left: 12px; right: 12px; bottom: max(12px,env(safe-area-inset-bottom)); width: auto; }
 }

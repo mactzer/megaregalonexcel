@@ -1252,7 +1252,7 @@
     detail.products.textContent = record.row_count.toLocaleString("es-PA");
     const checking = record.unitCheck.state === 'checking';
     if(detail.documentNumber)detail.documentNumber.textContent=record.unitCheck.documentNumber||(checking?'Verificando…':'No disponible en el PDF');
-    if(detail.invoiceDate)detail.invoiceDate.textContent=record.unitCheck.invoiceDate||(checking?'Verificando…':'No disponible en el PDF');
+    if(detail.invoiceDate)detail.invoiceDate.textContent=record.unitCheck.invoiceDate?versionDate(record.unitCheck.invoiceDate):(checking?'Verificando…':'No disponible en el PDF');
     const notes=[];
     if(record.unitCheck.state==='unverified')notes.push(record.unitCheck.message);
     if(record.unitCheck.documentNumber&&record.unitCheck.documentNumber!==record.salida_numero)notes.push('El número guardado difiere del número impreso en el PDF. Revisa el origen; no se modificó el historial.');
@@ -1331,7 +1331,7 @@
         guard();
         feedback(result, message, false);
         if ((destination || kind === "excel") && window.TrazaSavedFile) {
-          const saved = { name: destination ? destination.name || name : name, mime, guard, message };
+          const saved = { name: destination ? destination.name || name : name, mime, guard, message,host:selected&&selected.panel };
           // A folder save can offer a browser copy. The Excel download is
           // already that copy, so keep only its visible confirmation.
           if (destination) saved.data = clear;
@@ -1504,7 +1504,7 @@
     }
 
     function requestRender(force) {
-      if (!active || !page) return;
+      if (!active || !page || scroll.clientWidth<=0) return;
       try { guard(); } catch (_) { return; }
       const size = scroll.clientWidth + ":" + zoom + ":" + (window.devicePixelRatio || 1);
       if (!force && size === requestedSize) return;
@@ -1542,7 +1542,7 @@
         try {
           guard();
           // Restore before the shared dialog's close handler returns focus.
-          detail.panel.append(preview);
+          (detail.previewHost||detail.panel).append(preview);
           updateControls();
           requestRender(true);
         } catch (_) {}
@@ -1578,7 +1578,7 @@
   function openDetail(view, record, officialName, opener) {
     assertView(view);
     disposeDetail(view, false);
-    const panel = node("aside", undefined, "traza-detail audit-panel");
+    const panel = node("section", undefined, "traza-detail audit-panel");
     panel.id = "traza-document-detail";
     panel.setAttribute("aria-labelledby", "traza-document-title");
     const detail = { panel, opener, record, controller: new AbortController(), buffers: new Set(), loadingTask: null, renderTask: null, pdf: null, scrollX: window.scrollX, scrollY: window.scrollY };
@@ -1589,8 +1589,30 @@
     title.id = "traza-document-title";
     const close = button("Cerrar detalle", true);
     close.addEventListener("click", function () { disposeDetail(view, true); });
-    header.append(title, close);
+    const heading=node('div',undefined,'traza-detail-heading');heading.append(title,node('p',record.salida_version?'Versión '+record.salida_version+' · '+(record.duplicate_of?'Anterior':'Actual'):'Documento archivado','traza-detail-subtitle'));header.append(heading, close);
     panel.append(header);
+    const result = node("div",undefined,'traza-detail-feedback');detail.result=result;
+    const actions = node("div", undefined, "traza-detail-actions");
+    actions.setAttribute('role','group');actions.setAttribute('aria-label','Acciones del documento');
+    const edit=editButton(record,result,view,detail);edit.classList.add('is-primary');
+    actions.append(edit,documentButton(record,'excel','Guardar Excel',result,view,detail),documentButton(record,'pdf','Guardar PDF',result,view,detail));panel.append(actions,result);
+    const tabs=node('div',undefined,'traza-detail-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Secciones del detalle');
+    const contents=node('div',undefined,'traza-detail-body'),documentPanel=node('div',undefined,'traza-detail-document'),historyPanel=node('div',undefined,'traza-detail-history');
+    const tabControls=new Map(),tabPanels=new Map([['document',documentPanel],['history',historyPanel]]),tabScroll=new Map();
+    detail.historyHost=historyPanel;detail.previewHost=documentPanel;
+    function activateTab(name,focus){
+      guard();if(detail.activeTab)tabScroll.set(detail.activeTab,contents.scrollTop);for(const [key,control]of tabControls){control.setAttribute('aria-selected',String(key===name));control.tabIndex=key===name?0:-1;tabPanels.get(key).hidden=key!==name;}detail.activeTab=name;contents.scrollTop=tabScroll.get(name)||0;
+      if(focus)tabControls.get(name).focus({preventScroll:true});
+      if(name==='history')loadHistory();
+    }
+    for(const [name,label]of [['document','Documento'],['history','Historial de versiones']]){
+      const control=button(label,true),content=tabPanels.get(name);control.className='traza-detail-tab';control.id='traza-detail-tab-'+name;control.setAttribute('role','tab');control.setAttribute('aria-controls','traza-detail-pane-'+name);control.setAttribute('aria-selected',String(name==='document'));control.tabIndex=name==='document'?0:-1;
+      content.id='traza-detail-pane-'+name;content.setAttribute('role','tabpanel');content.setAttribute('aria-labelledby',control.id);content.tabIndex=0;content.hidden=name!=='document';
+      control.addEventListener('click',()=>activateTab(name,false),{signal:detail.controller.signal});
+      control.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();activateTab(event.key==='Home'?'document':event.key==='End'?'history':name==='document'?'history':'document',true);},{signal:detail.controller.signal});
+      tabControls.set(name,control);tabs.append(control);contents.append(content);
+    }
+    detail.activeTab='document';panel.append(tabs,contents);
     const when = formatWhen(record.created_at);
     const facts = node("dl", undefined, "traza-detail-facts");
     for (const pair of [["Responsable", officialName ? "@" + officialName : "Responsable no disponible"], ["Fecha y hora · Panamá", when.date + " " + when.time], ["Número en el PDF",record.unitCheck.documentNumber||'Verificando…'],["Fecha de factura",record.unitCheck.invoiceDate||'Verificando…'],["Productos", record.row_count.toLocaleString("es-PA")], ["Unidades", unitsTextFor(record)]]) {
@@ -1599,44 +1621,45 @@
       if (pair[0] === "Unidades") detail.units = value;
       if (pair[0] === 'Número en el PDF') detail.documentNumber=value;
       if (pair[0] === 'Fecha de factura') detail.invoiceDate=value;
-      facts.append(node("dt", pair[0]), value);
+      const fact=node('div',undefined,'traza-detail-fact');fact.append(node("dt", pair[0]), value);facts.append(fact);
     }
-    panel.append(facts);
+    documentPanel.append(facts);
     detail.unitsNote = node("p", "", "audit-muted");
-    panel.append(detail.unitsNote);
+    documentPanel.append(detail.unitsNote);
     updateDetailUnits(view, record);
-    const result = node("div");
-    const edit = node("div", undefined, "audit-actions");
-    edit.append(editButton(record, result, view, detail));
-    panel.append(edit, node("p", "Elige las columnas y guarda otra versión del Excel con el PDF ya archivado. Los documentos originales se conservan.", "audit-muted"));
+    const files=node('div',undefined,'traza-detail-file-names');
     for (const kind of ["pdf", "excel"]) {
       const file = node("div", undefined, "traza-document-name");
-      file.append(node("span", kind === "pdf" ? "PDF original" : "Libro de Excel", "audit-muted"), node("strong", kind === "pdf" ? record.pdf_name : record.excel_name, "traza-file-name"), documentButton(record, kind, kind === "pdf" ? "Guardar PDF" : "Guardar Excel", result, view, detail));
-      panel.append(file);
+      file.append(node("span", kind === "pdf" ? "PDF original" : "Excel original", "audit-muted"), node("strong", kind === "pdf" ? record.pdf_name : record.excel_name, "traza-file-name"));files.append(file);
     }
+    documentPanel.append(files);
     const preview = createPdfPreview(detail, record, guard);
-    panel.append(result, preview.element);
-    if (window.matchMedia('(max-width: 1150px)').matches) {
+    documentPanel.append(preview.element);
+    {
       const dialog = node('dialog', undefined, 'traza-detail-dialog'); detail.dialog = dialog;
       detail.restoreOverflow = document.documentElement.style.overflow; document.documentElement.style.overflow = 'hidden';
       dialog.setAttribute('aria-labelledby', title.id); dialog.append(panel); document.body.append(dialog); openDialogs.add(dialog);
       dialog.addEventListener('cancel', event => { event.preventDefault(); disposeDetail(view, true); });
       dialog.addEventListener('close', () => { if (view.detail === detail) disposeDetail(view, true); });
       dialog.showModal();
-    } else { view.layout.append(panel); view.layout.classList.add("has-detail"); }
+    }
     close.focus({ preventScroll: true });
     const epoch = generation;
     const key = master;
-    (async function(){
+    let historyLoading=false,historyLoaded=false;
+    async function loadHistory(){
+      if(historyLoaded||historyLoading)return;historyLoading=true;historyPanel.setAttribute('aria-busy','true');historyPanel.replaceChildren(node('p','Cargando historial de versiones…','audit-muted'));
       try{
-        if(record.salida_identity_tag){await renderSalidaHistory(view,detail,record,key,guard,result,preview.element);return;}
+        if(record.salida_identity_tag){await renderSalidaHistory(view,detail,record,key,guard,result,historyPanel);guard();historyLoaded=true;return;}
         const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=eq.'+record.id+'&select=*&order=created_at.asc,id.asc',{signal:detail.controller.signal});guard();
-        if(!Array.isArray(rows)||!rows.length)return;
+        if(!Array.isArray(rows))throw new Error('No se pudo recuperar el historial.');
+        if(!rows.length){historyPanel.replaceChildren(node('h3','Historial de versiones'),node('p','Esta salida no tiene versiones anteriores.','audit-muted'));historyLoaded=true;return;}
         const linked=node('section',undefined,'linked-records');linked.append(node('h3','Registros vinculados'),node('p','Copias y versiones anteriores confirmadas de la misma operación. Se conservan sus documentos y fechas originales.','audit-muted'));
         for(const row of rows){const original=await decryptedRecord(row,key);guard();const item=node('div',undefined,'traza-document-name');item.append(node('strong','Salida '+original.salida_numero),node('p','Registro '+formatWhen(original.created_at).date+' '+formatWhen(original.created_at).time,'audit-muted'),documentButton(original,'pdf','Guardar PDF vinculado',result,view,detail),documentButton(original,'excel','Guardar Excel vinculado',result,view,detail));linked.append(item);}
-        guard();panel.append(linked);
-      }catch(error){if(!['PGRST204','42703'].includes(error.code)&&epoch===generation&&view.detail===detail)panel.append(node('p','No se pudieron comprobar los registros vinculados. Los documentos permanecen guardados.','audit-muted'));}
-    })();
+        guard();historyPanel.replaceChildren(linked);historyLoaded=true;
+      }catch(error){if(epoch===generation&&view.detail===detail){historyPanel.replaceChildren(node('p','No se pudo cargar el historial. '+errorText(error),'audit-muted'));const retry=button('Reintentar historial',true);retry.addEventListener('click',loadHistory,{signal:detail.controller.signal});historyPanel.append(retry);}}
+      finally{historyLoading=false;if(view.detail===detail)historyPanel.setAttribute('aria-busy','false');}
+    }
     (async function () {
       let clear;
       try {
@@ -1728,7 +1751,7 @@
     for(const [,label]of columns){const cell=node('th',label);cell.scope='col';heading.append(cell);}head.append(heading);
     for(const product of data.rows){const row=node('tr');for(const [field,label]of columns){const cell=node('td',versionFieldValue(field,product[field]));cell.dataset.label=label;row.append(cell);}body.append(row);}table.append(head,body);wrap.append(table);details.append(summary,wrap);target.append(details);
   }
-  async function renderSalidaHistory(view,detail,current,key,guard,result,before){
+  async function renderSalidaHistory(view,detail,current,key,guard,result,container){
     const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&salida_identity_tag=eq.'+current.salida_identity_tag+'&select=*&order=salida_version.asc,created_at.asc,id.asc',{signal:detail.controller.signal});guard();
     const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});guard();const names=new Map(authors.map(r=>[r.user_id,r.username]));
     const records=await Promise.all(rows.map(r=>decryptedRecord(r,key)));guard();
@@ -1770,7 +1793,7 @@
       });
       section.append(box);
     }
-    guard();detail.panel.insertBefore(section,before);
+    guard();container.replaceChildren(section);
   }
   async function openRecordedSalida(id){
     if(!UUID.test(String(id)))throw new Error('Salida inválida.');const epoch=generation,key=master;await approvedMember(epoch,key);priceGuard(epoch,key);
@@ -1781,7 +1804,7 @@
     const source=await readSalidaSnapshot(record,key,guard,view.controller.signal);guard();const units=source.manifest.rows.map(r=>r.salidas_unidades),complete=units.every(Number.isFinite);
     record.unitCheck={state:complete?'verified':'unverified',originalUnits:record.total_units,originalRowCount:record.row_count,documentNumber:source.manifest.printedNumber,invoiceDate:source.manifest.info.fecha,message:complete?'':'Hay unidades sin detectar.',changed:complete&&units.reduce((a,b)=>a+b,0)!==record.total_units};record.row_count=source.manifest.rows.length;if(complete)record.total_units=units.reduce((a,b)=>a+b,0);
     openDetail(view,record,authors.find(a=>a.user_id===record.created_by)?.username,document.getElementById('audit-tab'));
-    view.detail.panel.insertBefore(node('p','Esta salida ya se encuentra registrada y no presenta cambios. Se ha abierto el registro existente.','audit-muted'),view.detail.panel.children[1]);
+    feedback(view.detail.result,'Esta salida ya se encuentra registrada y no presenta cambios. Se ha abierto el registro existente.',false);
   }
 
   function renderAuditPage() {
