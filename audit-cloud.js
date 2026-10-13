@@ -676,7 +676,7 @@
       const salidaTag = await key.blindIndex(String(options.salidaNumero)); guard();
       for (let offset=0; !existingId; offset+=500) {
         let candidates;
-        try { candidates = await request('/rest/v1/mega_audit_records?workspace_id=eq.' + CONFIG.workspace + '&salida_tag=eq.' + salidaTag + '&duplicate_of=is.null&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset=' + offset); }
+        try { candidates = await request('/rest/v1/mega_audit_records?workspace_id=eq.' + CONFIG.workspace + '&salida_tag=eq.' + salidaTag + '&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset=' + offset); }
         catch(error) { throw upgradeError(error); }
         guard(); if (!Array.isArray(candidates)) throw new Error('No se pudo comprobar el origen de la salida.');
         for (const candidate of candidates) {
@@ -1517,7 +1517,7 @@
       try{
         const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=eq.'+record.id+'&select=*&order=created_at.asc,id.asc',{signal:detail.controller.signal});guard();
         if(!Array.isArray(rows)||!rows.length)return;
-        const linked=node('section',undefined,'linked-records');linked.append(node('h3','Registros vinculados'),node('p','Copias confirmadas de la misma operación. Se conservan sus documentos y fechas originales.','audit-muted'));
+        const linked=node('section',undefined,'linked-records');linked.append(node('h3','Registros vinculados'),node('p','Copias y versiones anteriores confirmadas de la misma operación. Se conservan sus documentos y fechas originales.','audit-muted'));
         for(const row of rows){const original=await decryptedRecord(row,key);guard();const item=node('div',undefined,'traza-document-name');item.append(node('strong','Salida '+original.salida_numero),node('p','Registro '+formatWhen(original.created_at).date+' '+formatWhen(original.created_at).time,'audit-muted'),documentButton(original,'pdf','Guardar PDF vinculado',result,view,detail),documentButton(original,'excel','Guardar Excel vinculado',result,view,detail));linked.append(item);}
         guard();panel.append(linked);
       }catch(error){if(!['PGRST204','42703'].includes(error.code)&&epoch===generation&&view.detail===detail)panel.append(node('p','No se pudieron comprobar los registros vinculados. Los documentos permanecen guardados.','audit-muted'));}
@@ -1861,10 +1861,29 @@
       for(let offset=0;;offset+=500){const page=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&duplicate_of=is.null&operation_kind=neq.separate&select=*&order=created_at.asc,id.asc&limit=500&offset='+offset,{signal});priceGuard(epoch,key,signal);if(!Array.isArray(page))throw new Error('Archivo inválido.');rows.push(...page);if(page.length<500)break;}
     }catch(error){throw upgradeError(error);}
     const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});priceGuard(epoch,key,signal);
-    const names=new Map(authors.map(row=>[row.user_id,row.username])),groups=new Map();let next=0,done=0,failed=0;
-    async function worker(){while(next<rows.length){const row=rows[next++];let clear;try{const decoded=await decryptedRecord(row,key);priceGuard(epoch,key,signal);clear=await getDocument(row,'pdf',key,()=>priceGuard(epoch,key,signal),signal);const tag=await key.documentIndex(clear);priceGuard(epoch,key,signal);if(!groups.has(tag))groups.set(tag,[]);groups.get(tag).push({...decoded,username:names.get(row.created_by)||''});}catch(error){priceGuard(epoch,key,signal);failed++;}finally{if(clear)clear.fill(0);}progress({done:++done,total:rows.length,failed});}}
+    const names=new Map(authors.map(row=>[row.user_id,row.username])),groups=new Map(),numbers=new Map(),versions=new Map();let next=0,done=0,failed=0,unverifiedVersions=0;
+    for(const row of rows)if((row.document_kind||'salida')==='salida')numbers.set(row.salida_tag,(numbers.get(row.salida_tag)||0)+1);
+    async function worker(){while(next<rows.length){const row=rows[next++];let clear;try{
+      const decoded=await decryptedRecord(row,key);priceGuard(epoch,key,signal);
+      clear=await getDocument(row,'pdf',key,()=>priceGuard(epoch,key,signal),signal);
+      const tag=await key.documentIndex(clear);priceGuard(epoch,key,signal);
+      const record={...decoded,username:names.get(row.created_by)||'',verifiedDocumentTag:tag};
+      if(decoded.document_kind==='salida'&&numbers.get(row.salida_tag)>1){
+        try{
+          const summary=await window.TrazaConverter.analyzeUnits({data:clear,expectedNumber:decoded.salida_numero,includeCosts:true,signal,assertCurrent:()=>priceGuard(epoch,key,signal)});priceGuard(epoch,key,signal);
+          if(!summary.numberMatches)throw new Error('El número impreso no coincide con el registro.');
+          record.versionSummary=summary;
+          if(!versions.has(decoded.salida_numero))versions.set(decoded.salida_numero,[]);
+          versions.get(decoded.salida_numero).push(record);
+        }catch(error){priceGuard(epoch,key,signal);unverifiedVersions++;}
+      }
+      if(!groups.has(tag))groups.set(tag,[]);groups.get(tag).push(record);
+    }catch(error){priceGuard(epoch,key,signal);failed++;}finally{if(clear)clear.fill(0);}progress({done:++done,total:rows.length,failed});}}
     await Promise.all([worker(),worker()]);priceGuard(epoch,key,signal);
-    return {groups:[...groups].filter(([,records])=>records.length>1).map(([documentTag,records])=>({documentTag,records:records.sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id))})),failed,total:rows.length};
+    const corrected=[...versions].filter(([,records])=>records.length>1&&new Set(records.map(r=>r.verifiedDocumentTag)).size>1).map(([number,records])=>({kind:'version',number,records:records.sort((a,b)=>b.created_at.localeCompare(a.created_at)||a.id.localeCompare(b.id))}));
+    const versionIds=new Set(corrected.flatMap(group=>group.records.map(record=>record.id)));
+    const identical=[...groups].map(([documentTag,records])=>({kind:'identical',documentTag,records:records.filter(record=>!versionIds.has(record.id)).sort((a,b)=>a.created_at.localeCompare(b.created_at)||a.id.localeCompare(b.id))})).filter(group=>group.records.length>1);
+    return {groups:[...corrected,...identical],failed,unverifiedVersions,total:rows.length};
   }
   async function reviewDuplicate(recordId,canonicalId,documentTag,reason,signal){
     const epoch=generation,key=master;await requireAdmin(epoch);priceGuard(epoch,key,signal);
@@ -1880,26 +1899,58 @@
     if(!result||result.id!==recordId||(result.duplicate_of||null)!==canonicalId||result.reviewed_by!==session.user.id||result.encrypted_review!==encrypted)throw new Error('No se confirmó la clasificación. Actualiza antes de reintentar.');
     window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return result;
   }
+  async function reviewVersion(record,canonical,reason,signal,attempt){
+    const epoch=generation,key=master;await requireAdmin(epoch);priceGuard(epoch,key,signal);
+    if(record.id===canonical.id||typeof reason!=='string'||reason.trim().length<8||reason.length>2048)throw new Error('Describe el motivo de la corrección (8 a 2048 caracteres).');
+    if(record.document_kind!=='salida'||canonical.document_kind!=='salida'||record.salida_numero!==canonical.salida_numero)throw new Error('Las versiones deben corresponder a la misma salida.');
+    for(const expected of [record,canonical]){
+      const rows=await request('/rest/v1/mega_audit_records?workspace_id=eq.'+CONFIG.workspace+'&id=eq.'+expected.id+'&select=*&limit=2',{signal});priceGuard(epoch,key,signal);
+      if(rows.length!==1||rows[0].encrypted_metadata!==expected.encryptedMetadata||rows[0].operation_kind==='separate'||(expected.id===canonical.id&&rows[0].duplicate_of))throw new Error('El registro cambió. Repite la revisión.');
+      let data;try{
+        data=await getDocument(rows[0],'pdf',key,()=>priceGuard(epoch,key,signal),signal);
+        if(await key.documentIndex(data)!==expected.verifiedDocumentTag)throw new Error('El PDF cambió. Repite la revisión.');priceGuard(epoch,key,signal);
+        const summary=await window.TrazaConverter.analyzeUnits({data,expectedNumber:expected.salida_numero,signal,assertCurrent:()=>priceGuard(epoch,key,signal)});
+        if(!summary.numberMatches)throw new Error('El número impreso no corresponde a esta salida.');priceGuard(epoch,key,signal);
+      }finally{if(data)data.fill(0);}
+    }
+    if(attempt.canonicalId!==canonical.id||attempt.reason!==reason.trim()){
+      const clear=new TextEncoder().encode(JSON.stringify({kind:'corrected-version',reason:reason.trim(),recordId:record.id,canonicalId:canonical.id,documentTag:record.verifiedDocumentTag,canonicalDocumentTag:canonical.verifiedDocumentTag}));
+      try{attempt.encrypted=base64(await key.encrypt(clear,'audit-review-v1|'+record.id));}finally{clear.fill(0);}
+      attempt.canonicalId=canonical.id;attempt.reason=reason.trim();
+    }
+    priceGuard(epoch,key,signal);let result;
+    try{result=await request('/rest/v1/rpc/mega_audit_review_version',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_record_id:record.id,p_canonical_id:canonical.id,p_record_document_tag:record.verifiedDocumentTag,p_canonical_document_tag:canonical.verifiedDocumentTag,p_expected_metadata:record.encryptedMetadata,p_expected_canonical_metadata:canonical.encryptedMetadata,p_encrypted_review:attempt.encrypted}});}
+    catch(error){if(['PGRST202','42883'].includes(error.code))error.message='Activa la revisión de versiones con supabase/versiones-salidas.sql en MegaControl.';throw error;}
+    priceGuard(epoch,key,signal);
+    if(!result||result.id!==record.id||result.duplicate_of!==canonical.id||result.reviewed_by!==session.user.id||result.encrypted_review!==attempt.encrypted)throw new Error('No se confirmó la corrección. Actualiza antes de reintentar.');
+    window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return result;
+  }
   function openDuplicateReview(opener){
     const modal=createDialog('Revisión de duplicados',opener),controller=new AbortController(),epoch=generation;
     modal.dialog.addEventListener('close',()=>controller.abort(),{once:true});
-    const content=modal.content,info=node('p','Se comparan los bytes completos de los PDF. Compartir productos, cantidades, fecha o número no basta. Confirma si cada coincidencia es la misma operación o un movimiento legítimo distinto. Los archivos se conservan.','audit-muted'),state=node('p','Comprobando documentos…','audit-state'),groups=node('div');content.append(info,state,groups);
+    const content=modal.content,info=node('p','Se buscan PDF idénticos y versiones con el mismo número de salida verificado en el PDF. Para una corrección, elige la versión que debe usarse; las anteriores quedan vinculadas. Confirma que es la misma operación. Los archivos se conservan.','audit-muted'),state=node('p','Comprobando documentos…','audit-state'),groups=node('div');content.append(info,state,groups);
     const current=()=>modal.dialog.open&&epoch===generation&&!controller.signal.aborted;
     (async()=>{try{
       const report=await duplicateCandidates(p=>{if(current())state.textContent=p.done+' de '+p.total+' PDF comprobados · '+p.failed+' sin verificar.';},controller.signal);if(!current())return;
-      state.textContent=report.groups.length+' grupos con PDF idéntico.'+(report.failed?' Hay '+report.failed+' documentos sin verificar. No se clasificaron.':'');
+      state.textContent=report.groups.filter(g=>g.kind==='version').length+' salidas con versiones distintas · '+report.groups.filter(g=>g.kind==='identical').length+' grupos con PDF idéntico.'+(report.failed?' Hay '+report.failed+' documentos sin verificar. No se clasificaron.':'')+(report.unverifiedVersions?' No se pudo confirmar el número de '+report.unverifiedVersions+' PDF para comparar versiones.':'');
       for(const group of report.groups){
-        const box=node('section',undefined,'audit-panel duplicate-group'),select=node('select');select.setAttribute('aria-label','Registro principal a conservar');
+        const isVersion=group.kind==='version',box=node('section',undefined,'audit-panel duplicate-group'),select=node('select');box.dataset.kind=group.kind;select.setAttribute('aria-label','Registro principal a conservar');
         for(const record of group.records){const option=node('option','Salida '+record.salida_numero+' · @'+(record.username||'sin autor')+' · '+formatWhen(record.created_at).date+' '+formatWhen(record.created_at).time);option.value=record.id;select.append(option);}
-        box.append(node('h3','PDF idéntico en '+group.records.length+' registros'),node('p','Elige el registro principal. La clasificación solo se aplica tras tu revisión.','audit-muted'),select);
+        box.append(node('h3',isVersion?'Salida '+group.number+' · '+group.records.length+' versiones':'PDF idéntico en '+group.records.length+' registros'),node('p',isVersion?'Elige la versión corregida como principal. Se usará en el Archivo y el escáner. El número por sí solo no confirma que sea la misma operación.':'Elige el registro principal. La clasificación solo se aplica tras tu revisión.','audit-muted'),select);
         for(const record of group.records){
           const card=node('div',undefined,'duplicate-record'),label=node('p','Salida '+record.salida_numero+' · @'+(record.username||'sin autor')+' · '+formatWhen(record.created_at).date+' '+formatWhen(record.created_at).time),reason=node('input');reason.placeholder='Motivo de la decisión';reason.maxLength=2048;reason.setAttribute('aria-label','Motivo para salida '+record.salida_numero);
           const confirmation=node('label'),check=node('input');check.type='checkbox';confirmation.append(check,document.createTextNode(' Confirmo que es la misma operación; no otro movimiento legítimo.'));
-          const link=button('Vincular como duplicado',true),distinct=button('Conservar como movimiento distinto',true),notice=node('p','');link.disabled=true;
+          const link=button(isVersion?'Vincular como versión anterior':'Vincular como duplicado',true),distinct=button('Conservar como movimiento distinto',true),notice=node('p',''),attempt={};link.disabled=true;
           const update=()=>{link.disabled=!check.checked||select.value===record.id;};check.addEventListener('change',update);select.addEventListener('change',update);
-          async function decide(canonical){if(!current())return;link.disabled=distinct.disabled=true;try{await reviewDuplicate(record.id,canonical,group.documentTag,reason.value,controller.signal);if(current()){card.replaceChildren(node('p',canonical?'Duplicado vinculado. El registro y sus archivos siguen accesibles desde el principal.':'Movimiento distinto conservado.'));for(const option of [...select.options])if(option.value===record.id)option.remove();select.dispatchEvent(new Event('change'));}}catch(error){if(current()){notice.textContent=error.message;distinct.disabled=false;update();}}}
+          async function decide(canonical){if(!current())return;link.disabled=distinct.disabled=true;try{
+            if(isVersion&&canonical)await reviewVersion(record,group.records.find(r=>r.id===canonical),reason.value,controller.signal,attempt);
+            else await reviewDuplicate(record.id,canonical,record.verifiedDocumentTag,reason.value,controller.signal);
+            if(current()){card.replaceChildren(node('p',canonical?(isVersion?'Versión anterior vinculada. El Archivo y el escáner usarán la versión principal; sus documentos anteriores se conservan.':'Duplicado vinculado. El registro y sus archivos siguen accesibles desde el principal.'):'Movimiento distinto conservado.'));for(const option of [...select.options])if(option.value===record.id)option.remove();select.dispatchEvent(new Event('change'));}
+          }catch(error){if(current()){notice.textContent=error.message;distinct.disabled=false;update();}}}
           link.addEventListener('click',()=>decide(select.value));distinct.addEventListener('click',()=>decide(null));
-          card.append(label,reason,confirmation,link,distinct,notice);box.append(card);
+          card.append(label);
+          if(record.versionSummary){const s=record.versionSummary;card.append(node('p','Fecha de factura: '+(s.invoiceDate||'No disponible')+' · Productos: '+s.rowCount+' · Unidades: '+(s.complete?s.totalUnits:'Lectura incompleta'),'audit-muted'));if(s.costs)card.append(node('p','Costos: '+s.costs.withAmount+' con importe · '+s.costs.zero+' en cero · '+s.costs.missing+' sin detectar','audit-muted'));}
+          card.append(reason,confirmation,link,distinct,notice);box.append(card);
         }
         groups.append(box);
       }

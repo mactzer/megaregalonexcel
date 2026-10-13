@@ -50,7 +50,7 @@
   }).catch(e => status(e.message, true));
   window.addEventListener('mobile-session:navigated', event => {
     if (event.detail.section !== 'scanner') { stopCamera(); if (controller) controller.abort(); }
-    else { if (busy && !catalogReady) resumeCatalog = true; adoptAccount(); }
+    else { if (busy && !catalogReady) resumeCatalog = true; adoptAccount(); checkCatalogUpdates(true); }
   });
   $('login-form').addEventListener('submit', async event => {
     event.preventDefault(); $('login-button').disabled = true; signingIn = true;
@@ -156,19 +156,33 @@
     }
   }
   $('refresh-catalog').addEventListener('click', prepareCatalog);
-  let checkingUpdates = false,needsCatalogCheck=false,lastCatalogCheck=0;
+  let checkingUpdates = false,needsCatalogCheck=false,lastCatalogCheck=0,catalogCheck=Promise.resolve();
   async function checkCatalogUpdates(force=false) {
     if (!api || !api.status().authenticated || !catalogReady || busy || (window.MobilePriceEditor && MobilePriceEditor.busy) || checkingUpdates || document.hidden || MobileSession.currentSection !== 'scanner') return;
     checkingUpdates = true;
     if(api.status().syncMode==='live'&&!force&&!needsCatalogCheck&&Date.now()-lastCatalogCheck<120000){checkingUpdates=false;return;}
     needsCatalogCheck=false;lastCatalogCheck=Date.now();
     const epoch = api.status().generation;
+    let finish;catalogCheck=new Promise(resolve=>{finish=resolve;});
+    for(const id of ['lookup-kind','search','scan','photo-button','refresh-catalog'])$(id).disabled=true;
     try {
       const changed = await api.mobile.hasUpdates();
-      if (changed && api.status().authenticated && api.status().generation === epoch && !busy) await prepareCatalog();
+      if(changed&&api.status().authenticated&&api.status().generation===epoch){
+        if(!busy&&!(window.MobilePriceEditor&&MobilePriceEditor.busy))await prepareCatalog();
+        else needsCatalogCheck=true;
+      }
     } catch (_) {
+      needsCatalogCheck=true;
       if (api.status().authenticated) $('catalog-status').textContent = 'No se pudieron comprobar documentos nuevos. El índice conserva la última actualización; pulsa Actualizar para reintentar.';
-    } finally { checkingUpdates = false; }
+    } finally {
+      checkingUpdates = false;
+      if(api.status().authenticated&&api.status().generation===epoch&&!busy&&!(window.MobilePriceEditor&&MobilePriceEditor.busy)){
+        for(const id of ['lookup-kind','search','scan','photo-button'])$(id).disabled=!catalogReady;
+        if(scanControls)$('scan').disabled=true;
+        $('refresh-catalog').disabled=false;
+      }
+      finish();
+    }
   }
   setInterval(()=>checkCatalogUpdates(false),30000);
   MobileSession.ready.then(owner=>{let timer;owner.addEventListener('audit:changed',event=>{if(!['mega_audit_records','all'].includes(event.detail.table))return;needsCatalogCheck=true;clearTimeout(timer);timer=setTimeout(()=>checkCatalogUpdates(true),250);});}).catch(()=>{});
@@ -179,6 +193,7 @@
   }
   $('lookup-kind').addEventListener('change', () => { stopCamera(); setLookupMode($('lookup-kind').value); });
   async function lookup(raw, mode = 'barcode') {
+    if(needsCatalogCheck||checkingUpdates){stopCamera();await catalogCheck;if(needsCatalogCheck)await checkCatalogUpdates(true);if(checkingUpdates||needsCatalogCheck)return;}
     const code = String(raw).trim();
     if (!code || code.length > 80 || /[\x00-\x1f]/.test(code)) { status('Escribe un código válido.', true); return; }
     if (busy || !catalogReady || (window.MobilePriceEditor && MobilePriceEditor.busy)) return;

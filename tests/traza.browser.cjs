@@ -34,7 +34,10 @@ function fakePdf(options = {}) {
   if(options.code)product[0]=options.code;
   if(options.ref)product[4]=options.ref;
   if(options.emptyQuantity)product[8]='';
+  if(options.cost!==undefined)product[6]=options.cost;
+  if(options.quantity!==undefined)product[8]=options.quantity;
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
+  if(options.cost!==undefined)exempt[6]=options.cost;
   const fractional = ['0000000000025', 'Producto fraccionario ficticio', 'Unidad', 'Estilo C', 'REF-003', '0%', '0.40', '0.50', '2.5', '1.00', '0', '0.00'];
   const bulkQuantity = options.bulkUnits || '1,800.00';
   const bulk = ['0000000001800', 'Producto a granel ficticio', 'Unidad', 'Estilo D', 'REF-004', '0%', '0.35', '0.40', options.missingUnits ? '' : bulkQuantity, '630.00', '0', '0.00'];
@@ -238,6 +241,55 @@ test('upgrade duplicates: byte verification plus explicit admin decision links a
   await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===2);
   await h.page.getByRole('button',{name:'Abrir detalle de salida 00123',exact:true}).click();await h.page.locator('.linked-records').waitFor();
   await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);const saved=await h.page.evaluate(()=>window.__picker.files[0]);assert.deepEqual(Buffer.from(saved.bytes),fixture.pdf);assert.equal(h.state.recordCalls,0);
+ }finally{await h.close();}
+});
+
+async function correctedSalidaFixture(h){
+ const old=await setArchivedPdf(h,0,{number:'29390',invoiceDate:'12/10/2026',quantity:'429',cost:'',price:'9.99'},{salida_numero:'29390',total_units:432});
+ const corrected=await setArchivedPdf(h,2,{number:'29390',invoiceDate:'12/10/2026',quantity:'1149',cost:'10.00',price:'7.99'},{salida_numero:'29390',total_units:1152});
+ old.row.created_at='2026-10-12T22:17:54Z';corrected.row.created_at='2026-10-13T02:10:27Z';
+ for(const row of [old.row,corrected.row])row.salida_tag=await fixture.master.blindIndex('29390');
+ h.state.records=[old.row,corrected.row];return{old,corrected};
+}
+async function chooseCorrectedVersion(page){
+ await page.locator('#review-duplicates').click();const group=page.locator('.duplicate-group[data-kind="version"]');await group.waitFor();
+ const previous=group.locator('.duplicate-record').last();await previous.locator('input:not([type=checkbox])').fill('La primera versión no tenía costos; se confirmó la factura corregida.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();
+ await page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();
+}
+test('salida versions: different costs and quantities are detected, admin chooses the corrected source and old original can be reuploaded without another record',async()=>{
+ const h=await harness();try{
+  const {old,corrected}=await correctedSalidaFixture(h),storage=new Map(h.state.storage);await login(h.page);await waitUnits(h.page);assert.equal(await h.page.locator('.audit-table tbody tr').count(),2);
+  await h.page.locator('#review-duplicates').click();const group=h.page.locator('.duplicate-group[data-kind="version"]');await group.waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),1);assert.equal(await group.locator('select').inputValue(),corrected.row.id);
+  assert.match(await group.innerText(),/Unidades: 432/);assert.match(await group.innerText(),/Unidades: 1152/);assert.match(await group.innerText(),/Costos: 0 con importe · 0 en cero · 2 sin detectar/);assert.match(await group.innerText(),/Costos: 2 con importe · 0 en cero · 0 sin detectar/);
+  assert.ok(h.state.records.every(r=>!r.duplicate_of),'Opening the review cannot choose a source');
+  const previous=group.locator('.duplicate-record').last();await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Describe el motivo de la corrección', {exact:false}).waitFor();assert.ok(!old.row.duplicate_of);
+  await previous.locator('input:not([type=checkbox])').fill('La primera versión no tenía costos; esta factura fue corregida.');await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();
+  assert.equal(old.row.duplicate_of,corrected.row.id);assert.deepEqual(h.state.storage,storage);assert.equal(h.state.records.length,2);
+  await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.audit-table tbody tr').length===1);assert.match(await h.page.locator('.audit-table tbody tr').innerText(),/1,152/);
+  await h.page.getByRole('button',{name:'Abrir detalle de salida 29390',exact:true}).click();await h.page.locator('.linked-records').waitFor();await h.page.getByRole('button',{name:'Guardar PDF vinculado',exact:true}).click();await h.page.waitForFunction(()=>window.__picker.files.length===1);assert.deepEqual(Buffer.from((await h.page.evaluate(()=>window.__picker.files[0])).bytes),old.pdf);
+  await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida 29390 anterior.pdf',mimeType:'application/pdf',buffer:old.pdf});await h.page.locator('#export-button:not([disabled])').waitFor();await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
+ }finally{await h.close();}
+});
+test('salida versions: returning from archive immediately refreshes the mobile catalog and uses the corrected price, preserving the previous PDF',async()=>{
+ const h=await harness({mobile:true});try{
+  const {old,corrected}=await correctedSalidaFixture(h);await mobileLogin(h);await mobileLookup(h);assert.match(await h.page.locator('#result').innerText(),/precios distintos/);
+  await h.page.locator('.bottom [data-mobile-section="archive"]').click();const owner=h.page.frameLocator('#engine');await owner.locator('#audit-page').waitFor({state:'visible'});await chooseCorrectedVersion(owner);
+  await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#search:not([disabled])').waitFor();await mobileLookup(h);assert.match(await h.page.locator('.price').innerText(),/7\.99/);assert.equal(await h.page.locator('.product-salidas tbody tr').count(),1);assert.equal(old.row.duplicate_of,corrected.row.id);
+  assert.equal(h.state.recordCalls,0);assert.equal(h.state.records.length,2);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+test('salida versions: mismatched printed number is not offered as a corrected version, and incomplete SQL activation leaves both originals active',async()=>{
+ const h=await harness();try{
+  const {old}=await correctedSalidaFixture(h);await setArchivedPdf(h,0,{number:'99999'},{salida_numero:'29390'});await login(h.page);await h.page.locator('#review-duplicates').click();await h.page.getByText('No se pudo confirmar el número de 1 PDF', {exact:false}).waitFor();assert.equal(await h.page.locator('.duplicate-group').count(),0);assert.ok(h.state.records.every(r=>!r.duplicate_of));await h.page.getByRole('button',{name:'Cerrar Revisión de duplicados',exact:true}).click();
+  await setArchivedPdf(h,0,old.pdf);h.state.missingVersions=true;await h.page.locator('#review-duplicates').click();const previous=h.page.locator('.duplicate-group[data-kind="version"] .duplicate-record').last();await previous.waitFor();await previous.locator('input:not([type=checkbox])').fill('Versión corregida con los costos confirmados.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('supabase/versiones-salidas.sql',{exact:false}).waitFor();assert.ok(h.state.records.every(r=>!r.duplicate_of));assert.equal(h.state.records.length,2);
+ }finally{await h.close();}
+});
+test('salida versions: a lost confirmation retries the same encrypted review and cannot duplicate or replace original documents',async()=>{
+ const h=await harness();try{
+  const {old,corrected}=await correctedSalidaFixture(h),storage=new Map(h.state.storage);await login(h.page);h.state.dropVersionResponse=true;
+  await h.page.locator('#review-duplicates').click();const previous=h.page.locator('.duplicate-group[data-kind="version"] .duplicate-record').last();await previous.waitFor();await previous.locator('input:not([type=checkbox])').fill('Factura corregida y costos revisados por el administrador.');await previous.locator('input[type=checkbox]').check();await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();
+  await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).waitFor({state:'visible'});await h.page.waitForFunction(()=>document.querySelector('.duplicate-record:last-child button').disabled===false);assert.equal(old.row.duplicate_of,corrected.row.id);const encrypted=old.row.encrypted_review;
+  h.state.dropVersionResponse=false;await previous.getByRole('button',{name:'Vincular como versión anterior',exact:true}).click();await previous.getByText('Versión anterior vinculada.',{exact:false}).waitFor();assert.equal(old.row.encrypted_review,encrypted);assert.equal(h.state.records.length,2);assert.deepEqual(h.state.storage,storage);
  }finally{await h.close();}
 });
 
@@ -801,6 +853,15 @@ async function harness(options = {}) {
     if(pathname==='/rest/v1/rpc/mega_audit_review_duplicate'){
       if(state.role!=='admin'){await json({code:'42501'},403);return;}
       const body=request.postDataJSON(),row=state.records.find(r=>r.id===body.p_record_id);Object.assign(row,{document_tag:body.p_document_tag,duplicate_of:body.p_canonical_id,operation_kind:body.p_canonical_id?'legacy':'separate',reviewed_by:state.actor,reviewed_at:new Date().toISOString(),encrypted_review:body.p_encrypted_review});broadcast('mega_audit_records');await json(row);return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_audit_review_version'){
+      if(state.role!=='admin'){await json({code:'42501'},403);return;}
+      if(state.missingVersions){await json({code:'PGRST202'},404);return;}
+      const b=request.postDataJSON(),row=state.records.find(r=>r.id===b.p_record_id),canonical=state.records.find(r=>r.id===b.p_canonical_id);
+      if(!row||!canonical||row.encrypted_metadata!==b.p_expected_metadata||canonical.encrypted_metadata!==b.p_expected_canonical_metadata||canonical.duplicate_of||canonical.salida_tag!==row.salida_tag){await json({code:'40001'},409);return;}
+      for(const previous of state.records)if(previous.duplicate_of===row.id)previous.duplicate_of=canonical.id;
+      Object.assign(row,{document_tag:b.p_record_document_tag,duplicate_of:canonical.id,reviewed_by:state.actor,reviewed_at:new Date().toISOString(),encrypted_review:b.p_encrypted_review});canonical.document_tag=b.p_canonical_document_tag;
+      broadcast('mega_audit_records');if(state.dropVersionResponse){await route.abort('failed');return;}await json(row);return;
     }
     if (pathname === '/rest/v1/rpc/mega_audit_record_v2'||pathname==='/rest/v1/rpc/mega_audit_record_import') {
       state.recordCalls++;
