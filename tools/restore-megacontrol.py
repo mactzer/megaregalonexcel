@@ -27,7 +27,7 @@ def validate(folder):
     if snapshot.get('version') != 1 or snapshot.get('workspace_id') != WORKSPACE or inventory.get('workspace') != WORKSPACE:
         raise ValueError('Esta herramienta solo restaura el equipo original de MegaControl.')
     rows = snapshot['tables']
-    if set(rows) not in (set(TABLES), set(TABLES) | {'mega_salidas'}) or len(rows['mega_audit_workspace']) != 1:
+    if not set(TABLES).issubset(rows) or not set(rows).issubset(set(TABLES) | {'mega_salidas','mega_product_price_history'}) or len(rows['mega_audit_workspace']) != 1:
         raise ValueError('Las tablas del respaldo están incompletas.')
     for table, items in rows.items():
         for row in items:
@@ -44,6 +44,7 @@ def validate(folder):
     authors.update(row['reviewed_by'] for row in rows['mega_audit_records'] if row.get('reviewed_by'))
     authors.update(row['import_reviewed_by'] for row in rows['mega_audit_records'] if row.get('import_reviewed_by'))
     authors.update(row['pending_owner'] for row in rows.get('mega_salidas', []) if row.get('pending_owner'))
+    authors.update(row['updated_by'] for row in rows.get('mega_product_price_history', []))
     if any(not re.fullmatch(UUID, a) for a in authors):
         raise ValueError('Identidad de autor inválida.')
     files = {}
@@ -95,7 +96,7 @@ def restore_sql(snapshot, restore_access=False):
              'end $mega_restore$;',
              'alter table public.mega_audit_records disable trigger mega_audit_record_stamp;',
              'alter table public.mega_audit_records disable trigger mega_audit_operation_guard;']
-    for table in TABLES + (('mega_salidas',) if snapshot['tables'].get('mega_salidas') else ()):
+    for table in TABLES + tuple(name for name in ('mega_salidas','mega_product_price_history') if snapshot['tables'].get(name)):
         if not restore_access and table in ('mega_audit_members', 'mega_audit_user_keys'):
             continue
         source_rows = snapshot['tables'][table]

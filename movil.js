@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   let api, controller, scanControls, cameraGeneration = 0, busy = false;
-  let catalogReady = false, signingIn = false, accountGeneration = null, resumeCatalog = false;
+  let catalogReady = false, signingIn = false, accountGeneration = null, resumeCatalog = false,lastIndexCheck=null;
   const status = (message, error = false) => { $('status').textContent = message; $('status').className = error ? 'error' : ''; };
   const element = (tag, text, className) => { const e = document.createElement(tag); e.textContent = text; if (className) e.className = className; return e; };
   const invoiceDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? value.split('-').reverse().join('/') : 'No disponible en el PDF';
@@ -44,6 +44,8 @@
       api = owner.AuditCloud;
       await api.ready();
       owner.addEventListener('traza:session-cleared', clear); owner.addEventListener('audit:authenticated', adoptAccount);
+      owner.addEventListener('audit:sync-status',updateHealth);
+      owner.addEventListener('audit:changed',event=>{if(['mega_product_prices','all'].includes(event.detail.table))markPriceStale('El equipo tiene cambios. Consulta nuevamente para confirmar el precio.');});
       $('login-button').disabled = false;
       if (api.status().authenticated) adoptAccount(); else status('Acceso seguro listo. Inicia sesión.');
     } catch (e) { status(e.message, true); }
@@ -65,6 +67,16 @@
     finally { signingIn = false; $('login-button').disabled = false; }
   });
   $('logout').addEventListener('click', () => { clear(); api.mobile.logout(); });
+  function markPriceStale(text){const notice=$('result').querySelector('.price-freshness');if(notice){notice.textContent=text;notice.className='note missing price-freshness';for(const control of $('result').querySelectorAll('#edit-price,#save-price,.price-history-entry button'))control.disabled=true;}}
+  function updateHealth(){
+    if(!api||!api.status().authenticated)return;const state=api.status(),offline=!navigator.onLine;
+    $('sync-status').textContent=offline?'Sin conexión. Los datos visibles son una referencia de la última consulta.':state.networkIssue?'No se pudo comprobar la conexión. Pulsa Actualizar para reintentar.':state.syncMode==='live'?'Sincronización en vivo activa.':'Sincronización en vivo desconectada. Se comprueba el archivo periódicamente.';
+    $('sync-status').className='note'+(offline||state.networkIssue||state.syncMode!=='live'?' missing':'');
+    if(offline||state.networkIssue)markPriceStale('Precio sin comprobar en este momento. '+(offline?'Sin conexión.':'La conexión falló.'));
+  }
+  window.addEventListener('offline',()=>{updateHealth();stopCamera();});window.addEventListener('online',()=>{updateHealth();checkCatalogUpdates(true);});
+  window.addEventListener('mobile:price-refresh',()=>lookup($('barcode').value,$('lookup-kind').value));
+  setInterval(()=>{if(document.hidden)return;updateHealth();const notice=$('result').querySelector('.price-freshness');if(notice&&notice.dataset.checkedAt&&Date.now()-Date.parse(notice.dataset.checkedAt)>120000)markPriceStale('Han pasado más de dos minutos desde la comprobación. Comprueba el precio de nuevo antes de usarlo.');},30000);
   $('photo-button').addEventListener('click', () => { if (!busy && catalogReady && !MobilePriceEditor.busy) { setLookupMode('barcode'); $('photo-input').click(); } });
   $('photo-input').addEventListener('change', async () => {
     const file = $('photo-input').files[0]; $('photo-input').value = '';
@@ -124,7 +136,7 @@
       row.append(number, element('td', money(source.product.pventa)), element('td', invoiceDate(source.doc.invoiceDate))); body.append(row);
     }
     table.append(body); section.append(table); result.append(section);
-    if(!ambiguousReference)window.dispatchEvent(new CustomEvent('mobile:product', { detail: { product, price } }));
+    if(!ambiguousReference)window.dispatchEvent(new CustomEvent('mobile:product', { detail: { product, price,doc } }));
   }
   async function prepareCatalog() {
     if (busy || (window.MobilePriceEditor && MobilePriceEditor.busy) || !api || !api.status().authenticated) return;
@@ -136,12 +148,15 @@
     status('La primera preparación procesa los PDF una vez. Las siguientes consultas utilizan el índice.');
     try {
       const info = await api.mobile.prepare(progress => {
-        $('catalog-status').textContent = progress.done + ' de ' + progress.total + ' documentos preparados · ' + progress.cached + ' recuperados del índice.';
+        $('catalog-status').textContent = progress.done + ' de ' + progress.total + ' documentos preparados · ' + progress.cached + ' del índice local · '+(progress.shared||0)+' del compartido.';
       }, current.signal);
       if (current.signal.aborted || !api.status().authenticated) return;
       catalogReady = true;
+      lastIndexCheck=info.checkedAt;updateHealth();
       $('catalog-status').textContent = info.products + ' productos · ' + info.documents + ' documentos · ' + info.cached + ' recuperados del índice.' + (info.failed ? ' ' + info.failed + ' documentos sin verificar; pulsa Actualizar para reintentar.' : ' Índice listo.');
       if(info.unidentified)$('catalog-status').textContent+=' '+info.unidentified+' productos pendientes de código o referencia.';
+      if(info.shared)$('catalog-status').textContent+=' '+info.shared+' documentos recuperados del índice compartido sin abrir sus PDF.';
+      if(info.sharedFailed)$('catalog-status').textContent+=' Índice compartido pendiente para algunos documentos; se utilizó la lectura local.';
       status('Listo para escanear. La búsqueda ya no abre los PDF.', Boolean(info.failed||info.unidentified));
     } catch (e) {
       if (api.status().authenticated) {
@@ -188,8 +203,8 @@
   MobileSession.ready.then(owner=>{let timer;owner.addEventListener('audit:changed',event=>{if(!['mega_audit_records','all'].includes(event.detail.table))return;needsCatalogCheck=true;clearTimeout(timer);timer=setTimeout(()=>checkCatalogUpdates(true),250);});}).catch(()=>{});
   function setLookupMode(mode) {
     $('lookup-kind').value = mode;
-    $('barcode-label').textContent = mode === 'reference' ? 'Referencia del producto' : 'Código de barras';
-    $('barcode').placeholder = mode === 'reference' ? 'Ej. HB-0254866' : 'Ej. 7451234567890';
+    $('barcode-label').textContent = mode === 'name'?'Nombre o parte de la referencia':mode === 'reference' ? 'Referencia del producto' : 'Código de barras';
+    $('barcode').placeholder = mode === 'name'?'Ej. Dylan o HB-025':mode === 'reference' ? 'Ej. HB-0254866' : 'Ej. 7451234567890';
   }
   $('lookup-kind').addEventListener('change', () => { stopCamera(); setLookupMode($('lookup-kind').value); });
   async function lookup(raw, mode = 'barcode') {
@@ -218,17 +233,25 @@
       ]);
       const { documents: count, failed, match, price,unidentified=0 } = response;
       assertCurrent();
+      updateHealth();lastIndexCheck=response.checkedAt;
+      if(mode==='name'){
+        const result=$('result');result.hidden=false;result.className='card';result.append(element('h2',response.candidateCount?'Selecciona el producto':'Sin coincidencias por nombre'),element('p',response.candidateCount+' coincidencias en el índice. '+(response.candidateCount>50?'Se muestran las primeras 50; añade palabras para precisar.':''),'note'));
+        for(const candidate of response.candidates){const product=candidate.product,button=element('button',product.descripcion||product.ref,'quiet name-choice');button.append(element('small',(product.codigo?'Código '+product.codigo:'Referencia '+product.ref)+' · '+(product.ref||'Sin referencia')));button.addEventListener('click',()=>lookup(product.codigo||product.ref,product.codigo?'barcode':'reference'));result.append(button);}
+        if(failed||unidentified||response.stale)result.append(element('p','Búsqueda incompleta: hay documentos o identificadores pendientes de comprobar. Actualiza el índice antes de confirmar una ausencia.','note missing'));
+        status('Búsqueda local completada. Selecciona un producto para comprobar su precio.');return;
+      }
       let label;
       if (match) {
         showProduct(match, failed, price,unidentified); label = 'Encontrado';
+        if(response.stale){markPriceStale('Índice pendiente de comprobar. Puede faltar una salida posterior.');$('result').append(element('p','No se ha confirmado que el índice corresponda al archivo actual. Pulsa Actualizar.','note missing'));}
         if (mode === 'reference') $('result').append(element('p', 'Coincidencia por referencia: ' + code, 'note'));
         status('Producto encontrado en el índice de ' + count + ' documentos.');
       } else {
         const result = $('result'); result.hidden = false; result.className = 'card warning';
-        label = failed||unidentified ? 'Consulta incompleta' : 'Sin coincidencia';
-        result.append(element('p', failed||unidentified ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
-        result.append(element('p', failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : unidentified?'Hay '+unidentified+' productos archivados sin código o referencia. '+(mode==='reference'?'Esta referencia':'Este código')+' no coincide con los productos identificados; completa sus etiquetas desde Archivo antes de confirmar que falta.':(mode==='reference'?'Esta referencia':'Este código')+' no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
-        status(failed||unidentified ? 'La consulta terminó con productos o documentos pendientes de verificar.' : 'Consulta del archivo completada.', Boolean(failed||unidentified));
+        label = failed||unidentified||response.stale ? 'Consulta incompleta' : 'Sin coincidencia';
+        result.append(element('p', failed||unidentified||response.stale ? 'CONSULTA INCOMPLETA' : 'SIN COINCIDENCIA EN LOS PDF', 'result-label missing'), element('h2', code, 'product-name'));
+        result.append(element('p', response.stale?'El índice no se pudo comprobar contra el archivo actual. Actualiza antes de confirmar que falta este producto.':failed ? 'No se pudieron leer ' + failed + ' de ' + count + ' documentos al preparar el índice. No podemos confirmar si este producto está en el archivo. Pulsa Actualizar para reintentar.' : unidentified?'Hay '+unidentified+' productos archivados sin código o referencia. '+(mode==='reference'?'Esta referencia':'Este código')+' no coincide con los productos identificados; completa sus etiquetas desde Archivo antes de confirmar que falta.':(mode==='reference'?'Esta referencia':'Este código')+' no aparece en los ' + count + ' PDF revisados. Esto no confirma que falte en el inventario de la empresa.'));
+        status(failed||unidentified||response.stale ? 'La consulta terminó con productos o documentos pendientes de verificar.' : 'Consulta del archivo completada.', Boolean(failed||unidentified||response.stale));
       }
       window.dispatchEvent(new CustomEvent('mobile:consulted', { detail: { code, label, match, price } }));
       if (!window.matchMedia('(min-width: 900px)').matches) $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });

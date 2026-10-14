@@ -50,6 +50,7 @@ jobs:
           cp audit-realtime.js mobile-history.js supabase-consultas.html _site/
           cp audit-backup.js _site/
           cp salida-versions.js _site/
+          cp document-validation.js _site/
           cp invoice-formats.js invoice-ocr.js invoice-review.js invoice-import.css _site/
           mkdir _site/tools
           cp tools/restore-megacontrol.py _site/tools/

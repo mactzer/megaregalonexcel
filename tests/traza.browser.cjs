@@ -48,8 +48,8 @@ function fakePdf(options = {}) {
       ? [text('1,', x, 395), text('800.00', x + 10, 395, 8)] : [text(bulk[i], x, 395)])
   ] : [];
   if(options.wideTotals){product[8]='96.00';product[9]='1,487.81';exempt[5]='7%';exempt[8]='192.00';exempt[9]='2,975.61';}
-  const footer = options.wideTotals ? [['SubTotal: 4463.42', 400], ['Impuesto 312.44', 380], ['Total Neto: 4775.86', 360]] : options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
-    : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]];
+  const footer = options.footer || (options.wideTotals ? [['SubTotal: 4463.42', 400], ['Impuesto 312.44', 380], ['Total Neto: 4775.86', 360]] : options.groupedUnits ? [['SubTotal: 666.00', 360], ['Impuesto 1.40', 340], ['Total Neto: 667.40', 320]]
+    : [['SubTotal: 35.00', 400], ['Impuesto 1.40', 380], ['Total Neto: 36.40', 360]]);
   const textContent = [text(options.variant || 'MegaControl - DOCUMENTO FICTICIO, SIN VALOR COMERCIAL', 10, 565), text(`Numero: ${options.number || '00123'}`, 10, 540), text(`Fecha: ${options.invoiceDate === undefined ? '08/10/2026' : options.invoiceDate}`, 10, 520),...(options.printDate?[text('Fecha: '+options.printDate,800,526)]:[]),
     ...cells.map(([label, x]) => text(label, x, 480)), ...cells.map(([, x], i) => text(product[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, options.reverseRows?435:455)), ...(options.omitExempt?[]:cells.map(([, x], i) => text(exempt[i], options.wideTotals&&i===8?774:options.wideTotals&&i===9?805:x, options.reverseRows?455:435))),
     ...groupedRows, ...footer.map(([label, y]) => text(label, 10, y))].join('\n');
@@ -255,7 +255,7 @@ async function correctedSalidaFixture(h){
 }
 async function automaticSalidaInput(h,options){
  await h.page.evaluate(()=>TrazaUI.navigate('converter'));
- await h.page.locator('#file-input').setInputFiles({name:'Salida automática ficticia.pdf',mimeType:'application/pdf',buffer:fakePdf(options)});await h.page.locator('#export-button:not([disabled])').waitFor();
+ await h.page.locator('#file-input').setInputFiles({name:'Salida automática ficticia.pdf',mimeType:'application/pdf',buffer:fakePdf(options)});await h.page.locator('#export-button:not([disabled])').waitFor();if(await h.page.locator('#approve-validation').count())await h.page.locator('#approve-validation').check();
 }
 for(const viewport of [{width:1440,height:1000},{width:390,height:844}])test('automatic salidas '+viewport.width+'px: normalized repeat opens existing record, changes create linked versions and the complete history survives reload',async()=>{
  const h=await harness({viewport});try{
@@ -397,7 +397,7 @@ test('mobile salidas: latest invoice selects 8.99 despite later upload of 9.99, 
     assert.doesNotMatch(details, /Registrado|30\/10/);
     await mobileLogin(h); await mobileLookup(h);
     assert.equal(h.state.requests.filter(r => r.pathname.startsWith('/storage/')).length, downloads, 'Cached history must not reopen PDFs');
-    await h.page.locator('#edit-price').click(); await h.page.locator('#price-input').fill('7.99'); await h.page.locator('#save-price').click();
+    await h.page.locator('#edit-price').click(); await h.page.locator('#price-input').fill('7.99'); await h.page.locator('#price-reason').fill('Ajuste autorizado de prueba');await h.page.locator('#save-price').click();
     await h.page.waitForFunction(() => /7\.99/.test(document.querySelector('.price').textContent));
     assert.match(await h.page.locator('.original-price').innerText(), /8\.99/);
     assert.deepEqual(await h.page.locator('.product-salidas tbody tr').allTextContents(), ['29345Última salidaUSD\u00a08.9909/10/2026', '29317USD\u00a09.9908/10/2026']);
@@ -431,10 +431,10 @@ test('mobile prices: administrator saves 9.99 to 7.99, colleague reads shared ov
   await setArchivedPdf(h,0,{price:'9.99'});h.state.records=h.state.records.slice(0,1);
   const row={...h.state.records[0]},original=Buffer.from(h.state.storage.get(`${WORKSPACE}/${OWNER}/${row.id}/pdf.bin`));
   await mobileLogin(h);await mobileLookup(h);assert.match(await h.page.locator('.price').innerText(),/9\.99/);
-  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7,99');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7,99');await h.page.locator('#price-reason').fill('Ajuste autorizado de prueba');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
   assert.match(await h.page.locator('#price-notice').innerText(),/guardado/);assert.match(await h.page.locator('#result').innerText(),/9\.99/);
   const saved=[...h.state.prices.values()][0],write=h.state.requests.find(r=>r.pathname.endsWith('mega_product_price_set'));
-  assert.doesNotMatch(write.body,/0001234567890|7[.,]99/);const clear=await fixture.master.decrypt(new Uint8Array(Buffer.from(saved.encrypted_price,'base64')),`product-price-v1|${saved.product_tag}|1`);assert.deepEqual(JSON.parse(new TextDecoder().decode(clear)),{code:'0001234567890',cents:799});clear.fill(0);
+  assert.doesNotMatch(write.body,/0001234567890|7[.,]99/);const clear=await fixture.master.decrypt(new Uint8Array(Buffer.from(saved.encrypted_price,'base64')),`product-price-v1|${saved.product_tag}|1`);assert.deepEqual(JSON.parse(new TextDecoder().decode(clear)),{code:'0001234567890',cents:799,reason:'Ajuste autorizado de prueba',previousCents:999});clear.fill(0);
   assert.deepEqual(h.state.records[0],row);assert.deepEqual(h.state.storage.get(`${WORKSPACE}/${OWNER}/${row.id}/pdf.bin`),original);
   const reads=h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;await mobileLookup(h);assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,reads);
   worker=await harness({mobile:true,role:'user'});worker.state.records=h.state.records.map(r=>({...r}));worker.state.storage=new Map(h.state.storage);worker.state.prices=new Map(h.state.prices);
@@ -457,7 +457,7 @@ test('mobile prices: conflict, revoked administrator, bad ciphertext and failed 
    if(failure==='conflict'||failure==='revocation'){
     await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');
     if(failure==='conflict'){const price=await fictionalPrice(899);h.state.prices.set(price.product_tag,price);}else h.state.role='user';
-    await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>document.querySelector('#price-notice').textContent.includes('administrador')||document.querySelector('#price-notice').textContent.includes('administración'));
+    await h.page.locator('#price-reason').fill('Ajuste autorizado de prueba');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>document.querySelector('#price-notice').textContent.includes('administrador')||document.querySelector('#price-notice').textContent.includes('administración'));
     assert.doesNotMatch(await h.page.locator('#price-notice').innerText(),/guardado/i);assert.doesNotMatch(await h.page.locator('.price').innerText(),/7\.99/);
     assert.equal(h.state.priceCalls,failure==='conflict'?1:0);
    }else{
@@ -470,7 +470,7 @@ test('mobile prices: conflict, revoked administrator, bad ciphertext and failed 
 test('mobile prices: late save after logout cannot restore a product or a session',async()=>{
  const h=await harness({mobile:true});let release;try{
   h.state.records=h.state.records.slice(0,1);await mobileLogin(h);await mobileLookup(h);
-  h.state.slowPriceSave=new Promise(r=>release=r);await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#save-price').click();
+  h.state.slowPriceSave=new Promise(r=>release=r);await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#price-reason').fill('Ajuste autorizado de prueba');await h.page.locator('#save-price').click();
   await h.page.waitForFunction(()=>document.querySelector('#save-price').disabled);
   for(let attempt=0;attempt<100&&!h.state.prices.size;attempt++)await h.page.waitForTimeout(20);
   assert.equal(h.state.prices.size,1,'The server already committed before logout');
@@ -486,7 +486,7 @@ test('mobile navigation: Archivo and browser history preserve the session and th
   const owner=h.page.frameLocator('#engine');await h.page.locator('.bottom [data-mobile-section="archive"]').click();await owner.locator('#audit-page').waitFor({state:'visible'});await owner.locator('#app-profile').getByText('@administrador',{exact:true}).waitFor();
   assert.equal(await h.page.evaluate(()=>window.__navigationStream.getTracks().every(t=>t.readyState==='ended')),true);
   await h.page.locator('.bottom [data-mobile-section="converter"]').click();await owner.locator('#drop-zone').waitFor({state:'visible'});await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#workspace').waitFor({state:'visible'});
-  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#price-reason').fill('Ajuste autorizado de prueba');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
   await h.page.goBack();await owner.locator('#drop-zone').waitFor({state:'visible'});await h.page.goForward();await h.page.locator('#workspace').waitFor({state:'visible'});
   assert.equal(await h.page.evaluate(async()=>{const w=await MobileSession.ready;return w===window.__owner&&w.AuditCloud.status().generation===window.__generation&&w.AuditCloud.status().authenticated;}),true);assert.equal(h.state.requests.filter(r=>r.pathname==='/auth/v1/token').length,1);
   await h.page.locator('.bottom [data-mobile-section="archive"]').click();await owner.locator('#app-profile button').first().click();await owner.getByRole('button',{name:'Cerrar sesión',exact:true}).click();await h.page.locator('.bottom [data-mobile-section="scanner"]').click();await h.page.locator('#login-panel').waitFor({state:'visible'});
@@ -813,10 +813,10 @@ async function harness(options = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowRecord: null, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
-  Object.assign(state,{prices:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),salidas:new Map(),sockets:new Set()});
+  Object.assign(state,{prices:new Map(),priceHistory:new Map(),catalog:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),salidas:new Map(),sockets:new Set()});
   const broadcast=table=>{for(const socket of state.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table,type:'INSERT',record:{workspace_id:WORKSPACE}}}}));};
   await context.routeWebSocket('wss://aixsnmsmgyejcbtuilwt.supabase.co/**',socket=>{
-    state.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:[{id:1}]}}}));});socket.onClose(()=>state.sockets.delete(socket));
+    state.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='heartbeat')socket.send(JSON.stringify({topic:'phoenix',event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{}}}));if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:[{id:1},{id:2},{id:3}]}}}));});socket.onClose(()=>state.sockets.delete(socket));
   });
   page.on('download', download => state.downloads.push(download.suggestedFilename()));
   await context.addInitScript(() => {
@@ -891,6 +891,19 @@ async function harness(options = {}) {
     if (pathname === '/rest/v1/mega_audit_members') { await json(state.noMembership?[]:[{ role: state.role }]); return; }
     if (pathname === '/rest/v1/mega_audit_workspace') { await json([{ key_fingerprint: fixture.master.fingerprint }]); return; }
     if (pathname === '/rest/v1/mega_audit_user_keys') { await json([{ wrapped_key:state.actor===OTHER ? fixture.colleagueWrapped : fixture.wrapped }]); return; }
+    if(pathname==='/rest/v1/mega_product_catalog'){
+      const ids=(url.searchParams.get('record_id')||'').replace(/^in\.\(/,'').replace(/\)$/,'').split(',');await json([...state.catalog.values()].filter(row=>ids.includes(row.record_id)));return;
+    }
+    if(pathname==='/rest/v1/rpc/mega_product_catalog_put'){
+      const b=request.postDataJSON(),record=state.records.find(row=>row.id===b.p_record_id),revision=record&&require('node:crypto').createHash('md5').update(record.encrypted_metadata).digest('hex');
+      if(!record||revision!==b.p_metadata_revision){await json({code:'40001'},409);return;}
+      if(state.role!=='admin'&&record.created_by!==state.actor){await json({code:'42501'},403);return;}
+      state.catalog.set(record.id,{record_id:record.id,metadata_revision:revision,encrypted_catalog:b.p_encrypted_catalog});await json(true);return;
+    }
+    if(pathname==='/rest/v1/mega_product_price_history'){
+      const tag=(url.searchParams.get('product_tag')||'').replace(/^eq\./,''),version=Number((url.searchParams.get('version')||'').replace(/^eq\./,''));let rows=[...state.priceHistory.values()].filter(row=>row.product_tag===tag&&(!version||row.version===version)).sort((a,b)=>b.version-a.version);
+      const offset=Number(url.searchParams.get('offset')||0),limit=Number(url.searchParams.get('limit')||20);await json(rows.slice(offset,offset+limit));return;
+    }
     if(pathname==='/rest/v1/mega_product_prices'){
       if(state.missingPrices){await json({code:'PGRST205'},404);return;}
       if(state.failPrice){await json({code:'fictional_error'},state.failPrice);return;}
@@ -900,7 +913,7 @@ async function harness(options = {}) {
       state.priceCalls++; const b=request.postDataJSON(),prior=state.prices.get(b.p_product_tag);
       if(state.role!=='admin'){await json({code:'42501'},403);return;}
       if((prior?prior.version:0)!==b.p_expected_version){await json({code:'40001'},409);return;}
-      const row={workspace_id:WORKSPACE,product_tag:b.p_product_tag,encrypted_price:b.p_encrypted_price,version:b.p_expected_version+1,updated_by:state.actor,updated_at:'2026-10-10T04:00:00.000Z'};state.prices.set(row.product_tag,row);
+      const row={workspace_id:WORKSPACE,product_tag:b.p_product_tag,encrypted_price:b.p_encrypted_price,version:b.p_expected_version+1,updated_by:state.actor,updated_at:'2026-10-10T04:00:00.000Z'};state.prices.set(row.product_tag,row);state.priceHistory.set(row.product_tag+'|'+row.version,row);broadcast('mega_product_prices');
       if(state.slowPriceSave)await state.slowPriceSave;await json(row);return;
     }
     if (pathname === '/rest/v1/rpc/mega_audit_authors' || pathname === '/rest/v1/rpc/mega_audit_list_members') {
@@ -1021,10 +1034,11 @@ async function harness(options = {}) {
       if (method === 'POST') { if (state.storage.has(location)) { await json({ code: 'Duplicate' }, 409); return; } state.storage.set(location, request.postDataBuffer()); await json({ Key: location }); return; }
       if (state.slowStorage) await state.slowStorage;
       for (const [id, delay] of state.slowDocuments) if (location.includes(id)) await delay;
+      if(method==='HEAD'&&state.failConfirmHeads){state.failConfirmHeads--;await json({code:'not_found'},404);return;}
       if (state.failStorage) { await json({ code: 'fictional_error' }, state.failStorage); return; }
       const bytes = state.storage.get(location);
       if (!bytes) { await json({ code: 'not_found' }, 404); return; }
-      await route.fulfill({ status: 200, contentType: 'application/octet-stream', headers: { 'access-control-allow-origin': '*' }, body: bytes }); return;
+      await route.fulfill({ status: 200, contentType: 'application/octet-stream', headers: { 'access-control-allow-origin': '*','content-length':String(bytes.length) }, body: method==='HEAD'?'':bytes }); return;
     }
     throw new Error(`Unimplemented fictional Supabase route: ${method} ${pathname}`);
   });
@@ -1073,6 +1087,50 @@ async function convert(page) {
 }
 
 async function waitNotBusy(page) { await page.locator('#export-button:not([disabled])').waitFor(); }
+
+test('efficiency: validation shows printed differences, rejects silent export and records explicit review in Excel',async()=>{
+ const h=await harness();try{
+  await login(h.page);await automaticSalidaInput(h,{number:'70001',footer:[['SubTotal: 99.00',400],['Impuesto 1.40',380],['Total Neto: 100.40',360],['Total de unidades: 7',340]]});
+  assert.match(await h.page.locator('#document-validation').innerText(),/99\.00/);assert.equal(await h.page.locator('.validation-mismatch').count(),3);
+  await h.page.locator('#approve-validation').uncheck();await h.page.locator('#export-button').click();assert.equal(h.state.recordCalls,0);assert.match(await h.page.locator('#message').innerText(),/confirma las advertencias/);
+  await h.page.locator('#approve-validation').check();const file=await downloadAction(h,()=>h.page.locator('#export-button').click());const book=XLSX.read(file.bytes,{type:'buffer'});assert.match(JSON.stringify(XLSX.utils.sheet_to_json(book.Sheets['Información'],{header:1})),/ADVERTENCIAS REVISADAS/);assert.equal(h.state.recordCalls,1);
+ }finally{await h.close();}
+});
+
+test('efficiency: a failed file confirmation can retry after commit without creating or overwriting another Salida',async()=>{
+ const h=await harness();try{
+  h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await automaticSalidaInput(h,{number:'70002'});h.state.failConfirmHeads=1;
+  await h.page.locator('#export-button').click();await waitNotBusy(h.page);assert.equal(h.state.records.length,1);assert.equal(h.state.recordCalls,1);assert.equal(h.state.storage.size,2);assert.match(await h.page.locator('#message').innerText(),/documento|confirm/i);
+  const files=new Map(h.state.storage);await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.records.length,1);assert.equal(h.state.recordCalls,1);assert.deepEqual(h.state.storage,files);
+ }finally{await h.close();}
+});
+
+test('efficiency: name and partial reference search remain local; a fresh device reuses the encrypted shared index without reading PDFs',async()=>{
+ const h=await harness({mobile:true});let fresh;try{
+  await setArchivedPdf(h,0,{description:'PERFUME AMBAR',ref:'HB-001'});h.state.records=[h.state.records[0]];await mobileLogin(h);assert.equal(h.state.catalog.size,1);
+  const reads=h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length;await h.page.locator('#lookup-kind').selectOption('name');await h.page.locator('#barcode').fill('ambar');await h.page.locator('#search').click();await h.page.locator('.name-choice').waitFor();assert.equal(h.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,reads);assert.equal(h.state.queryCalls,0);
+  await h.page.locator('.name-choice').click();await h.page.locator('.price-panel').waitFor();assert.match(await h.page.locator('.product-name').innerText(),/AMBAR/);assert.match(await h.page.locator('.price-freshness').innerText(),/comprobado/);
+  fresh=await harness({mobile:true});fresh.state.records=h.state.records.map(r=>({...r}));fresh.state.storage=new Map(h.state.storage);fresh.state.catalog=new Map(h.state.catalog);await mobileLogin(fresh);assert.equal(fresh.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);assert.match(await fresh.page.locator('#catalog-status').innerText(),/compartido sin abrir/);
+  await fresh.page.locator('#lookup-kind').selectOption('name');await fresh.page.locator('#barcode').fill('HB-00');await fresh.page.locator('#search').click();await fresh.page.locator('.name-choice').waitFor();assert.equal(await fresh.page.locator('.name-choice').count(),1);
+ }finally{if(fresh)await fresh.close();await h.close();}
+});
+
+test('efficiency: price history records previous/new price and reason; admin restoration adds a new event and preserves originals',async()=>{
+ const h=await harness({mobile:true});let worker;try{
+  await setArchivedPdf(h,0,{price:'9.99'});h.state.records=[h.state.records[0]];const originals=new Map(h.state.storage);await mobileLogin(h);await mobileLookup(h);
+  await h.page.locator('#edit-price').click();await h.page.locator('#price-input').fill('7.99');await h.page.locator('#price-reason').fill('Precio autorizado por el jefe');await h.page.locator('#save-price').click();await h.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  await h.page.locator('#price-history-button').click();await h.page.locator('.price-history-entry').waitFor();assert.match(await h.page.locator('.price-history-entry').innerText(),/9\.99.*7\.99/s);assert.match(await h.page.locator('.price-history-entry').innerText(),/autorizado por el jefe/);
+  await h.page.getByRole('button',{name:/Restaurar.*9\.99/}).click();await h.page.locator('.price-history-entry form input').fill('Corrección aprobada');await h.page.getByRole('button',{name:'Confirmar restauración',exact:true}).click();await h.page.waitForFunction(()=>/9\.99/.test(document.querySelector('.price').textContent));assert.equal(h.state.priceHistory.size,2);assert.equal([...h.state.prices.values()][0].version,2);assert.deepEqual(h.state.storage,originals);
+  worker=await harness({mobile:true,role:'user'});worker.state.records=h.state.records.map(r=>({...r}));worker.state.storage=new Map(h.state.storage);worker.state.catalog=new Map(h.state.catalog);worker.state.prices=new Map(h.state.prices);worker.state.priceHistory=new Map(h.state.priceHistory);await mobileLogin(worker,'colega');await mobileLookup(worker);await worker.page.locator('#price-history-button').click();await worker.page.locator('.price-history-entry').first().waitFor();assert.equal(await worker.page.locator('.price-history-entry').count(),2);assert.equal(await worker.page.getByRole('button',{name:/Restaurar/}).count(),0);
+ }finally{if(worker)await worker.close();await h.close();}
+});
+
+test('efficiency: lost connectivity and price-change notifications never present the visible price as freshly verified',async()=>{
+ const h=await harness({mobile:true});try{
+  h.state.records=[h.state.records[0]];await mobileLogin(h);await mobileLookup(h);await h.page.evaluate(async()=>{const owner=await MobileSession.ready;owner.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_product_prices'}}));});assert.match(await h.page.locator('.price-freshness').innerText(),/Consulta nuevamente/);assert.equal(await h.page.locator('#edit-price').isDisabled(),true);
+  await h.context.setOffline(true);await h.page.waitForFunction(()=>document.querySelector('#sync-status').textContent.includes('Sin conexión'));assert.match(await h.page.locator('.price-freshness').innerText(),/sin comprobar/);await h.context.setOffline(false);
+ }finally{await h.close();}
+});
 
 test('converter wide amounts: totals beginning before their headings keep every quantity and calculate tax in the exported Excel',async()=>{
  const h=await harness();try{
@@ -2576,11 +2634,11 @@ test('invoice references: Skechers reference price remains editable after linkin
  const h=await harness(),mobile=await harness({mobile:true});try{
   await login(h.page);await importFixture(h,'skechers');await confirmImport(h);const record=h.state.records.find(r=>r.import_revision);
   mobile.state.records=[record];mobile.state.storage=h.state.storage;await mobileLogin(mobile);await mobileLookup(mobile,'117775N/TOL0','reference');assert.match(await mobile.page.locator('.price').innerText(),/5\.99/);
-  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('7.99');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
+  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('7.99');await mobile.page.locator('#price-reason').fill('Ajuste autorizado de la referencia');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/7\.99/.test(document.querySelector('.price').textContent));
   const bytes=await fixture.master.decrypt(new Uint8Array(Buffer.from(record.encrypted_metadata,'base64')),record.id+'|metadata'),source=JSON.parse(new TextDecoder().decode(bytes)).imported_document;bytes.fill(0);source.rows[0].codigo=source.rows[0].codigo_completo='1234509876543';
   await h.page.evaluate(async args=>{await AuditCloud.updateImport(args.id,args.source,args.expected);},{id:record.id,source,expected:record.encrypted_metadata});
   await mobile.page.locator('#refresh-catalog').click();await mobile.page.locator('#search:not([disabled])').waitFor();await mobileLookup(mobile,'1234509876543');assert.match(await mobile.page.locator('.price').innerText(),/7\.99/);
-  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('6.99');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/6\.99/.test(document.querySelector('.price').textContent));assert.equal(mobile.state.prices.size,1);assert.equal([...mobile.state.prices.values()][0].version,2);assert.equal(mobile.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);
+  await mobile.page.locator('#edit-price').click();await mobile.page.locator('#price-input').fill('6.99');await mobile.page.locator('#price-reason').fill('Ajuste autorizado de la referencia');await mobile.page.locator('#save-price').click();await mobile.page.waitForFunction(()=>/6\.99/.test(document.querySelector('.price').textContent));assert.equal(mobile.state.prices.size,1);assert.equal([...mobile.state.prices.values()][0].version,2);assert.equal(mobile.state.requests.filter(r=>r.pathname.startsWith('/storage/')).length,0);
  }finally{await h.close();await mobile.close();}
 });
 for(const [format,count]of [['feduro',36],['skechers',103]])test('fiscal digital PDF: '+format+' reads every page and separates barcode, reference, unit cost and discount without OCR',async()=>{

@@ -24,6 +24,7 @@
     code = String(code).trim();
     return /^\d{12}$/.test(code) ? '0' + code : code;
   }
+  const searchText = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
   // Invoice dates are day/month/year, not timestamps in the upload timezone.
   function invoiceDate(value) {
     const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(value || ''));
@@ -45,10 +46,10 @@
     return (aDate > bDate ? -1 : aDate < bDate ? 1 : 0) || compareNumber(b.doc.salida, a.doc.salida) || a.id.localeCompare(b.id);
   }
   function create(client) {
-    let products = new Map(),references=new Map(),documents = [], failed = 0, unidentified=0,prepared = false, generation = 0, revision = '';
+    let products = new Map(),references=new Map(),searchable=[],documents = [], failed = 0, unidentified=0,prepared = false, generation = 0, revision = '', checkedAt=null, checkFailed=false;
     const signature = rows => JSON.stringify(rows.map(row => [row.id, row.created_at, row.metadata_revision||row.encrypted_metadata]));
     const guard = (epoch, signal) => { if (epoch !== generation || (signal && signal.aborted)) throw new Error('Preparación cancelada.'); };
-    function clear() { generation++; prepared = false; products.clear();references.clear(); documents = []; failed = 0;unidentified=0; revision = ''; }
+    function clear() { generation++; prepared = false; products.clear();references.clear();searchable=[]; documents = []; failed = 0;unidentified=0; revision = '';checkedAt=null;checkFailed=false; }
     async function prepare(progress, signal) {
       clear();
       const epoch = generation;
@@ -69,6 +70,11 @@
         }
       } catch (_) { guard(epoch, signal); }
       const cached = new Map(previous.map(entry => [entry.id, entry]));
+      let shared = new Map(), sharedCount=0, sharedFailed=0,sharedChanged=false;
+      if(client.shared){
+        const missing=snapshot.filter(row=>{const entry=cached.get(row.id);return !entry||entry.revision!==row.encrypted_metadata;});
+        if(missing.length)try{shared=await client.shared.read(missing,signal);guard(epoch,signal);}catch(_){guard(epoch,signal);sharedFailed++;}
+      }
       const results = new Array(snapshot.length);
       let next = 0, done = 0, errors = 0, reused = 0;
       async function worker() {
@@ -77,12 +83,20 @@
           guard(epoch, signal);
           try {
             let entry = cached.get(row.id);
-            if (entry && entry.revision === row.encrypted_metadata && entry.doc && Array.isArray(entry.doc.products) && (!row.created_at || entry.doc.date === row.created_at)) reused++;
-            else entry = { id: row.id, revision: row.encrypted_metadata, doc: await client.document(row.id, signal) };
+            if (entry && entry.revision === row.encrypted_metadata && entry.doc && Array.isArray(entry.doc.products) && (!row.created_at || entry.doc.date === row.created_at)) {
+              reused++;
+              if(client.shared&&row.metadata_revision&&entry.sharedRevision!==row.metadata_revision)try{await client.shared.write(row,entry.doc,signal);guard(epoch,signal);entry.sharedRevision=row.metadata_revision;sharedChanged=true;}catch(_){guard(epoch,signal);sharedFailed++;}
+            }
+            else if(shared.has(row.id)){entry={id:row.id,revision:row.encrypted_metadata,sharedRevision:row.metadata_revision,doc:shared.get(row.id)};sharedCount++;}
+            else {
+              entry = { id: row.id, revision: row.encrypted_metadata, doc: await client.document(row.id, signal) };
+              guard(epoch,signal);
+              if(client.shared)try{await client.shared.write(row,entry.doc,signal);guard(epoch,signal);entry.sharedRevision=row.metadata_revision;sharedChanged=true;}catch(_){guard(epoch,signal);sharedFailed++;}
+            }
             guard(epoch, signal); results[index] = entry;
           } catch (_) { guard(epoch, signal); errors++; }
           done++;
-          if (progress) progress({ done, total: snapshot.length, failed: errors, cached: reused });
+          if (progress) progress({ done, total: snapshot.length, failed: errors, cached: reused,shared:sharedCount });
         }
       }
       // Two workers keep PDF memory bounded on phones; invoice headers determine order.
@@ -115,30 +129,36 @@
         if(codes.size>1){match.ambiguousReference=true;match.product={...match.product,pventa:null};}
       }
       for(const match of index.values())if(refIndex.get(String(match.product.ref||'').trim().toUpperCase())?.ambiguousReference)match.product={...match.product,referenceAmbiguous:true};
+      searchable=[...index.values(),...[...refIndex.values()].filter(match=>match.history.every(row=>!row.product.codigo))].map(match=>({match,text:searchText(match.product.descripcion)+' '+searchText(match.product.ref)}));
       guard(epoch, signal); products = index;references=refIndex; documents = results.filter(Boolean); failed = errors; prepared = true; revision = signature(snapshot);
       unidentified=documents.reduce((n,entry)=>n+entry.doc.products.filter(p=>!p.codigo&&!p.ref).length,0);
+      checkedAt=new Date().toISOString();checkFailed=false;
       // Cache only authenticated ciphertext, never PDF bytes or clear product data.
       try {
-        if (cacheVersion !== 3 || reused !== snapshot.length || previous.length !== snapshot.length) {
+        if (cacheVersion !== 3 || reused !== snapshot.length || previous.length !== snapshot.length || sharedChanged) {
           const ciphertext = await client.seal({ version: 3, documents }); guard(epoch, signal);
           await client.cache.write(ciphertext); guard(epoch, signal);
         }
       } catch (_) { guard(epoch, signal); }
-      return { products: products.size+[...references.values()].filter(r=>r.history.every(h=>!h.product.codigo)).length, documents: snapshot.length, failed,unidentified, cached: reused };
+      return { products: searchable.length, documents: snapshot.length, failed,unidentified, cached: reused,shared:sharedCount,sharedFailed,checkedAt };
     }
     async function lookup(code, signal, mode = 'barcode') {
       const epoch = generation;
       if (!prepared) throw new Error('Prepara el índice antes de consultar productos.');
-      if (!['barcode','reference'].includes(mode)) throw new Error('Elige buscar por código de barras o referencia.');
+      if (!['barcode','reference','name'].includes(mode)) throw new Error('Elige buscar por código de barras, referencia o nombre.');
       await client.verifyAccess(signal); guard(epoch, signal);
+      if(mode==='name'){
+        const terms=searchText(code).split(' ').filter(Boolean),all=searchable.filter(entry=>terms.length&&terms.every(term=>entry.text.includes(term)));
+        return {match:null,candidates:all.slice(0,50).map(entry=>entry.match),candidateCount:all.length,failed,unidentified,documents:documents.length+failed,checkedAt,stale:checkFailed};
+      }
       const match = mode === 'reference' ? references.get(String(code).trim().toUpperCase()) : products.get(canonical(code));
-      return { match: match || null, failed,unidentified, documents: documents.length + failed };
+      return { match: match || null, failed,unidentified, documents: documents.length + failed,checkedAt,stale:checkFailed };
     }
     async function hasUpdates(signal) {
       const epoch = generation;
       if (!prepared) return true;
-      const rows = await client.snapshot(signal,{light:true}); guard(epoch, signal);
-      return signature(rows) !== revision;
+      try{const rows = await client.snapshot(signal,{light:true}); guard(epoch, signal);const changed=signature(rows)!==revision;checkFailed=changed;if(!changed)checkedAt=new Date().toISOString();return changed;}
+      catch(error){checkFailed=true;throw error;}
     }
     return Object.freeze({ prepare, lookup, clear, hasUpdates });
   }

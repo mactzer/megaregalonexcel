@@ -2,7 +2,7 @@
   'use strict';
   const $=id=>document.getElementById(id);
   const node=(tag,text)=>{const e=document.createElement(tag);e.textContent=text;return e;};
-  let api,owner,epoch=0,entries=[],pending=[],queue,controller,loading=false,flushing=false,again=false,missing=false,debounce,initialized=-1,recovering=Promise.resolve();
+  let api,owner,epoch=0,entries=[],pending=[],queue,controller,loading=false,flushing=false,again=false,missing=false,debounce,initialized=-1,recovering=Promise.resolve(),lastLoaded=0;
   const current=value=>value===epoch&&api&&api.status().authenticated;
   function message(text,error=false){$('history-status').textContent=text;$('history-status').className='note'+(error?' missing':'');$('retry-history').hidden=!pending.length;}
   function render(){
@@ -26,7 +26,7 @@
     if(!entries.length){message('Cargando consultas compartidas…');$('history').replaceChildren(node('li','Cargando historial compartido…'));}
     try{
       const result=await api.queries.list(controller.signal);if(!current(selected))return;
-      entries=result.entries;render();if(!entries.length&&result.damaged)$('history').replaceChildren(node('li','Consultas pendientes de verificar.'));message(pending.length?pending.length+' consultas pendientes de guardar. Pulsa Reintentar.':result.damaged?result.damaged+' consultas no pudieron verificarse. Las demás se conservan.':'Historial compartido con el equipo. Fechas y horas de Panamá.',Boolean(result.damaged));
+      lastLoaded=Date.now();entries=result.entries;render();if(!entries.length&&result.damaged)$('history').replaceChildren(node('li','Consultas pendientes de verificar.'));message(pending.length?pending.length+' consultas pendientes de guardar. Pulsa Reintentar.':result.damaged?result.damaged+' consultas no pudieron verificarse. Las demás se conservan.':'Historial compartido con el equipo. Fechas y horas de Panamá.',Boolean(result.damaged));
     }catch(error){
       if(!current(selected))return;missing=Boolean(error.setupRequired);
       if(!entries.length)$('history').replaceChildren(node('li','Historial pendiente de recuperar. Los registros guardados se conservan.'));
@@ -68,6 +68,6 @@
   $('clear-history').addEventListener('click',()=>{missing=false;load();});
   $('retry-history').addEventListener('click',()=>{missing=false;flush();});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){load();if(!missing)flush();}});
-  setInterval(()=>{if(!document.hidden&&MobileSession.currentSection==='scanner'){load();if(!missing)flush();}},10000);
+  setInterval(()=>{if(!document.hidden&&MobileSession.currentSection==='scanner'){if(!api||api.status().syncMode!=='live'||Date.now()-lastLoaded>=120000)load();if(!missing)flush();}},30000);
   MobileSession.ready.then(value=>{owner=value;api=owner.AuditCloud;owner.addEventListener('audit:authenticated',begin);owner.addEventListener('traza:session-cleared',clear);owner.addEventListener('audit:changed',event=>{if(['mega_product_queries','all'].includes(event.detail.table))schedule();});begin();}).catch(()=>{});
 })();

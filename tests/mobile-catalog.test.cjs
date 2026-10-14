@@ -135,3 +135,22 @@ test('same-day salida numbers compare without integer precision loss and conflic
   assert.equal(match.history.length, 3, 'Identical duplicate lines are collapsed, different prices are retained');
   assert.deepEqual(match.history.map(row => row.product.pventa), [8.99, 9.99, 12]);
 });
+
+
+test('local name search handles accents, partial references and several distinct barcodes without treating a name as an exact code',async()=>{
+ const catalog=Catalog.create({snapshot:async()=>[{id:'one',encrypted_metadata:'r1'}],document:async()=>({salida:'9',invoiceDate:'2026-10-14',products:[{codigo:'0000123456789',descripcion:'Perfume Ámbar',ref:'HB-001',pventa:9.99},{codigo:'0000123456790',descripcion:'Perfume Ámbar',ref:'HB-002',pventa:7.99}]}),cache:{read:async()=>null,write:async()=>{}},seal:async v=>v,unseal:async v=>v,verifyAccess:async()=>{}});
+ await catalog.prepare();const result=await catalog.lookup('perfume ambar',undefined,'name');assert.equal(result.candidateCount,2);assert.equal(result.match,null);assert.equal((await catalog.lookup('HB-00',undefined,'name')).candidateCount,2);assert.equal((await catalog.lookup('Ámbar')).match,null);
+});
+
+test('new devices reuse the shared index, changed documents are reparsed once and shared failures keep the local reader functional',async()=>{
+ let reads=0,writes=0,revision='v1';const doc={products:[{codigo:'0000123456789',descripcion:'Artículo',ref:'A',pventa:0}],salida:'9'};
+ const catalog=Catalog.create({snapshot:async()=>[{id:'one',encrypted_metadata:revision}],document:async()=>{reads++;return doc;},shared:{read:async()=>revision==='v1'?new Map([['one',doc]]):new Map(),write:async()=>{writes++;throw new Error('Unavailable');}},cache:{read:async()=>null,write:async()=>{}},seal:async v=>v,unseal:async v=>v,verifyAccess:async()=>{}});
+ const first=await catalog.prepare();assert.equal(reads,0);assert.equal(first.shared,1);assert.equal((await catalog.lookup('0000123456789')).match.product.pventa,0);
+ revision='v2';const changed=await catalog.prepare();assert.equal(reads,1);assert.equal(writes,1);assert.equal(changed.failed,0);assert.equal(changed.sharedFailed,1);assert.equal((await catalog.lookup('0000123456789')).match.product.pventa,0);
+});
+
+test('an existing local cache seeds the shared catalog once without rereading PDFs',async()=>{
+ let stored={version:3,documents:[{id:'one',revision:'cipher',doc:{products:[{codigo:'0000123456789',ref:'A',descripcion:'Artículo',pventa:1}],salida:'9'}}]},reads=0,writes=0;
+ const catalog=Catalog.create({snapshot:async()=>[{id:'one',encrypted_metadata:'cipher',metadata_revision:'a'.repeat(32)}],document:async()=>{reads++;throw new Error('No PDF read expected');},shared:{read:async()=>new Map(),write:async()=>{writes++;}},cache:{read:async()=>stored,write:async value=>stored=value},seal:async v=>v,unseal:async v=>v,verifyAccess:async()=>{}});
+ assert.equal((await catalog.prepare()).cached,1);assert.equal(reads,0);assert.equal(writes,1);await catalog.prepare();assert.equal(writes,1);assert.equal(reads,0);
+});

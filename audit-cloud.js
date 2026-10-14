@@ -19,6 +19,7 @@
   let mobileCatalog = null;
   let realtime = null;
   let syncMode='polling';
+  let lastVerifiedAt=null,networkIssue=false;
   let member = null;
   let username = "";
   let master = null;
@@ -36,6 +37,7 @@
   const blobUrls = new Map();
   const archiveFilters = { query: "", from: "", to: "", author: "", page: 1 };
   const pending = new Map();
+  const pendingPrices=new Map();
   const importUpdates = new Map();
   const pendingMembers = new Map();
   const verifiedUnitSummaries = new Map();
@@ -141,6 +143,7 @@
       mode: "supabase",
       generation,
       syncMode,
+      lastVerifiedAt,networkIssue,
       authenticated: Boolean(session && member && master),
       user: session && member && master ? { id: session.user.id, username, display_name: username, role: member.role } : null
     };
@@ -154,7 +157,7 @@
   function clearSession() {
     generation++;
     if (realtime) realtime.close(); realtime = null;
-    syncMode='polling';importUpdates.clear();
+    syncMode='polling';importUpdates.clear();pendingPrices.clear();lastVerifiedAt=null;networkIssue=false;
     if (mobileCatalog) mobileCatalog.clear();
     mobileCatalog = null;
     for (const controller of requests) controller.abort();
@@ -257,6 +260,7 @@
       release();
       if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
       if (options.signal && options.signal.aborted) throw new Error("La vista cambió.");
+      networkIssue=true;window.dispatchEvent(new CustomEvent('audit:sync-status',{detail:{mode:syncMode,networkIssue:true}}));
       throw new Error("No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo nuevamente; el Excel aún no se ha descargado.");
     }
     if (!response.ok) {
@@ -307,6 +311,8 @@
       }
       throw error;
     }
+    const recoveredConnection=networkIssue;lastVerifiedAt=new Date().toISOString();networkIssue=false;
+    if(recoveredConnection)window.dispatchEvent(new CustomEvent('audit:sync-status',{detail:{mode:syncMode,networkIssue:false}}));
     if (options.raw) {
       // Keep timeout and cancellation through the body, not just the headers.
       for (const method of ["arrayBuffer", "json", "blob", "text"]) {
@@ -599,6 +605,13 @@
     }
   }
 
+  async function verifyStoredFiles(record,guard,expected) {
+    await Promise.all(['pdf','excel'].map(async kind=>{
+      const response=await request('/storage/v1/object/authenticated/'+BUCKET+'/'+recordPath(record,kind),{method:'HEAD',raw:true});
+      await response.arrayBuffer();guard();const size=Number(response.headers.get('content-length'));
+      if(!Number.isFinite(size)||size<28||size>FILE_LIMIT+64||(expected&&size!==expected[kind]))throw new Error('No se confirmó el '+kind.toUpperCase()+' completo. Reintenta sin cambiar el PDF; no se creará un duplicado.');
+    }));guard();
+  }
   async function prepareRecord(options, id, key, owner, guard) {
     const number = String(options.salidaNumero);
     if (!/^\d{1,60}$/.test(number)) throw new Error("Ingresa un número de salida válido antes de descargar.");
@@ -740,7 +753,7 @@
         if(!claim.record||!claim.matched_record)throw new Error('No se pudo comprobar la salida existente.');
         const matched=await decryptedRecord(claim.matched_record,key),previous=await readSalidaSnapshot(matched,key,guard);guard();
         if(previous.identityTag!==identityTag||previous.contentTag!==contentTag||previous.manifest.canonical!==manifest.canonical)throw new Error('La salida existente tiene otro contenido. No se reutilizó el registro.');
-        const saved=await decryptedRecord(claim.record,key);guard();clearPending();saved.automaticAction='existing';saved.matchedVersion=matched.salida_version;
+        await verifyStoredFiles(claim.record,guard);const saved=await decryptedRecord(claim.record,key);guard();clearPending();saved.automaticAction='existing';saved.matchedVersion=matched.salida_version;
         window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));return saved;
       }
       if(!claim||claim.id!==id||claim.owner_id!==owner||!['new','updated'].includes(claim.action))throw new Error('No se pudo reservar la versión de esta salida.');
@@ -750,7 +763,9 @@
       await putDocument(recordPath({id,created_by:owner},'excel'),snapshot.encryptedExcel,guard);guard();
       let row;try{row=await rpc('mega_salida_commit',{p_workspace_id:CONFIG.workspace,p_identity_tag:identityTag,p_content_tag:contentTag,p_document_tag:documentTag,p_id:id,p_salida_tag:snapshot.tag,p_encrypted_metadata:snapshot.encryptedMetadata,p_approved_import:Boolean(options.importedDocument&&options.importConfirmed)});}catch(error){throw automaticError(error);}
       guard();if(!row||row.id!==id||row.created_by!==owner||row.encrypted_metadata!==snapshot.encryptedMetadata||row.salida_identity_tag!==identityTag||row.salida_content_tag!==contentTag||row.salida_version!==claim.version)throw new Error('No se confirmó la versión de la salida. Reintenta sin cambiar el PDF.');
+      await verifyStoredFiles(row,guard,{pdf:snapshot.encryptedPdf.length,excel:snapshot.encryptedExcel.length});
       const saved=await decryptedRecord(row,key);guard();salidaSnapshots.set(id,{revision:row.encrypted_metadata,value:{manifest,identityTag,contentTag,documentTag}});legacyInventory=null;clearPending();saved.automaticAction=claim.action;
+      await publishRecordCatalog(saved,source,guard);
       window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_audit_records'}}));return saved;
     }finally{if(data)data.fill(0);if(snapshot){if(snapshot.pdf)snapshot.pdf.fill(0);if(snapshot.excel)snapshot.excel.fill(0);snapshot.pdf=snapshot.excel=null;}}
   }
@@ -809,7 +824,7 @@
       let previousPdf;
       try { previousPdf=await getDocument(claim.record,'pdf',key,guard);guard();if(!equalBytes(source,previousPdf))throw new Error('La operación guardada contiene otro PDF. No se reutilizó el registro.'); }
       finally { if(previousPdf)previousPdf.fill(0); }
-      const saved=await decryptedRecord(claim.record,key);guard();clearPending();
+      await verifyStoredFiles(claim.record,guard);const saved=await decryptedRecord(claim.record,key);guard();clearPending();
       if(options.importedDocument&&options.importConfirmed&&!saved.import_reviewed_by)throw new Error('Este PDF ya está archivado. Abre Archivo → Revisar lectura / Excel para aprobar sus datos y precios.');
       window.dispatchEvent(new CustomEvent('audit:recorded',{detail:saved}));return saved;
     }
@@ -868,9 +883,11 @@
       saved = await decryptedRecord(result, key);
     }
     guard();
+    await verifyStoredFiles({id:saved.id,created_by:saved.created_by},guard);
     saved.username = username;
     saved.user_display_name = username;
     clearPending();
+    if(options.importedDocument&&options.importConfirmed)await publishRecordCatalog(saved,{rows:options.importedDocument.rows,info:{...options.importedDocument,numero:options.importedDocument.numero}},guard);
     window.dispatchEvent(new CustomEvent("audit:recorded", { detail: saved }));
     return saved;
     } finally {
@@ -908,6 +925,7 @@
     }
     const archived = await decryptedRecord(rows[0], key);
     guard();
+    await verifyStoredFiles(rows[0],guard);
     return archived;
   }
 
@@ -1820,6 +1838,9 @@
     const header = node("div", undefined, "traza-archive-header");
     const heading = node("div");
     heading.append(node("h2", "Archivo de salidas"), node("p", "Consulta las salidas compartidas. Sus unidades se comprueban automáticamente con el PDF original.", "audit-muted"));
+    const health=node('p','','audit-muted');health.id='archive-sync-status';health.setAttribute('role','status');heading.append(health);
+    function showHealth(){if(view.disposed)return;health.textContent=!navigator.onLine?'Sin conexión. Se conserva la última vista; no se han comprobado cambios.':networkIssue?'No se pudo comprobar el archivo. Pulsa Actualizar para reintentar.':syncMode==='live'?'Sincronización en vivo activa.':'Sincronización en vivo desconectada; comprobación periódica activa.';}
+    showHealth();for(const name of ['audit:sync-status','online','offline'])window.addEventListener(name,showHealth,{signal:view.controller.signal});
     const newOutput = button("Nueva salida");
     newOutput.addEventListener("click", function () { if (window.TrazaUI) window.TrazaUI.navigate("converter"); else location.href = "index.html#nueva-salida"; });
     header.append(heading, newOutput);
@@ -2091,7 +2112,7 @@
     };
     const changed=event=>{if(['mega_audit_records','all'].includes(event.detail.table))view.checkUpdates(true);};
     window.addEventListener('audit:changed',changed,{signal:view.controller.signal});
-    const syncTimer=setInterval(()=>view.checkUpdates(false),15000);view.controller.signal.addEventListener('abort',()=>clearInterval(syncTimer),{once:true});
+    const syncTimer=setInterval(()=>view.checkUpdates(false),30000);view.controller.signal.addEventListener('abort',()=>clearInterval(syncTimer),{once:true});
     form.addEventListener("submit", function (event) { event.preventDefault(); applyFilters(); });
     clear.addEventListener("click", function () { search.value = from.value = to.value = author.value = ""; applyFilters(); });
     refresh.addEventListener("click", function () { verifiedUnitSummaries.clear(); loadRecords(); });
@@ -2426,6 +2447,7 @@
       cache: window.MobileCatalog.cache(CONFIG.workspace + "|" + key.fingerprint),
       snapshot: mobileSnapshot,
       document: mobileProducts,
+      shared:{read:readSharedCatalog,write:writeSharedCatalog},
       async seal(value) {
         guard();
         const data = new TextEncoder().encode(JSON.stringify(value));
@@ -2451,6 +2473,38 @@
     return mobileCatalog;
   }
 
+  function validCatalogDocument(doc) {
+    return doc&&Array.isArray(doc.products)&&doc.products.length<=30000&&typeof doc.salida==='string'&&typeof doc.date==='string'&&doc.products.every(product=>product&&typeof product.codigo==='string'&&typeof product.descripcion==='string'&&typeof product.ref==='string'&&(product.pventa===null||Number.isFinite(product.pventa)));
+  }
+  async function readSharedCatalog(snapshot,signal) {
+    const epoch=generation,key=master,result=new Map(),guard=()=>priceGuard(epoch,key,signal);
+    for(let start=0;start<snapshot.length;start+=50){
+      const batch=snapshot.slice(start,start+50),expected=new Map(batch.map(row=>[row.id,row]));
+      const rows=await request('/rest/v1/mega_product_catalog?workspace_id=eq.'+CONFIG.workspace+'&record_id=in.('+batch.map(row=>row.id).join(',')+')&select=record_id,metadata_revision,encrypted_catalog&limit=50',{signal});guard();
+      if(!Array.isArray(rows))throw new Error('Índice compartido no disponible.');
+      for(const row of rows){const source=expected.get(row.record_id);if(!source||source.metadata_revision!==row.metadata_revision)continue;let data;try{data=await key.decrypt(unbase64(row.encrypted_catalog),'shared-catalog-v1|'+row.record_id+'|'+row.metadata_revision);guard();const doc=JSON.parse(new TextDecoder().decode(data));if(validCatalogDocument(doc)&&doc.date===source.created_at)result.set(row.record_id,doc);}catch(_){guard();}finally{if(data)data.fill(0);}}
+    }
+    return result;
+  }
+  async function writeSharedCatalog(row,doc,signal) {
+    const epoch=generation,key=master,guard=()=>priceGuard(epoch,key,signal);guard();
+    if(!validCatalogDocument(doc))throw new Error('Lectura incompleta para el índice compartido.');
+    if(!/^[a-f0-9]{32}$/.test(row.metadata_revision||''))throw new Error('Versión del índice pendiente.');
+    const data=new TextEncoder().encode(JSON.stringify(doc));let encrypted;
+    try{encrypted=base64(await key.encrypt(data,'shared-catalog-v1|'+row.id+'|'+row.metadata_revision));}finally{data.fill(0);}guard();
+    if(encrypted.length>2097152)throw new Error('Este documento usará el índice local por su tamaño.');
+    const saved=await request('/rest/v1/rpc/mega_product_catalog_put',{method:'POST',signal,body:{p_workspace_id:CONFIG.workspace,p_record_id:row.id,p_metadata_revision:row.metadata_revision,p_encrypted_catalog:encrypted}});guard();
+    if(saved!==true)throw new Error('El índice compartido no fue confirmado.');
+  }
+  async function publishRecordCatalog(saved,source,guard) {
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),3000);
+    try{
+      const rows=await request('/rest/v1/mega_audit_catalog_records?workspace_id=eq.'+CONFIG.workspace+'&id=eq.'+saved.id+'&select=id,created_at,metadata_revision&limit=1',{signal:controller.signal});guard();
+      if(!Array.isArray(rows)||rows.length!==1)throw new Error('Índice pendiente.');
+      const info=source.info,doc={products:source.rows.map(row=>({codigo:String(row.codigo||''),descripcion:String(row.descripcion||''),ref:String(row.ref||''),empaque:String(row.empaque||''),pventa:Number.isFinite(row.pventa)?row.pventa:null,priceOrigin:row.priceOrigin})),salida:String(info.numero||saved.salida_numero),archiveSalida:saved.salida_numero,invoiceDate:window.MobileCatalog.invoiceDate(info.fecha),kind:saved.document_kind,format:info.format||'',reviewed:Boolean(saved.import_reviewed_by),date:saved.created_at};
+      await writeSharedCatalog(rows[0],doc,controller.signal);guard();
+    }catch(_){guard();saved.catalogWarning=true;}finally{clearTimeout(timer);}
+  }
   async function mobileProducts(id, signal) {
     if (!UUID.test(String(id))) throw new Error("Documento inválido.");
     const epoch = generation;
@@ -2513,7 +2567,9 @@
     } catch (_) { throw new Error('No se pudo verificar el precio compartido. Consulta nuevamente el producto.'); }
     finally { if (data) data.fill(0); }
     if (!value || value.code !== code || !Number.isSafeInteger(value.cents) || value.cents < 0 || value.cents > 999999999) throw new Error('No se pudo verificar el precio de este producto.');
-    return { cents: value.cents, version: row.version, updatedBy: row.updated_by, updatedAt: row.updated_at };
+    if(value.reason!==undefined&&(typeof value.reason!=='string'||value.reason.length>500))throw new Error('Motivo del precio inválido.');
+    if(value.previousCents!==undefined&&value.previousCents!==null&&(!Number.isSafeInteger(value.previousCents)||value.previousCents<0||value.previousCents>999999999))throw new Error('Precio anterior inválido.');
+    return { cents: value.cents, version: row.version, updatedBy: row.updated_by, updatedAt: row.updated_at,reason:value.reason||'',previousCents:value.previousCents??null,revertedFrom:value.revertedFrom||null };
   }
   async function mobilePrice(rawCode, signal) {
     const epoch = generation, key = master;
@@ -2531,17 +2587,39 @@
     if (!Array.isArray(rows) || rows.length > 1) throw new Error('Supabase devolvió un precio ambiguo.');
     const override = rows.length ? await decryptedPrice(rows[0], code, tag, key) : null;
     priceGuard(epoch, key, signal);
-    return { available: true, override };
+    return { available: true, override,checkedAt:new Date().toISOString() };
   }
-  async function mobileSetPrice(rawCode, cents, expectedVersion, signal) {
+  async function mobilePriceHistory(rawCode,signal,offset=0) {
+    if(!Number.isSafeInteger(offset)||offset<0)throw new Error('Página de precios inválida.');
+    const epoch=generation,key=master,guard=()=>priceGuard(epoch,key,signal),code=window.MobileCatalog.canonical(rawCode),tag=await key.productIndex(code);guard();
+    const rows=await request('/rest/v1/mega_product_price_history?workspace_id=eq.'+CONFIG.workspace+'&product_tag=eq.'+tag+'&select=*&order=version.desc&limit=21&offset='+offset,{signal});guard();
+    if(!Array.isArray(rows))throw new Error('Historial de precios inválido.');
+    const authors=await rpc('mega_audit_authors',{p_workspace_id:CONFIG.workspace});guard();const names=new Map(authors.map(row=>[row.user_id,row.username]));
+    const entries=[];for(const row of rows.slice(0,20)){const entry=await decryptedPrice(row,code,tag,key);guard();entries.push({...entry,username:names.get(row.updated_by)||''});}
+    return {entries,more:rows.length>20,offset:offset+entries.length};
+  }
+  async function mobileRestorePrice(rawCode,version,expectedVersion,reason,signal,previous=false) {
+    const epoch=generation,key=master,guard=()=>priceGuard(epoch,key,signal);await requireAdmin(epoch);guard();
+    const code=window.MobileCatalog.canonical(rawCode),tag=await key.productIndex(code);
+    if(!Number.isSafeInteger(version)||version<1||typeof reason!=='string'||!reason.trim())throw new Error('Elige un precio anterior e indica el motivo.');
+    const rows=await request('/rest/v1/mega_product_price_history?workspace_id=eq.'+CONFIG.workspace+'&product_tag=eq.'+tag+'&version=eq.'+version+'&select=*&limit=2',{signal});guard();
+    if(!Array.isArray(rows)||rows.length!==1)throw new Error('No se encontró ese precio en el historial.');
+    const target=await decryptedPrice(rows[0],code,tag,key),current=await mobilePrice(code,signal);guard();
+    if(!current.override||current.override.version!==expectedVersion)throw new Error('El precio cambió. Consulta nuevamente antes de restaurar.');
+    const cents=previous?target.previousCents:target.cents;if(!Number.isSafeInteger(cents))throw new Error('Ese cambio no tiene un precio anterior registrado.');
+    return mobileSetPrice(code,cents,expectedVersion,signal,{reason,previousCents:current.override.cents,revertedFrom:version});
+  }
+  async function mobileSetPrice(rawCode, cents, expectedVersion, signal, options={}) {
     if (!Number.isSafeInteger(cents) || cents < 0 || cents > 999999999 || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || expectedVersion >= Number.MAX_SAFE_INTEGER) throw new Error('Ingresa un precio válido con hasta dos decimales.');
     const epoch = generation, key = master;
     priceGuard(epoch, key, signal); await requireAdmin(epoch); priceGuard(epoch, key, signal);
     const code = window.MobileCatalog.canonical(rawCode), tag = await key.productIndex(code);
-    const data = new TextEncoder().encode(JSON.stringify({ code, cents }));
-    let encrypted;
-    try { encrypted = base64(await key.encrypt(data, 'product-price-v1|' + tag + '|' + (expectedVersion + 1))); }
-    finally { data.fill(0); }
+    if(options.reason!==undefined&&(typeof options.reason!=='string'||!options.reason.trim()||options.reason.trim().length>500))throw new Error('Indica el motivo del cambio (máximo 500 caracteres).');
+    if(options.previousCents!==undefined&&options.previousCents!==null&&(!Number.isSafeInteger(options.previousCents)||options.previousCents<0||options.previousCents>999999999))throw new Error('Precio anterior inválido.');
+    const payload={code,cents};if(options.reason!==undefined){payload.reason=options.reason.trim();payload.previousCents=options.previousCents??null;if(options.revertedFrom)payload.revertedFrom=options.revertedFrom;}
+    const signature=JSON.stringify([expectedVersion,payload]);let attempt=pendingPrices.get(tag),encrypted;
+    if(attempt&&attempt.signature===signature)encrypted=attempt.encrypted;
+    else{const data=new TextEncoder().encode(JSON.stringify(payload));try{encrypted=base64(await key.encrypt(data,'product-price-v1|'+tag+'|'+(expectedVersion+1)));}finally{data.fill(0);}pendingPrices.set(tag,{signature,encrypted});}
     priceGuard(epoch, key, signal);
     let row;
     try { row = await request('/rest/v1/rpc/mega_product_price_set', { method: 'POST', signal, body: { p_workspace_id: CONFIG.workspace, p_product_tag: tag, p_encrypted_price: encrypted, p_expected_version: expectedVersion } }); }
@@ -2555,7 +2633,8 @@
     if (!row || row.version !== expectedVersion + 1 || row.updated_by !== session.user.id || row.encrypted_price !== encrypted) throw new Error('No se pudo confirmar el cambio de precio. Consulta el producto para verificarlo.');
     const override = await decryptedPrice(row, code, tag, key);
     priceGuard(epoch, key, signal);
-    return { available: true, override };
+    pendingPrices.delete(tag);window.dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_product_prices'}}));
+    return { available: true, override,checkedAt:new Date().toISOString() };
   }
   async function mobileLookup(code, signal, mode = 'barcode') {
     const result = await getMobileCatalog().lookup(code, signal, mode);
@@ -2627,7 +2706,7 @@
   }
   window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,openRecordedSalida,
     queries: Object.freeze({ticket:queryTicket,add:queryAdd,list:queryList,queue:queryQueue}),
-    mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice }) });
+    mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice,priceHistory:mobilePriceHistory,restorePrice:mobileRestorePrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
   window.addEventListener("traza-ui:navigated", function () {
     for (const dialog of openDialogs) dialog.close();

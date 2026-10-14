@@ -445,3 +445,4 @@ tbody tr:hover td { background: #f3f8f5; }
   .traza-detail-history .salida-history-heading h3 { font-size: 15px; }
   .traza-detail-dialog .traza-save-notice { left: 12px; right: 12px; bottom: max(12px,env(safe-area-inset-bottom)); width: auto; }
 }
+.validation-table{overflow:auto;margin:12px 0}.validation-table table{width:100%;border-collapse:collapse}.validation-table th,.validation-table td{padding:10px;text-align:right;white-space:nowrap;border-bottom:1px solid #dbe5e4}.validation-table th:first-child{text-align:left}.validation-mismatch{background:#fff1dc;color:#7d4310}.validation-approval{display:flex;align-items:flex-start;gap:8px;margin-top:16px;font-weight:600;line-height:1.5}.validation-approval input{flex:none;margin-top:5px}

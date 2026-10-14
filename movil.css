@@ -29,3 +29,4 @@
 }
 
 .lookup-kind{display:flex;align-items:center;gap:10px;margin-top:14px}.lookup-kind label{margin:0;white-space:nowrap}.lookup-kind select{font:inherit;min-width:0;flex:1;border:1px solid #d1ded6;border-radius:10px;background:#f9fbfa;color:inherit;padding:10px;min-height:44px;font-size:13px}.lookup-kind select:focus-visible{outline:3px solid #de9e40;outline-offset:3px}
+.name-choice{display:flex;flex-direction:column;gap:6px;width:100%;text-align:left;margin-top:10px;white-space:normal}.name-choice small{font-weight:400;opacity:.8}.price-history{margin:18px 0}.price-history-entry{border:1px solid #dbe5e3;border-radius:12px;padding:14px;margin:10px 0;background:#f8fbfa}.price-history-entry strong{display:block}.price-history-entry form{margin-top:12px}.price-history-entry label{display:block}.price-history-entry input{margin:8px 0;width:100%;box-sizing:border-box}.price-history-entry button{min-height:44px}

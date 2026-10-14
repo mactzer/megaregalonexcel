@@ -364,7 +364,7 @@
     }
     .traza-scanner-frame{display:block;width:100%;height:calc(100dvh - 165px);min-height:460px;border:0;border-radius:16px}
   </style>
-  <link rel="stylesheet" href="traza.css?v=wide-detail-1">
+  <link rel="stylesheet" href="traza.css?v=integrity-19">
 </head>
 <body>
   <a class="traza-skip-link" href="#app-main">Ir al contenido</a>
@@ -392,7 +392,7 @@
   <main class="page traza-main" id="app-main" tabindex="-1">
     <div id="audit-bar" aria-live="polite" hidden></div>
     <div id="audit-page" hidden></div>
-    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=18" title="Escáner de productos" allow="camera"></iframe></section>
+    <section id="scanner-view" hidden aria-label="Escáner de productos"><iframe id="scanner-frame" class="traza-scanner-frame" data-src="movil.html?embedded=1&amp;v=19" title="Escáner de productos" allow="camera"></iframe></section>
     <div id="converter-view">
       <div class="traza-section-heading"><div><p class="traza-eyebrow">DOCUMENTOS</p><h1 id="converter-title">Nueva salida</h1><p id="converter-description">Convierte tu documento en un Excel y conserva su respaldo.</p></div><span class="traza-local-badge"><span aria-hidden="true"></span>Procesamiento local</span></div>
       <div id="archive-source-banner" class="traza-source-banner" role="status" hidden><p id="archive-source-message"></p><button class="button button-secondary" id="archive-source-return" type="button">Volver al Archivo</button></div>
@@ -453,6 +453,7 @@
             <label for="tax-amount">Impuesto (importe, no porcentaje): </label>
             <input id="tax-amount" type="number" min="0" step="0.01" placeholder="Calculado por producto" disabled style="padding:10px;width:180px;border:1px solid #aaa;border-radius:8px">
             <p id="totals-warning" style="color:#a52818"></p>
+            <section id="document-validation" aria-label="Validación contra el PDF"></section>
           </div>
           <div class="rename-row" style="margin-top:20px">
             <label for="salida-number">Salida</label>
@@ -485,15 +486,16 @@
   <script src="excel-table.js?v=megacontrol-1"></script>
   <script src="supabase-config.js?v=megacontrol-1"></script>
   <script src="audit-crypto.js?v=shared-history-1"></script>
-  <script src="audit-backup.js?v=2"></script>
+  <script src="audit-backup.js?v=integrity-19"></script>
   <script src="invoice-formats.js?v=3"></script>
   <script src="invoice-ocr.js?v=1"></script>
   <script src="invoice-review.js?v=2"></script>
-  <script src="audit-realtime.js?v=1"></script>
-  <script src="traza.js?v=wide-detail-1"></script>
-  <script src="mobile-catalog.js?v=explicit-product-lookup-1"></script>
+  <script src="audit-realtime.js?v=integrity-19"></script>
+  <script src="traza.js?v=integrity-19"></script>
+  <script src="mobile-catalog.js?v=integrity-19"></script>
   <script src="salida-versions.js?v=1"></script>
-  <script src="audit-cloud.js?v=wide-detail-1"></script>
+  <script src="document-validation.js?v=1"></script>
+  <script src="audit-cloud.js?v=integrity-19"></script>
   <script src="audit.js?v=megacontrol-archive-units-1"></script>
   <script>
     "use strict";
@@ -533,7 +535,7 @@
       excelNameEdited: false,
       archiveSource: null,
       movementId: null,
-      importReview: null, imported: false
+      importReview: null, imported: false, validationApproval: '', validationSignature: ''
     };
 
     function clearPendingAudit() {
@@ -805,6 +807,7 @@
       const subtotalMatch = text.match(/SubTotal:\s*([\d,]+(?:\.\d{2})?)/i);
       const taxMatch = text.match(/Impuesto\s+([\d,]+(?:\.\d{2})?)/i);
       const netTotalMatch = text.match(/Tota(?:l)?\s*Neto\s*:?\s*([\d,]+(?:\.\d{2})?)/i);
+      const unitsMatch = text.match(/(?:Total\s+(?:de\s+)?(?:unidades|piezas)|Unidades\s+totales)\s*:?\s*([\d,]+(?:\.\d+)?)/i);
       const issuerLine=rawLines.slice(0,20).find(line=>/^[\p{L}\d &.,'()-]+\b(?:S\.?\s*A\.?|S\.?\s*R\.?\s*L\.?|INC\.?)\s*$/iu.test(line.texto));
       return {
         emisor:issuerLine?cleanText(issuerLine.texto):'',
@@ -815,6 +818,7 @@
         subtotal: subtotalMatch ? moneyFromText(subtotalMatch[1]) : "",
         impuesto: taxMatch ? moneyFromText(taxMatch[1]) : "",
         total_neto: netTotalMatch ? moneyFromText(netTotalMatch[1]) : ""
+        ,total_unidades: unitsMatch ? moneyFromText(unitsMatch[1]) : ""
       };
     }
 
@@ -993,10 +997,12 @@
       let baseExenta = 0;
       let impuestoSinRedondear = 0;
       let lineasSinTasa = 0;
+      const invalidTaxRows=[];
       for (const row of state.rows) {
         const rate = getTaxRate(row.iv);
         if (rate === null) {
           lineasSinTasa++;
+          invalidTaxRows.push(state.rows.indexOf(row));
           continue;
         }
         if (!Number.isFinite(row.salidas_total)) continue;
@@ -1015,8 +1021,8 @@
       const totalNeto = impuesto === "" ? "" : roundMoney(subtotal + impuesto);
       const subtotalPdf = state.documentInfo.subtotal;
       const totalNetoPdf = state.documentInfo.total_neto;
-      const diferenciaSubtotal = subtotalPdf === "" ? "" : roundMoney(subtotal - subtotalPdf);
-      const diferenciaTotalNeto = totalNetoPdf === "" || totalNeto === "" ? "" : roundMoney(totalNeto - totalNetoPdf);
+      const diferenciaSubtotal = !Number.isFinite(subtotalPdf) ? "" : roundMoney(subtotal - subtotalPdf);
+      const diferenciaTotalNeto = !Number.isFinite(totalNetoPdf) || totalNeto === "" ? "" : roundMoney(totalNeto - totalNetoPdf);
       return {
         subtotal,
         totalUnidades,
@@ -1028,6 +1034,7 @@
         subtotalGravado: roundMoney(baseGravada),
         subtotalExento: roundMoney(baseExenta),
         lineasSinTasa,
+        invalidTaxRows,
         totalNeto,
         subtotalPdf,
         totalNetoPdf,
@@ -1102,6 +1109,7 @@
       $("#tax-amount").disabled = !state.documentInfo.impuestoManual;
       if (!state.documentInfo.impuestoManual) $("#tax-amount").value = totals.impuesto;
       $("#totals-warning").textContent = [totals.impuesto === "" ? "No se puede completar el impuesto. Revisa las tasas I.V. y los importes, o activa el impuesto manual." : "", totals.lineasSinTasa ? `${totals.lineasSinTasa} filas con tasa I.V. no reconocida: no se suponen exentas. Revisa esas filas.` : "", totals.lineasSinTotal ? `${totals.lineasSinTotal} filas sin total detectado: la suma solo incluye importes disponibles. Revisa esas filas.` : "", totals.lineasSinUnidades ? `${totals.lineasSinUnidades} filas sin unidades detectadas: el total de unidades solo incluye cantidades disponibles. Revisa esas filas.` : ""].filter(Boolean).join(" ");
+      renderValidation(totals);
       const defs = selectedDefs();
       const tableWrap = $("#table-wrap");
       $("#preview-count").textContent = `${state.rows.length} fila${state.rows.length === 1 ? "" : "s"}`;
@@ -1121,6 +1129,20 @@
       $("#export-button").disabled = state.exporting || (state.importReview && !state.importReview.valid());
       $("#export-hint").textContent = `${defs.length} columna${defs.length === 1 ? "" : "s"} seleccionada${defs.length === 1 ? "" : "s"}. Se exportarán ${state.rows.length} filas.`;
       updateStep(3);
+    }
+
+    function validationReport(totals=calculateTotals()) {
+      return DocumentValidation.inspect(state.rows,state.documentInfo,totals,state.imported);
+    }
+    function renderValidation(totals) {
+      const host=$('#document-validation'),report=validationReport(totals);
+      const signature=JSON.stringify([state.originalName,state.rows,state.documentInfo]);
+      if(signature!==state.validationSignature){state.validationSignature=signature;state.validationApproval='';}
+      const value=n=>n===null?'No disponible':formatMoney(n);
+      host.innerHTML='<h3>Comprobación contra el PDF</h3><div class="validation-table"><table><thead><tr><th>Dato</th><th>PDF</th><th>Calculado</th><th>Diferencia</th></tr></thead><tbody>'+report.comparisons.map(row=>'<tr class="'+(row.state==='mismatch'?'validation-mismatch':'')+'"><th scope="row">'+row.label+'</th><td>'+value(row.printed)+'</td><td>'+value(row.calculated)+'</td><td>'+value(row.difference)+'</td></tr>').join('')+'</tbody></table></div>';
+      const explanation=document.createElement('p');explanation.className='panel-subtitle';explanation.textContent=report.blocked?'Faltan cantidades. Completa la lectura antes de guardar.':report.needsReview?'Hay diferencias o campos sin detectar. Revisa el PDF y las filas indicadas antes de continuar.':'Los totales disponibles coinciden. «No disponible» significa que ese dato no se pudo comparar con el PDF.';host.append(explanation);
+      if(report.affected.length){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Revisar '+report.affected.length+' filas';details.append(summary);const list=document.createElement('ul');for(const row of report.affected){const item=document.createElement('li');item.textContent='Fila '+row.index+' · '+row.code+' · '+row.description+' — '+row.fields.join(', ')+' sin detectar';list.append(item);}details.append(list);host.append(details);}
+      if(report.needsReview&&!report.blocked){const label=document.createElement('label');label.className='validation-approval';const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.id='approve-validation';checkbox.checked=state.validationApproval===signature;checkbox.addEventListener('change',()=>{state.validationApproval=checkbox.checked?signature:'';});label.append(checkbox,document.createTextNode(' Revisé el PDF y acepto exportar con estas advertencias. Quedarán indicadas en el Excel.'));host.append(label);}
     }
 
     function safeFileName(name) {
@@ -1170,6 +1192,8 @@
       if(state.importReview&&!state.importReview.valid()){showMessage('Revisa los datos y confirma la lectura antes de guardar.','error');return;}
       const missingUnits = state.rows.filter(row => !Number.isFinite(row.salidas_unidades)).length;
       if (missingUnits) { showMessage('Faltan cantidades en ' + missingUnits + ' filas. Revisa el PDF antes de guardar; no se puede registrar una salida con cantidades sin detectar.', 'error'); return; }
+      const validation=validationReport();
+      if(validation.needsReview&&state.validationApproval!==JSON.stringify([state.originalName,state.rows,state.documentInfo])){showMessage('Revisa la comprobación contra el PDF y confirma las advertencias antes de guardar.','error');$('#document-validation').scrollIntoView({block:'nearest'});return;}
       const importedSource=state.importReview?state.importReview.source():null;
       if(importedSource&&(!window.AuditClient||typeof window.AuditClient.updateImport!=='function')){showMessage('La importación de facturas requiere la conexión de MegaControl con Supabase.','error');return;}
       const defs = selectedDefs();
@@ -1320,7 +1344,9 @@
         ["Base gravada", totals.subtotalGravado],
         ["Base exenta (0 %)", totals.subtotalExento],
         ["Líneas con tasa I.V. no reconocida", totals.lineasSinTasa],
-        ["Nota", "La hoja Respaldo original conserva las líneas de texto detectadas en el PDF."]
+        ["Nota", "La hoja Respaldo original conserva las líneas de texto detectadas en el PDF."],
+        ["Validación antes de guardar",validation.needsReview?"ADVERTENCIAS REVISADAS POR EL USUARIO":"TOTALES DISPONIBLES COMPROBADOS"],
+        ...validation.affected.map(row=>["Fila "+row.index+" · "+row.code,row.fields.join(", ")+" sin detectar"])
       ];
       const infoWorksheet = XLSX.utils.aoa_to_sheet(infoMatrix);
       infoWorksheet["!cols"] = [{ wch: 48 }, { wch: 72 }];
@@ -1408,9 +1434,9 @@
         state.pendingAudit = null;
         const destination = "Se inició una sola descarga del Excel. Revisa el panel de descargas del navegador.";
         const automaticNotice=auditRecord&&auditRecord.automaticAction==='existing'?'Esta salida ya se encuentra registrada y no presenta cambios. Se abrirá el registro existente. ':auditRecord&&auditRecord.automaticAction==='updated'?`Salida ${auditRecord.salida_numero} actualizada · Versión ${auditRecord.salida_version}. Las anteriores se conservan en su historial. `:'';
-        const confirmation = (automaticNotice||(state.imported ? (archiveSource?'Lectura revisada y Excel preparado. ':auditRecord&&auditRecord.import_reviewed_by?'Documento aprobado y compartido. ':'Documento archivado. Sus precios quedan pendientes de aprobación administrativa. ') : archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. ` : "")) + destination;
+        const confirmation = (automaticNotice||(state.imported ? (archiveSource?'Lectura revisada y Excel preparado. ':auditRecord&&auditRecord.import_reviewed_by?'Documento aprobado y compartido. ':'Documento archivado. Sus precios quedan pendientes de aprobación administrativa. ') : archiveSource ? `Excel de salida ${archiveSource.salidaNumero} preparado sin crear otra salida. ` : auditRecord ? `Salida ${auditRecord.salida_numero} registrada. PDF y Excel confirmados. ` : "")) + destination;
         if(auditRecord&&auditRecord.automaticAction==='existing')openExisting=auditRecord.id;
-        showMessage(confirmation, "info");
+        showMessage(confirmation+(auditRecord&&auditRecord.catalogWarning?' El índice compartido está pendiente; la salida está guardada. Actualizar el escáner reintentará prepararlo.':''), "info");
         if (window.TrazaSavedFile) window.TrazaSavedFile.show({
           name: fileName,
           mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1456,6 +1482,7 @@
       state.rawLines = [];
       state.documentInfo = {};
       state.originalFile = null;
+      state.validationApproval='';state.validationSignature='';
       clearPendingAudit();
       clearCompletedAudit();
       state.originalName = file.name;
@@ -1555,6 +1582,7 @@
       state.documentInfo = {};
       state.originalName = "documento.pdf";
       state.originalFile = null;
+      state.validationApproval='';state.validationSignature='';
       clearPendingAudit();
       clearCompletedAudit();
       state.salidaNumero = "";

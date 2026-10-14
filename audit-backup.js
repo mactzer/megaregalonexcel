@@ -24,6 +24,7 @@
       for (const row of s.tables[name]) if ((name==='mega_audit_workspace'?row.id:row.workspace_id)!==workspace) fail('El respaldo contiene datos de otro equipo.');
     }
     if(s.tables.mega_salidas!==undefined){if(!Array.isArray(s.tables.mega_salidas))fail('Identidades de salidas inválidas.');for(const row of s.tables.mega_salidas)if(row.workspace_id!==workspace)fail('El respaldo contiene identidades de otro equipo.');}
+    if(s.tables.mega_product_price_history!==undefined){if(!Array.isArray(s.tables.mega_product_price_history))fail('Historial de precios inválido.');for(const row of s.tables.mega_product_price_history)if(row.workspace_id!==workspace)fail('El respaldo contiene precios de otro equipo.');}
     const w=s.tables.mega_audit_workspace;
     if (w.length!==1 || !/^[0-9a-f]{64}$/.test(w[0].key_fingerprint)) fail('Clave del equipo inválida.');
     const paths=new Set();

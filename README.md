@@ -175,3 +175,13 @@ La hoja **Datos** se descarga como una tabla de Excel con encabezados, filtros y
 Para la modalidad interna con SQLite utiliza `iniciar_auditoria.bat`. Para Supabase utiliza el enlace de GitHub Pages; también puedes servir el proyecto para desarrollo con `python -m http.server 8000` y abrir `http://localhost:8000`. Abrir los HTML directamente desde el explorador no sustituye la instalación de Supabase.
 
 Consulta `README.txt` para los detalles de extracción y cálculo de totales. Revisa el resultado antes de utilizarlo: la extracción depende del formato del PDF.
+
+## Controles de integridad y eficiencia
+
+La vista previa compara unidades (si aparecen con una etiqueta explícita), subtotal, impuesto y total neto impresos con los valores calculados. Las cantidades sin detectar bloquean el registro. Diferencias financieras o costos sin detectar requieren revisar y aceptar una advertencia, conservada en la hoja Información del Excel. Un total que no aparece en el PDF se indica como no disponible; nunca se supone cero.
+
+El escáner permite buscar por nombre o referencia parcial dentro del índice del navegador; se elige el producto exacto antes de recuperar su precio compartido. Las búsquedas por código y referencia exacta siguen separadas. El historial de precios conserva importe anterior, nuevo, autor, fecha y motivo cifrado; restaurar un valor registra otra modificación, con el mismo control de concurrencia y permisos de administrador. Los precios anteriores a instalar el historial solo conservan la última modificación conocida.
+
+`supabase/eficiencia.sql` añade el historial de precios a los respaldos y un índice cifrado por documento, asociado a la revisión de sus metadatos. Se genera al registrar una salida o al preparar lecturas existentes; un índice local ya preparado también puede compartir su lectura sin volver a abrir el PDF. Los documentos cambiados se preparan otra vez. Si falla el índice compartido se conserva la lectura local y se avisa; no se pierde el registro. No se duplican PDF ni Excel. El índice es derivado y reconstruible, por eso no se duplica dentro del respaldo.
+
+Guardar verifica la respuesta del registro y la existencia/tamaño de ambos archivos mediante solicitudes HEAD, sin descargar sus cuerpos. Los reintentos conservan sus identificadores. La vista indica conexión, estado del índice y momento de comprobación del precio; una notificación de cambio, fallo de conexión o más de dos minutos sin comprobar el precio lo marca como pendiente. Realtime comparte cambios de precios y documentos; las lecturas de respaldo se espacian a dos minutos con Realtime activo, con comprobaciones más frecuentes si se desconecta.

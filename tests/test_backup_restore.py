@@ -44,6 +44,16 @@ class BackupRestoreTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_price_history_is_restored_without_replacing_current_prices(self):
+        self.tables['mega_product_price_history'] = [{'workspace_id': W, 'product_tag': 'b' * 64, 'version': 1, 'updated_by': A, 'updated_at': '2026-10-14T12:00:00Z', 'encrypted_price': 'Fictitious encrypted historical price'}]
+        (self.folder / 'datos-recuperados.json').write_text(json.dumps({'snapshot': self.snapshot}))
+        snapshot, authors, files = restore.validate(self.folder)
+        self.assertIn(A, authors)
+        sql = restore.restore_sql(snapshot)
+        self.assertIn('insert into public.mega_product_price_history', sql)
+        self.assertNotIn('update public.mega_product_prices', sql)
+        self.assertIn('on conflict do nothing', sql)
+
     def api(self, url, token, body=None, method=None, binary=False):
         self.calls.append((url, body, method))
         self.assertTrue(url.startswith('https://api.supabase.com/v1/projects/' + restore.PROJECT + '/') or url.startswith('https://' + restore.PROJECT + '.supabase.co/'))

@@ -9,15 +9,15 @@
   <title>Escáner · MegaControl</title>
   <link rel="icon" href="megacontrol-logo.png">
   <link rel="apple-touch-icon" href="megacontrol-logo.png">
-  <link rel="manifest" href="movil.webmanifest?v=18">
-  <link rel="stylesheet" href="movil.css?v=18">
+  <link rel="manifest" href="movil.webmanifest?v=19">
+  <link rel="stylesheet" href="movil.css?v=19">
   <script defer src="vendor/zxing-browser.min.js"></script>
   <script defer src="vendor/zxing-wasm-reader.js"></script>
   <script defer src="mobile-scanner.js?v=2"></script>
   <script defer src="movil-navigation.js?v=2"></script>
-  <script defer src="mobile-prices.js?v=explicit-product-lookup-1"></script>
-  <script defer src="movil.js?v=18"></script>
-  <script defer src="mobile-history.js?v=1"></script>
+  <script defer src="mobile-prices.js?v=integrity-19"></script>
+  <script defer src="movil.js?v=19"></script>
+  <script defer src="mobile-history.js?v=integrity-19"></script>
 </head>
 <body>
   <header class="top"><a href="index.html" data-mobile-section="converter" aria-label="MegaControl, página principal"><img src="megacontrol-logo.png" alt=""><span>MegaControl<small>CONSULTA DE PRODUCTOS</small></span></a><span class="live">● Acceso seguro</span></header>
@@ -29,7 +29,7 @@
     </section>
     <section id="workspace" hidden>
       <div class="account"><span id="identity"></span><button id="logout" class="quiet">Cerrar sesión</button></div>
-      <section class="card catalog-card"><div class="section-title"><h2>Índice de productos</h2><button id="refresh-catalog" class="quiet">Actualizar</button></div><p id="catalog-status" class="note" role="status">Preparando…</p></section>
+      <section class="card catalog-card"><div class="section-title"><h2>Índice de productos</h2><button id="refresh-catalog" class="quiet">Actualizar</button></div><p id="catalog-status" class="note" role="status">Preparando…</p><p id="sync-status" class="note" role="status">Comprobando sincronización…</p></section>
       <div class="scanner-layout">
       <section class="card scanner-card"><div class="section-title"><h2>Consultar producto</h2><span class="pill">PDF originales</span></div>
         <div id="camera" hidden><video id="video" autoplay muted playsinline aria-label="Cámara para escanear códigos"></video><div class="scan-frame" aria-hidden="true"></div><p>Acerca la etiqueta: muestra todas las barras y evita reflejos</p></div>
@@ -38,7 +38,7 @@
         <div id="camera-controls" hidden><button id="stop" class="quiet">Detener cámara</button><button id="torch" class="quiet" hidden>Encender linterna</button></div>
         <div id="zoom-control" hidden><label for="camera-zoom">Zoom de cámara</label><input id="camera-zoom" type="range" aria-label="Zoom de cámara"></div>
         <div class="divider"><span class="mobile-heading">O ESCRIBE EL CÓDIGO</span><span class="desktop-heading">O ESCANEA LA ETIQUETA</span></div>
-        <form id="lookup-form"><div class="lookup-kind"><label for="lookup-kind">Buscar por</label><select id="lookup-kind"><option value="barcode">Código de barras</option><option value="reference">Referencia</option></select></div><label id="barcode-label" for="barcode">Código de barras</label><div class="input-row"><input id="barcode" autocomplete="off" placeholder="Ej. 7451234567890" maxlength="80" required><button id="search">Buscar</button></div></form>
+        <form id="lookup-form"><div class="lookup-kind"><label for="lookup-kind">Buscar por</label><select id="lookup-kind"><option value="barcode">Código de barras</option><option value="reference">Referencia</option><option value="name">Nombre o referencia parcial</option></select></div><label id="barcode-label" for="barcode">Código de barras</label><div class="input-row"><input id="barcode" autocomplete="off" placeholder="Ej. 7451234567890" maxlength="80" required><button id="search">Buscar</button></div></form>
         <p class="note"><span class="desktop-heading">Escribe el código o usa un lector USB y pulsa Enter. </span>Los ceros iniciales se conservan. Compatible con EAN, UPC, Code 128, Code 39 e ITF.</p>
       </section>
       <section id="result" class="card" hidden aria-live="polite"></section>
@@ -51,7 +51,7 @@
     <footer>Información extraída de los PDF autorizados. Los precios actualizados por administradores se muestran con el PDF original como referencia.<br><a href="index.html#archivo" data-mobile-section="archive">Abrir archivo de salidas</a></footer>
   </main>
   <nav class="bottom" aria-label="Navegación"><a href="#escaner" data-mobile-section="scanner" aria-current="page">▥<span>Escanear</span></a><a href="index.html#archivo" data-mobile-section="archive">▤<span>Archivo</span></a><a href="index.html" data-mobile-section="converter">＋<span>Nueva salida</span></a></nav>
-  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=18#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
+  <section id="mobile-document-view" hidden aria-label="Archivo y nuevas salidas"><iframe id="engine" data-src="index.html?mobile-index=1&amp;v=19#nueva-salida" title="Archivo y nuevas salidas" allow="camera"></iframe></section>
   <noscript>Activa JavaScript para usar la cámara y consultar los documentos.</noscript>
 </body>
 </html>
