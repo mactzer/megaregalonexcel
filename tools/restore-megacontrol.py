@@ -14,6 +14,7 @@ PROJECT = 'aixsnmsmgyejcbtuilwt'
 WORKSPACE = '86551e44-7504-4d30-b453-c9e04b269a43'
 TABLES = ('mega_audit_workspace', 'mega_audit_members', 'mega_audit_user_keys',
           'mega_audit_records', 'mega_audit_operations', 'mega_product_prices', 'mega_product_queries')
+CHAT_TABLES = ('mega_chat_messages','mega_chat_cases','mega_chat_followers','mega_chat_case_events','mega_chat_products','mega_chat_product_events','mega_chat_notifications','mega_chat_files')
 UUID = r'[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 
 
@@ -27,7 +28,7 @@ def validate(folder):
     if snapshot.get('version') != 1 or snapshot.get('workspace_id') != WORKSPACE or inventory.get('workspace') != WORKSPACE:
         raise ValueError('Esta herramienta solo restaura el equipo original de MegaControl.')
     rows = snapshot['tables']
-    if not set(TABLES).issubset(rows) or not set(rows).issubset(set(TABLES) | {'mega_salidas','mega_product_price_history'}) or len(rows['mega_audit_workspace']) != 1:
+    if not set(TABLES).issubset(rows) or not set(rows).issubset(set(TABLES) | set(CHAT_TABLES) | {'mega_salidas','mega_product_price_history'}) or len(rows['mega_audit_workspace']) != 1:
         raise ValueError('Las tablas del respaldo están incompletas.')
     for table, items in rows.items():
         for row in items:
@@ -47,12 +48,22 @@ def validate(folder):
     authors.update(row['updated_by'] for row in rows.get('mega_product_price_history', []))
     if any(not re.fullmatch(UUID, a) for a in authors):
         raise ValueError('Identidad de autor inválida.')
+    for table in CHAT_TABLES:
+        for row in rows.get(table, []):
+            for field in ('created_by', 'changed_by', 'updated_by', 'uploaded_by', 'assigned_to', 'user_id'):
+                if row.get(field):
+                    if not re.fullmatch(UUID, row[field]):
+                        raise ValueError('Identidad del chat inválida.')
+                    authors.add(row[field])
     files = {}
     for item in inventory['files']:
         name = item['name']
-        if not re.fullmatch(WORKSPACE + '/' + UUID + '/' + UUID + r'/(pdf|excel)\.bin', name) or name in files:
+        if not re.fullmatch(WORKSPACE + '/' + UUID + '/' + UUID + r'/(pdf|excel|image)\.bin', name) or name in files:
             raise ValueError('Ruta de documento inválida o duplicada.')
-        local = folder / 'storage' / 'mega-audit-documents' / name
+        bucket = 'mega-chat-images' if name.endswith('/image.bin') else 'mega-audit-documents'
+        if item.get('bucket', bucket) != bucket:
+            raise ValueError('Bucket de documento inválido.')
+        local = folder / 'storage' / bucket / name
         data = local.read_bytes()
         if len(data) != item['size'] or not 29 <= len(data) <= 25 * 1024 * 1024 + 64 or hashlib.sha256(data).hexdigest() != item['sha256']:
             raise ValueError('Documento incompleto o alterado: ' + name)
@@ -96,7 +107,7 @@ def restore_sql(snapshot, restore_access=False):
              'end $mega_restore$;',
              'alter table public.mega_audit_records disable trigger mega_audit_record_stamp;',
              'alter table public.mega_audit_records disable trigger mega_audit_operation_guard;']
-    for table in TABLES + tuple(name for name in ('mega_salidas','mega_product_price_history') if snapshot['tables'].get(name)):
+    for table in TABLES + tuple(name for name in ('mega_salidas','mega_product_price_history') + CHAT_TABLES if snapshot['tables'].get(name)):
         if not restore_access and table in ('mega_audit_members', 'mega_audit_user_keys'):
             continue
         source_rows = snapshot['tables'][table]
@@ -109,6 +120,12 @@ def restore_sql(snapshot, restore_access=False):
                 'update mega_restore_records r set duplicate_of=s.current_record_id from public.mega_salidas s join public.mega_audit_records current on current.id=s.current_record_id where r.workspace_id=s.workspace_id and r.salida_identity_tag=s.identity_tag and r.id<>s.current_record_id;',
                 f'insert into public.{table} select * from mega_restore_records on conflict do nothing;'
             ])
+        elif table == 'mega_chat_messages':
+            columns = 'id,workspace_id,created_by,created_at,kind,encrypted_body,parent_id,case_id'
+            lines.append(f'insert into public.{table}({columns}) select {columns} from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) order by seq on conflict do nothing;')
+        elif table == 'mega_chat_notifications':
+            columns = 'workspace_id,user_id,message_id,kind,revision,created_at,read_at'
+            lines.append(f'insert into public.{table}({columns}) select {columns} from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) on conflict do nothing;')
         else:
             lines.append(f'insert into public.{table} select * from jsonb_populate_recordset(null::public.{table},{rows}::jsonb) on conflict do nothing;')
     lines.append('update public.mega_audit_workspace set key_fingerprint=' + literal(fingerprint) + ' where id=' + literal(WORKSPACE) + '::uuid and key_fingerprint is null;')
@@ -149,7 +166,7 @@ def run(argv=None):
     storage = f'https://{PROJECT}.supabase.co/storage/v1/object/'
     uploaded = 0
     for name, (local, digest) in files.items():
-        remote_path = 'mega-audit-documents/' + name
+        remote_path = ('mega-chat-images/' if name.endswith('/image.bin') else 'mega-audit-documents/') + name
         try:
             remote = request(storage + 'authenticated/' + remote_path, service, binary=True)
         except urllib.error.HTTPError as error:
