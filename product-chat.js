@@ -7,7 +7,8 @@
  const $=id=>document.getElementById(id),money=c=>c===null?'Precio no disponible':new Intl.NumberFormat('es-PA',{style:'currency',currency:'USD'}).format(c/100);
  const when=value=>new Intl.DateTimeFormat('es-ES',{timeZone:'America/Panama',year:'numeric',month:'2-digit',day:'2-digit',hour:'numeric',minute:'2-digit',hour12:true}).format(new Date(value));
  let api,user,epoch=-1,sequence=0,active=false,messages=new Map(),caseMap=new Map(),members=[],notices=[],newest=0,oldest=0,more=false,loading=false,refreshAgain=false,thread=null;
- let pending=null,reply=null,attachment=null,attachmentURL=null,scanner=null,scanGeneration=0,catalogReady=false,casePending=null,productPending=null;
+ let pending=null,reply=null,attachment=null,attachmentURL=null,scanner=null,scanGeneration=0,catalogReady=false;
+ const pendingCases=new Map(),pendingShares=new Map();let threadTurn=0,caseListTurn=0;
  let dialog=null,timer,urls=new Map(),requests=new Set(),caseCursor=null,caseFilter='open',lastSync=0,panel='';
  const current=(s=sequence)=>s===sequence&&api&&api.status().authenticated&&api.status().generation===epoch;
  const isActive=()=>active&&!document.hidden;
@@ -17,7 +18,7 @@
  function controller(){const c=new AbortController();requests.add(c);return c;}
  function badge(){window.dispatchEvent(new CustomEvent('chat:unread',{detail:{count:notices.length}}));const e=$('chat-unread');if(e){e.hidden=!notices.length;e.textContent=notices.length===100?'99+':String(notices.length);}const label=$('chat-notification-toggle');if(label)label.textContent='Notificaciones'+(notices.length?' ('+notices.length+(notices.length===100?'+':'')+')':'');}
  function clear(){
-  sequence++;epoch=-1;active=false;messages.clear();caseMap.clear();members=[];notices=[];newest=oldest=0;more=loading=refreshAgain=false;thread=null;pending=null;sharePending=null;casePending=productPending=null;reply=null;attachment=null;catalogReady=false;caseCursor=null;lastSync=0;
+  sequence++;epoch=-1;active=false;messages.clear();caseMap.clear();members=[];notices=[];newest=oldest=0;more=loading=refreshAgain=false;thread=null;pending=null;reply=null;attachment=null;catalogReady=false;caseCursor=null;lastSync=0;pendingCases.clear();pendingShares.clear();threadTurn++;caseListTurn++;
   for(const c of requests)c.abort();requests.clear();stopCamera();if(dialog){dialog.close();dialog.remove();dialog=null;}for(const url of urls.values())URL.revokeObjectURL(url);urls.clear();if(attachmentURL)URL.revokeObjectURL(attachmentURL);attachmentURL=null;badge();root.replaceChildren(n('p','Inicia sesión con tu cuenta para abrir el chat.','chat-empty'));root.append(b('Iniciar sesión',()=>window.TrazaUI.navigate('archive')));
  }
  function layout(){
@@ -78,16 +79,16 @@
   const sorted=[...messages.values()].sort((a,b)=>a.seq-b.seq);list.replaceChildren();if(!sorted.length)list.append(n('p','Inicia una conversación con tu equipo.','chat-empty'));for(const m of sorted)list.append(messageCard(m));
   $('chat-older').hidden=!more;if(bottom)stream.scrollTop=stream.scrollHeight;else stream.scrollTop=position;
  }
- function absorb(rows){for(const m of rows){messages.set(m.id,m);newest=Math.max(newest,m.seq);oldest=oldest?Math.min(oldest,m.seq):m.seq;}}
+ function absorb(rows,fromList=false){for(const m of rows){messages.set(m.id,m);if(fromList)newest=Math.max(newest,m.seq);oldest=oldest?Math.min(oldest,m.seq):m.seq;}}
  async function loadCasesFor(rows,s=sequence){const ids=rows.filter(m=>m.kind==='case').map(m=>m.id);for(let i=0;i<ids.length;i+=40){const result=await api.chat.cases({ids:ids.slice(i,i+40)});guard(s);for(const c of result.cases)caseMap.set(c.id,c);}}
- async function loadOlder(){return run(async s=>{const btn=$('chat-older');btn.disabled=true;try{const r=await api.chat.list({before:oldest});guard(s);await loadCasesFor(r.messages,s);guard(s);const stream=$('chat-stream'),position=stream.scrollTop,height=stream.scrollHeight;absorb(r.messages);more=r.more;render();stream.scrollTop=position+stream.scrollHeight-height;}finally{if(btn.isConnected)btn.disabled=false;}});}
+ async function loadOlder(){return run(async s=>{const btn=$('chat-older');btn.disabled=true;try{const r=await api.chat.list({before:oldest});guard(s);await loadCasesFor(r.messages,s);guard(s);const stream=$('chat-stream'),position=stream.scrollTop,height=stream.scrollHeight;absorb(r.messages,true);more=r.more;render();stream.scrollTop=position+stream.scrollHeight-height;}finally{if(btn.isConnected)btn.disabled=false;}});}
  async function refresh(){
   if(!current()||document.hidden)return;if(loading){refreshAgain=true;return;}loading=true;const s=sequence;
   try{
-   const unread=await api.chat.notifications();guard(s);notices=unread;badge();lastSync=Date.now();if(user.role!==api.status().user.role){user=api.status().user;casePending=productPending=null;if(dialog?.open)dialog.close();}
+   const unread=await api.chat.notifications();guard(s);notices=unread;badge();lastSync=Date.now();if(user.role!==api.status().user.role){user=api.status().user;if(dialog?.open)dialog.close();}
    if(isActive()){
-    let next=await api.chat.list(newest?{after:newest}:{});guard(s);const initial=!newest;if(initial)more=next.more;absorb(next.messages);await loadCasesFor(next.messages,s);guard(s);
-    for(let i=0;next.more&&!initial&&i<5;i++){next=await api.chat.list({after:newest});guard(s);absorb(next.messages);await loadCasesFor(next.messages,s);guard(s);}
+    let next=await api.chat.list(newest?{after:newest}:{});guard(s);const initial=!newest;if(initial)more=next.more;absorb(next.messages,true);await loadCasesFor(next.messages,s);guard(s);
+    for(let i=0;next.more&&!initial&&i<5;i++){next=await api.chat.list({after:newest});guard(s);absorb(next.messages,true);await loadCasesFor(next.messages,s);guard(s);}
     await loadCasesFor([...messages.values()].filter(m=>m.kind==='case'),s);guard(s);render();showSync();
     if(panel==='cases'&&!$('chat-case-filter')?.matches(':focus'))await caseList(true);if(panel==='notifications')renderNotifications();if(thread)await refreshThread();
    }
@@ -110,52 +111,53 @@
   if(kind==='mentions')for(const m of members.filter(m=>['admin','user'].includes(m.role)))box.append(b(name(m.id),()=>{$('chat-text').value+='@'+m.username+' ';$('chat-text').focus();box.hidden=true;},'chat-sticker-choice'));
  }
  function selectReply(id){reply=id;const box=$('chat-reply-preview');if(!box)return;box.hidden=!id;box.replaceChildren();if(id){const m=messages.get(id);box.append(n('span','Respondiendo a '+name(m?.created_by||user.id)),b('Cancelar respuesta',()=>selectReply(null),'chat-reply-link'));} }
- function closePanel(){panel='';thread=null;selectReply(null);$('chat-side').hidden=true;root.classList.remove('chat-side-open');}
+ function closePanel(){threadTurn++;caseListTurn++;panel='';thread=null;selectReply(null);$('chat-side').hidden=true;root.classList.remove('chat-side-open');}
  function sideTitle(title){const side=$('chat-side');side.hidden=false;root.classList.add('chat-side-open');side.replaceChildren();const header=n('div',undefined,'chat-side-header');header.append(n('h2',title),b('Cerrar',closePanel));side.append(header);return side;}
- function togglePanel(next){if(panel===next){closePanel();return;}thread=null;selectReply(null);panel=next;if(next==='cases')run(()=>caseList(true));else renderNotifications();}
+ function togglePanel(next){if(panel===next){closePanel();return;}threadTurn++;caseListTurn++;thread=null;selectReply(null);panel=next;if(next==='cases')run(()=>caseList(true));else renderNotifications();}
  function renderNotifications(){const side=sideTitle('Notificaciones');if(!notices.length)side.append(n('p','No tienes notificaciones pendientes.','chat-empty'));else{
   side.append(b('Marcar como leídas',()=>run(async s=>{await api.chat.read(Math.max(...notices.map(x=>x.id)));guard(s);notices=[];badge();renderNotifications();})));
   const labels={message:'Mensaje nuevo',reply:'Respuesta a tu conversación',mention:'Te mencionaron',case:'Producto por revisar',assigned:'Solicitud asignada a ti',resolved:'Producto solucionado',status:'Cambio de estado'};
   for(const item of notices)side.append(b(labels[item.kind]+' · '+when(item.created_at),()=>run(async s=>{await openThread(item.message_id);guard(s);await api.chat.read(item.id,undefined,true);guard(s);notices=notices.filter(x=>x.id!==item.id);badge();}),'chat-notification'));
  }}
  async function caseList(reset){
-  const s=sequence;if(reset)caseCursor=null;
-  const r=await api.chat.cases({status:caseFilter,before:reset?null:caseCursor});guard(s);for(const c of r.cases)caseMap.set(c.id,c);const last=r.cases.at(-1);if(last)caseCursor={time:last.updated_at,id:last.id};
+  const s=sequence,turn=++caseListTurn,wanted=caseFilter;if(reset)caseCursor=null;
+  const r=await api.chat.cases({status:caseFilter,before:reset?null:caseCursor});guard(s);if(panel!=='cases'||turn!==caseListTurn||caseFilter!==wanted)return;for(const c of r.cases)caseMap.set(c.id,c);const last=r.cases.at(-1);if(last)caseCursor={time:last.updated_at,id:last.id};
   const side=sideTitle('Seguimiento de productos'),filter=n('select');filter.id='chat-case-filter';filter.setAttribute('aria-label','Filtrar incidencias');for(const [id,label]of [['open','Pendientes y en proceso'],...Object.entries(S),['all','Todos los casos']]){const opt=n('option',label);opt.value=id;opt.selected=id===caseFilter;filter.append(opt);}filter.addEventListener('change',()=>{caseFilter=filter.value;run(()=>caseList(true));});side.append(filter);
   if(!r.cases.length)side.append(n('p','No hay solicitudes en este estado.','chat-empty'));
-  for(const c of r.cases){let m=messages.get(c.id);if(!m){const r=await api.chat.list({id:c.id});guard(s);m=r.messages[0];if(m)messages.set(m.id,m);}if(!m||m.damaged)continue;const item=b('',()=>openThread(c.id),'chat-case-item');item.append(n('strong',m.body.product.code),n('span',m.body.product.description||'Producto por identificar'),n('small',S[c.status]+(c.assigned_to?' · '+name(c.assigned_to):'')));side.append(item);}
+  for(const c of r.cases){let m=messages.get(c.id);if(!m){const r=await api.chat.list({id:c.id});guard(s);m=r.messages[0];if(panel!=='cases'||turn!==caseListTurn||caseFilter!==wanted)return;if(m)messages.set(m.id,m);}if(!m||m.damaged)continue;const item=b('',()=>openThread(c.id),'chat-case-item');item.append(n('strong',m.body.product.code),n('span',m.body.product.description||'Producto por identificar'),n('small',S[c.status]+(c.assigned_to?' · '+name(c.assigned_to):'')));side.append(item);}
   if(r.more)side.append(b('Más casos',()=>run(()=>caseList(false))));
  }
- async function openThread(id){return run(async s=>{
+ async function openThread(id){const turn=++threadTurn;caseListTurn++;return run(async s=>{
   let m=messages.get(id);if(!m){const r=await api.chat.list({id});guard(s);m=r.messages[0];if(m)messages.set(m.id,m);}if(!m||m.damaged)throw new Error('No se encontró una conversación verificable.');
   if(m.parent_id){id=m.parent_id;const r=await api.chat.list({id});guard(s);m=r.messages[0];if(m)messages.set(m.id,m);}if(!m)throw new Error('No se encontró el mensaje original.');
-  panel='thread';thread=id;casePending=null;selectReply(id);await refreshThread();guard(s);
+  if(turn!==threadTurn||!active)return;panel='thread';thread=id;selectReply(id);await refreshThread();guard(s);
  });}
  async function refreshThread(before=0){
-  if(!thread)return;if(!before&&$('chat-side')?.querySelector('form[data-dirty]'))return;const s=sequence,id=thread,m=messages.get(id);const r=await api.chat.list({parent:id,before});guard(s);if(thread!==id)return;
-  if(m.kind==='case'){const c=await api.chat.cases({ids:[id]});guard(s);if(c.cases[0])caseMap.set(id,c.cases[0]);}
+  if(!thread)return;if(!before&&$('chat-side')?.querySelector('form[data-dirty]'))return;const s=sequence,id=thread,m=messages.get(id);const r=await api.chat.list({parent:id,before});guard(s);if(thread!==id||panel!=='thread')return;
+  if(m.kind==='case'){const c=await api.chat.cases({ids:[id]});guard(s);if(thread!==id||panel!=='thread')return;if(c.cases[0])caseMap.set(id,c.cases[0]);}
   const side=sideTitle('Conversación del producto');side.append(messageCard(m,true));
   if(r.more)side.append(b('Respuestas anteriores',()=>run(()=>refreshThread(r.messages[0]?.seq))));for(const reply of r.messages)side.append(messageCard(reply,true));if(!r.messages.length)side.append(n('p','Escribe abajo para comentar sobre esta consulta.','chat-empty'));
   const c=caseMap.get(id);if(c){side.append(b('Seguir esta solicitud',()=>run(async s=>{await api.chat.follow(c.id);guard(s);status('Recibirás las actualizaciones de esta solicitud.');})));if(user.role==='admin')caseForm(side,c,m);side.append(b('Historial de seguimiento',()=>run(()=>showCaseHistory(c.id,side))));}
  }
- async function showCaseHistory(id,side,before){const s=sequence,r=await api.chat.caseHistory(id,before);guard(s);if(!side.isConnected)return;for(const event of r.events){const item=n('div',undefined,'chat-event');item.append(n('strong',S[event.status]+' · '+name(event.changed_by)),n('p',event.resolution?.note||''),n('small',when(event.created_at)));side.append(item);}if(!r.events.length)side.append(n('p','Sin cambios todavía.'));if(r.more)side.append(b('Más cambios',event=>{event.currentTarget.remove();run(()=>showCaseHistory(id,side,r.events.at(-1).revision));}));}
+ async function showCaseHistory(id,side,before){const s=sequence,r=await api.chat.caseHistory(id,before);guard(s);if(!side.isConnected||thread!==id||panel!=='thread')return;for(const event of r.events){const item=n('div',undefined,'chat-event');item.append(n('strong',S[event.status]+' · '+name(event.changed_by)),n('p',event.resolution?.note||''),n('small',when(event.created_at)));side.append(item);}if(!r.events.length)side.append(n('p','Sin cambios todavía.'));if(r.more)side.append(b('Más cambios',event=>{event.currentTarget.remove();run(()=>showCaseHistory(id,side,r.events.at(-1).revision));}));}
  function label(text,input){const l=n('label',text,'chat-field');l.append(input);return l;}
  function caseForm(side,c,m){
+  let pendingChange=null;
   const form=n('form',undefined,'chat-resolution-form'),state=n('select'),assignee=n('select'),note=n('textarea');state.setAttribute('aria-label','Estado de la solicitud');assignee.setAttribute('aria-label','Asignar solicitud');note.setAttribute('aria-label','Motivo y solución');note.required=true;note.maxLength=1000;
   for(const [id,value]of Object.entries(S)){const o=n('option',value);o.value=id;o.selected=id===c.status;state.append(o);}const nobody=n('option','Sin asignar');nobody.value='';assignee.append(nobody);for(const mem of members.filter(m=>m.role==='admin')){const o=n('option',name(mem.id));o.value=mem.id;o.selected=mem.id===c.assigned_to;assignee.append(o);}
   form.addEventListener('input',()=>{form.dataset.dirty='true';});form.addEventListener('change',()=>{form.dataset.dirty='true';});
   const save=b('Guardar seguimiento');save.type='submit';form.append(n('h3','Gestionar solicitud'),label('Estado',state),label('Responsable',assignee),label('Motivo o solución',note),save);
   const productActions=n('div',undefined,'chat-actions');productActions.append(b('Buscar de nuevo',()=>openLookup(m.body.product.code,false,m.body.product.identifier||'barcode')),b('Asociar o registrar producto',()=>openLookup(m.body.product.code,true,m.body.product.identifier||'barcode')));form.append(productActions);
   form.addEventListener('submit',event=>{event.preventDefault();run(async s=>{save.disabled=true;try{
-    if(!casePending){const ticket=await api.chat.caseTicket(c,state.value,assignee.value,note.value,c.resolution?.product||null);guard(s);casePending=ticket;}guard(s);const result=await api.chat.updateCase(casePending);guard(s);casePending=null;delete form.dataset.dirty;caseMap.set(c.id,result);await refreshThread();guard(s);status('Seguimiento guardado para todo el equipo.');render();
-   }catch(error){if(error.code==='40001'){casePending=null;delete form.dataset.dirty;await refreshThread();}throw error;}finally{if(save.isConnected){save.disabled=false;save.textContent=casePending?'Reintentar seguimiento':'Guardar seguimiento';for(const control of [state,assignee,note])control.disabled=Boolean(casePending);}}});});side.append(form);
+    if(!pendingChange){const ticket=await api.chat.caseTicket(c,state.value,assignee.value,note.value,c.resolution?.product||null);guard(s);pendingChange=ticket;}guard(s);const result=await api.chat.updateCase(pendingChange);guard(s);pendingChange=null;delete form.dataset.dirty;caseMap.set(c.id,result);await refreshThread();guard(s);status('Seguimiento guardado para todo el equipo.');render();
+   }catch(error){if(error.code==='40001'){pendingChange=null;delete form.dataset.dirty;await refreshThread();}throw error;}finally{if(save.isConnected){save.disabled=false;save.textContent=pendingChange?'Reintentar seguimiento':'Guardar seguimiento';for(const control of [state,assignee,note])control.disabled=Boolean(pendingChange);}}});});side.append(form);
  }
  let scannerPromise;
  function scannerReady(){if(window.MobileScanner)return Promise.resolve();if(!scannerPromise){const script=path=>new Promise((resolve,reject)=>{const el=document.createElement('script');el.src=path;el.onload=resolve;el.onerror=()=>reject(new Error('No se pudo cargar el lector. Escribe el código manualmente.'));document.head.append(el);});scannerPromise=script('vendor/zxing-browser.min.js').then(()=>script('vendor/zxing-wasm-reader.js')).then(()=>script('mobile-scanner.js?v=2')).catch(error=>{scannerPromise=null;throw error;});}return scannerPromise;}
  function stopCamera(){scanGeneration++;if(scanner){scanner.stop();scanner=null;}const video=$('chat-video');if(video?.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());video.srcObject=null;}const camera=$('chat-camera');if(camera)camera.hidden=true;}
  function modal(title){stopCamera();if(dialog){dialog.close();dialog.remove();}dialog=n('dialog',undefined,'chat-dialog');const head=n('div',undefined,'chat-dialog-header');head.append(n('h2',title),b('Cerrar',()=>dialog.close()));dialog.append(head);dialog.addEventListener('close',stopCamera);document.body.append(dialog);dialog.showModal();return dialog;}
  function openLookup(raw='',manage=false,identifier='barcode'){
-  if(!current())return;const d=modal('Consultar y compartir producto');casePending=null;productPending=null;sharePending=null;
+  if(!current())return;const d=modal('Consultar y compartir producto');
   const camera=n('div',undefined,'chat-camera');camera.id='chat-camera';camera.hidden=true;const video=n('video');video.id='chat-video';video.autoplay=video.muted=video.playsInline=true;video.setAttribute('aria-label','Escáner de códigos de barras');camera.append(video,b('Detener cámara',stopCamera));d.append(camera);
   const cam=b('Abrir cámara',()=>run(async s=>{stopCamera();const turn=scanGeneration;const owner=d;try{await scannerReady();guard(s);if(!owner.open||turn!==scanGeneration)return;camera.hidden=false;const controls=await MobileScanner.start(video,value=>{if(current(s)&&owner.open){stopCamera();input.value=value;form.requestSubmit();}});if(!current(s)||!owner.open||turn!==scanGeneration){controls.stop();return;}scanner=controls;}catch(error){stopCamera();if(current(s)&&owner.open)msg.textContent='No se pudo abrir la cámara. Escribe el código o usa un lector USB.';}}));d.append(cam);
   const form=n('form',undefined,'chat-lookup-form'),input=n('input'),mode=n('select');input.id='chat-lookup-code';input.required=true;input.maxLength=80;input.autocomplete='off';input.placeholder='Código de barras o referencia';input.value=raw;
@@ -178,16 +180,16 @@
   }finally{clearTimeout(timeout);requests.delete(c);}
  });}
  function snapshot(raw,r,mode='barcode'){const match=r.match,p=match?.product,override=r.price?.override;return {version:1,result:match?'found':r.failed||r.unidentified||r.stale?'incomplete':'missing',code:p?.codigo?C.code(p.codigo):mode==='reference'?String(raw).trim():C.code(raw),identifier:p?.codigo||mode!=='reference'?'barcode':'reference',description:p?.descripcion||'',ref:p?.ref||'',cents:override?override.cents:Number.isFinite(p?.pventa)?Math.round(p.pventa*100):null,source:override?'Precio administrativo':match?.doc?.kind==='registered'?'Registro administrativo':match?'Precio de la última factura':'Archivo de documentos',salida:match?.doc?.salida||'',invoiceDate:match?.doc?.invoiceDate||'',checkedAt:r.price?.checkedAt||new Date().toISOString(),sourceCode:p?.codigo||'',note:''};}
- let sharePending=null;
- async function shareProduct(p){return run(async s=>{const d=dialog,btns=[...d.querySelectorAll('button')];for(const btn of btns)btn.disabled=true;try{if(!sharePending){const ticket=await api.chat.ticket({version:1,product:p},'product',reply);guard(s);sharePending=ticket;}guard(s);const row=await api.chat.send(sharePending);guard(s);sharePending=null;absorb([row]);render();d.close();status('Producto compartido y guardado.');}finally{for(const btn of btns)btn.disabled=false;}});}
- async function requestCase(p){return run(async s=>{if(!casePending){const ticket=await api.chat.ticket({version:1,product:p},'case');guard(s);casePending=ticket;}guard(s);const c=await api.chat.openCase(p,casePending);guard(s);casePending=null;caseMap.set(c.id,c);dialog.close();await openThread(c.id);guard(s);render();status('Solicitud compartida. Si ya existía una pendiente, te vinculamos a esa misma.');});}
+ async function shareProduct(p){return run(async s=>{const d=dialog,key=JSON.stringify([p,reply]),btns=[...d.querySelectorAll('button')];for(const btn of btns)btn.disabled=true;try{let ticket=pendingShares.get(key);if(!ticket){ticket=await api.chat.ticket({version:1,product:p},'product',reply);guard(s);pendingShares.set(key,ticket);}const row=await api.chat.send(ticket);guard(s);pendingShares.delete(key);absorb([row]);render();if(dialog===d)d.close();status('Producto compartido y guardado.');}finally{for(const btn of btns)btn.disabled=false;}});}
+ async function requestCase(p){return run(async s=>{const d=dialog,key=(p.identifier||'barcode')+'|'+p.code;let ticket=pendingCases.get(key);if(!ticket){ticket=await api.chat.ticket({version:1,product:p},'case');guard(s);pendingCases.set(key,ticket);}const c=await api.chat.openCase(p,ticket);guard(s);pendingCases.delete(key);caseMap.set(c.id,c);if(dialog===d){d.close();await openThread(c.id);guard(s);}render();status('Solicitud compartida. Si ya existía una pendiente, te vinculamos a esa misma.');});}
  function adminProduct(box,p){
+  let pendingProduct=null,pendingResolution=null;
   if(box.querySelector('.chat-register-form'))return;const form=n('form',undefined,'chat-register-form'),description=n('input'),ref=n('input'),price=n('input'),source=n('input'),reason=n('input');description.value=p.description;description.required=true;description.maxLength=2048;ref.value=p.ref;ref.maxLength=120;price.value=p.cents===null?'':(p.cents/100).toFixed(2);price.inputMode='decimal';price.disabled=p.result==='found';source.placeholder='Código del producto existente, si es una asociación';source.maxLength=80;reason.required=true;reason.maxLength=500;
   const save=b('Guardar producto o asociación');save.type='submit';form.append(n('h3','Administrar producto'),n('p','Código consultado: '+p.code,'chat-caption'),label('Descripción',description),label('Referencia',ref),label('Precio confirmado (USD)',price),label('Asociar al código existente (opcional)',source),label('Motivo obligatorio',reason),n('p','Este registro pertenece al catálogo de consulta de MegaControl. Las existencias del sistema de caja se administran en ese sistema.','chat-caption'),save);
   form.addEventListener('submit',event=>{event.preventDefault();run(async s=>{save.disabled=true;try{let chosen={...p,result:'found',description:description.value.trim(),ref:ref.value.trim(),cents:parsePrice(price.value,true),source:'Registro administrativo',checkedAt:new Date().toISOString(),sourceCode:'',note:reason.value.trim()};
    if(source.value.trim()){const target=C.code(source.value);if(target===p.code)throw new Error('El código asociado debe corresponder a otro producto existente.');const r=await api.mobile.lookup(target);guard(s);if(!r.match||r.match.ambiguousReference)throw new Error('No hay un producto único para ese código. Compruébalo antes de asociar.');chosen={...snapshot(target,r),code:p.code,sourceCode:r.match.product.lookupCode||target,source:'Asociación administrativa',note:reason.value.trim()};}
-   const old=await api.chat.catalogProduct(p.code);guard(s);if(!productPending){const ticket=await api.chat.productTicket(chosen,old?.version||0);guard(s);productPending=ticket;}guard(s);await api.chat.putProduct(productPending);guard(s);productPending=null;
-   if(thread&&caseMap.get(thread)){const c=caseMap.get(thread);if(!casePending){const ticket=await api.chat.caseTicket(c,'resolved',user.id,reason.value,chosen);guard(s);casePending=ticket;}guard(s);await api.chat.updateCase(casePending);guard(s);casePending=null;await refreshThread();guard(s);}
+   const old=await api.chat.catalogProduct(p.code);guard(s);if(!pendingProduct){const ticket=await api.chat.productTicket(chosen,old?.version||0);guard(s);pendingProduct=ticket;}guard(s);await api.chat.putProduct(pendingProduct);guard(s);pendingProduct=null;
+   if(thread&&caseMap.get(thread)){const c=caseMap.get(thread);if(!pendingResolution){const ticket=await api.chat.caseTicket(c,'resolved',user.id,reason.value,chosen);guard(s);pendingResolution=ticket;}guard(s);await api.chat.updateCase(pendingResolution);guard(s);pendingResolution=null;await refreshThread();guard(s);}
    dialog.close();status('Producto guardado. Las próximas consultas usarán este registro.');await refresh();
   }finally{if(save.isConnected)save.disabled=false;}});});box.append(form);description.focus();
  }

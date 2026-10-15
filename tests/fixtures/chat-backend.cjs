@@ -3,7 +3,7 @@ const W='86551e44-7504-4d30-b453-c9e04b269a43',A='11111111-1111-4111-8111-111111
 function store(){return {messages:new Map(),cases:new Map(),products:new Map(),events:[],notifications:[],followers:new Map(),sockets:new Set(),seq:0,notice:0};}
 async function handle({state,url,request,json,route}){
  const path=url.pathname;if(!/\/mega_chat_/.test(path))return false;const db=state.chat;
- const broadcast=table=>{for(const socket of db.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+W,event:'postgres_changes',payload:{data:{schema:'public',table,record:{workspace_id:W}}}}));};
+ const broadcast=table=>{if(db.suppressBroadcast)return;for(const socket of db.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+W,event:'postgres_changes',payload:{data:{schema:'public',table,record:{workspace_id:W}}}}));};
  const notif=(id,kind,revision=0)=>{for(const user of [A,U])if(user!==state.actor){db.notifications.push({id:++db.notice,workspace_id:W,user_id:user,message_id:id,kind,revision,created_at:new Date().toISOString(),read_at:null});}broadcast('mega_chat_notifications');};
  if(state.noMembership){await json({code:'42501'},403);return true;}
  if(state.chatFail){await json({code:'fictional_error'},503);return true;}

@@ -2765,3 +2765,12 @@ test('product chat: invoice with reference but no barcode keeps that distinction
   await h.page.getByRole('button',{name:'Compartir en el chat',exact:true}).click();await h.page.locator('#chat-messages .chat-product').waitFor();assert.match(await h.page.locator('#chat-messages .chat-product').innerText(),/Referencia consultada: REF ONLY 001/);assert.equal(h.state.chat.messages.size,1);
  }finally{await h.close();}
 });
+
+test('product chat: acknowledging an own send cannot skip a preceding message from a coworker while Realtime is delayed',async()=>{
+ const a=await harness(),b=await harness({role:'user',chat:a.state.chat});try{
+  await chatOpen(a);await chatOpen(b,'colega');await a.page.locator('#chat-text').fill('Mensaje inicial para fijar el cursor');await a.page.locator('#chat-send').click();await a.page.waitForFunction(()=>document.querySelector('#chat-status')?.textContent==='Enviado y guardado.');await b.page.getByText('Mensaje inicial para fijar el cursor',{exact:true}).waitFor();await a.page.evaluate(()=>dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_chat_messages'}})));await a.page.waitForTimeout(400);
+  a.state.chat.suppressBroadcast=true;await b.page.evaluate(async()=>{const t=await AuditCloud.chat.ticket({version:1,text:'Mensaje intermedio del compañero que no debe omitirse'});await AuditCloud.chat.send(t);});
+  await a.page.locator('#chat-text').fill('Mi envío posterior, con respuesta confirmada');await a.page.locator('#chat-send').click();await a.page.waitForFunction(()=>document.querySelector('#chat-status')?.textContent==='Enviado y guardado.');assert.equal(a.state.chat.messages.size,3);
+  await a.page.evaluate(()=>dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_chat_messages'}})));await a.page.getByText('Mensaje intermedio del compañero que no debe omitirse',{exact:true}).waitFor();assert.equal(await a.page.locator('#chat-messages .chat-message').count(),3);
+ }finally{await a.close();await b.close();}
+});
