@@ -13,6 +13,7 @@ const Crypto = require('../audit-crypto.js');
 const XLSX = require('../vendor/xlsx.full.min.js');
 const ExcelTable = require('../excel-table.js');
 const InvoiceFixtures=require('./fixtures/invoice-fixtures.cjs');
+const ChatBackend=require('./fixtures/chat-backend.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUTPUT = process.env.TRAZA_BROWSER_OUTPUT || path.join(os.tmpdir(), 'traza-browser-results');
@@ -815,9 +816,10 @@ async function harness(options = {}) {
   page.on('pageerror', error => errors.push(error.message));
   const state = { records: fixture.records.map(row => ({ ...row })), storage: new Map(fixture.storage), requests: [], downloads: [], recordCalls: 0, failRecord: 0, failList: 0, failStorage: 0, slowRecord: null, slowStorage: null, slowDocuments: new Map(), slowConfirmation: null, noCount: false, role: options.role || 'admin', external: [] };
   Object.assign(state,{prices:new Map(),priceHistory:new Map(),catalog:new Map(),priceCalls:0,missingPrices:false,failPrice:0,slowPriceSave:null,actor:OWNER,queries:new Map(),queryCalls:0,failQueries:0,missingUpgrade:false,operations:new Map(),salidas:new Map(),sockets:new Set()});
+  state.chat=options.chat||ChatBackend.store();
   const broadcast=table=>{for(const socket of state.sockets)socket.send(JSON.stringify({topic:'realtime:mega-audit-'+WORKSPACE,event:'postgres_changes',payload:{data:{schema:'public',table,type:'INSERT',record:{workspace_id:WORKSPACE}}}}));};
   await context.routeWebSocket('wss://aixsnmsmgyejcbtuilwt.supabase.co/**',socket=>{
-    state.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='heartbeat')socket.send(JSON.stringify({topic:'phoenix',event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{}}}));if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:[{id:1},{id:2},{id:3}]}}}));});socket.onClose(()=>state.sockets.delete(socket));
+    state.sockets.add(socket);state.chat.sockets.add(socket);socket.onMessage(raw=>{const message=JSON.parse(raw);if(message.event==='heartbeat')socket.send(JSON.stringify({topic:'phoenix',event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{}}}));if(message.event==='phx_join')socket.send(JSON.stringify({topic:message.topic,event:'phx_reply',ref:message.ref,payload:{status:'ok',response:{postgres_changes:message.payload.config.postgres_changes.map((_,id)=>({id}))}}}));});socket.onClose(()=>{state.sockets.delete(socket);state.chat.sockets.delete(socket);});
   });
   page.on('download', download => state.downloads.push(download.suggestedFilename()));
   await context.addInitScript(() => {
@@ -880,6 +882,7 @@ async function harness(options = {}) {
     const pathname = url.pathname, method = request.method();
     state.requests.push({ pathname, method, search: url.search, body: request.postData() });
     const json = async (data, status = 200, headers = {}) => route.fulfill({ status, contentType: 'application/json', headers: { 'access-control-allow-origin': '*', 'access-control-expose-headers': 'Content-Range', ...headers }, body: JSON.stringify(data) });
+    if(await ChatBackend.handle({state,url,request,json,route}))return;
     if (pathname === '/auth/v1/settings') { await json({ external: { email: true }, disable_signup: false, mailer_autoconfirm: true }); return; }
     if (pathname === '/auth/v1/token') {
       const body = request.postDataJSON();
@@ -1031,7 +1034,7 @@ async function harness(options = {}) {
     }
     const storage = '/storage/v1/object/';
     if (pathname.startsWith(storage)) {
-      const location = pathname.slice(storage.length).replace(/^authenticated\//, '').replace(/^mega-audit-documents\//, '');
+      const location = pathname.slice(storage.length).replace(/^authenticated\//, '').replace(/^mega-(audit-documents|chat-images)\//, '');
       if (method === 'POST') { if (state.storage.has(location)) { await json({ code: 'Duplicate' }, 409); return; } state.storage.set(location, request.postDataBuffer()); await json({ Key: location }); return; }
       if (state.slowStorage) await state.slowStorage;
       for (const [id, delay] of state.slowDocuments) if (location.includes(id)) await delay;
@@ -2694,5 +2697,71 @@ test('fiscal archived correction: admin rereads original PDF and replaces incomp
   await h.page.evaluate(()=>TrazaUI.navigate('archive'));await h.page.getByRole('button',{name:'Revisar lectura de Factura 00055002',exact:true}).click();await h.page.locator('#invoice-review').waitFor({state:'visible'});assert.equal(await h.page.locator('.invoice-row').count(),1);
   await h.page.getByRole('button',{name:'Volver a leer PDF original',exact:true}).click();await h.page.waitForFunction(()=>document.querySelectorAll('.invoice-row').length===3);assert.equal(await h.page.locator('#invoice-confirm').isChecked(),false);assert.equal(await h.page.locator('#export-button').isDisabled(),true);
   await h.page.locator('#invoice-confirm').check();await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(record.import_revision,2);assert.equal(h.state.records.filter(r=>r.import_revision).length,1);assert.deepEqual(h.state.storage,storage);
+ }finally{await h.close();}
+});
+
+async function chatOpen(h,username='administrador'){
+ h.state.records=h.state.records.slice(0,1);await login(h.page,'index.html',{username});await h.page.evaluate(()=>TrazaUI.navigate('chat'));await h.page.locator('#chat-composer').waitFor();await h.page.waitForFunction(()=>document.querySelector('#chat-sync')?.textContent.includes('En tiempo real'));
+}
+async function chatLookup(h,code){await h.page.locator('#chat-scan').click();await h.page.locator('#chat-lookup-code').fill(code);await h.page.locator('.chat-lookup-form').getByRole('button',{name:'Consultar',exact:true}).click();await h.page.locator('#chat-lookup-result .chat-product').waitFor();}
+for(const width of [1440,390])test('product chat '+width+'px: two accounts exchange encrypted messages, linked replies, mentions and stickers; reload preserves history',async()=>{
+ const a=await harness({viewport:{width,height:900}}),b=await harness({role:'user',viewport:{width,height:900},chat:a.state.chat});
+ try{
+  await chatOpen(a);await chatOpen(b,'colega');await a.page.locator('#chat-text').fill('¿Este precio es correcto? @colega');await a.page.locator('#chat-send').click();await b.page.locator('#chat-messages').getByText('¿Este precio es correcto? @colega',{exact:true}).waitFor();assert.equal(a.state.chat.messages.size,1);await b.page.waitForFunction(()=>document.querySelector('#chat-unread')?.textContent==='1');assert.match(await b.page.locator('#chat-notification-toggle').innerText(),/1/);
+  const message=[...a.state.chat.messages.values()][0];assert.doesNotMatch(message.encrypted_body,/precio|colega/);const clear=await fixture.master.decrypt(new Uint8Array(Buffer.from(message.encrypted_body,'base64')),'chat-message-v1|'+message.id);assert.equal(JSON.parse(new TextDecoder().decode(clear)).text,'¿Este precio es correcto? @colega');clear.fill(0);
+  await b.page.locator('#chat-messages').getByRole('button',{name:'Responder',exact:true}).click();await b.page.locator('#chat-text').fill('Sí, confirmado 👍');await b.page.locator('#chat-send').click();await a.page.locator('#chat-messages').getByText('Sí, confirmado 👍',{exact:true}).waitFor();assert.equal([...a.state.chat.messages.values()][1].parent_id,message.id);
+  await b.page.locator('#chat-side').getByRole('button',{name:'Cerrar',exact:true}).click();await b.page.getByRole('button',{name:'Stickers',exact:true}).click();await b.page.getByRole('button',{name:'🙌 ¡Gracias!',exact:true}).click();await a.page.locator('#chat-messages .chat-sticker').waitFor();assert.equal(a.state.chat.messages.size,3);
+  await checkNoOverflow(a.page);await checkNoOverflow(b.page);await a.page.screenshot({path:path.join(OUTPUT,'chat-products-'+width+'.png')});
+  await a.page.reload();await a.page.locator('#chat-view').getByRole('button',{name:'Iniciar sesión',exact:true}).click();await a.page.locator('#audit-cloud-login-username').fill('administrador');await a.page.locator('#audit-cloud-login-password').fill(PASSWORD);await a.page.locator('#audit-bar').getByRole('button',{name:'Iniciar sesión',exact:true}).click();await a.page.waitForFunction(()=>AuditCloud.status().authenticated);await a.page.evaluate(()=>TrazaUI.navigate('chat'));await a.page.locator('#chat-messages .chat-sticker').waitFor();assert.equal(a.state.chat.messages.size,3);
+ }finally{await a.close();await b.close();}
+});
+test('product chat: scanning previews before sharing, missing requests deduplicate, admin registration resolves original card on both devices',async()=>{
+ const a=await harness(),b=await harness({role:'user',chat:a.state.chat});try{
+  await chatOpen(a);await chatOpen(b,'colega');await chatLookup(a,'0001234567890');assert.match(await a.page.locator('#chat-lookup-result').innerText(),/12\.00/);assert.equal(a.state.chat.messages.size,0);await a.page.getByRole('button',{name:'Compartir en el chat',exact:true}).click();await b.page.locator('#chat-messages .chat-product.found').waitFor();
+  await chatLookup(b,'0099990000777');await b.page.getByRole('button',{name:'Solicitar solución',exact:true}).click();await b.page.locator('#chat-side .chat-case-pending').waitFor();assert.equal(a.state.chat.cases.size,1);
+  await chatLookup(a,'0099990000777');await a.page.getByRole('button',{name:'Solicitar solución',exact:true}).click();await a.page.locator('.chat-resolution-form').waitFor();assert.equal(a.state.chat.cases.size,1);assert.equal(a.state.chat.messages.size,2);
+  await a.page.getByRole('button',{name:'Asociar o registrar producto',exact:true}).click();await a.page.locator('.chat-register-form').waitFor();await a.page.locator('.chat-register-form').getByLabel('Descripción',{exact:true}).fill('Producto confirmado por administrador');await a.page.locator('.chat-register-form').getByLabel('Referencia',{exact:true}).fill('REF-NUEVA');await a.page.locator('.chat-register-form').getByLabel('Precio confirmado (USD)',{exact:true}).fill('7.99');await a.page.locator('.chat-register-form').getByLabel('Motivo obligatorio',{exact:true}).fill('Verificado contra etiqueta original');await a.page.getByRole('button',{name:'Guardar producto o asociación',exact:true}).click();
+  await b.page.locator('#chat-messages .chat-case-resolved').waitFor();assert.match(await b.page.locator('#chat-messages .chat-case-resolved').innerText(),/Producto confirmado.*7\.99/s);assert.equal(a.state.chat.products.size,1);assert.equal(a.state.chat.events.length,1);
+  await b.page.locator('#chat-side').getByRole('button',{name:'Cerrar',exact:true}).click();await chatLookup(b,'0099990000777');assert.match(await b.page.locator('#chat-lookup-result').innerText(),/Producto confirmado.*7\.99/s);assert.equal(await b.page.getByRole('button',{name:'Registrar o asociar este código',exact:true}).count(),0);assert.equal(await b.page.getByRole('button',{name:'Editar precio',exact:true}).count(),0);
+  assert.equal(a.state.recordCalls,0);assert.equal(b.state.recordCalls,0);assert.equal(a.state.records.length,1);
+ }finally{await a.close();await b.close();}
+});
+test('product chat: uncertain send retries the same ID, images are encrypted and fetched only on demand, revoked access clears content',async()=>{
+ const h=await harness();try{
+  await chatOpen(h);h.state.dropChatResponse=true;await h.page.locator('#chat-text').fill('Mensaje de prueba sin acuse');await h.page.locator('#chat-send').click();await h.page.getByRole('button',{name:'Reintentar envío',exact:true}).waitFor();assert.equal(h.state.chat.messages.size,1);const id=[...h.state.chat.messages.keys()][0];h.state.dropChatResponse=false;await h.page.getByRole('button',{name:'Reintentar envío',exact:true}).click();await h.page.getByText('Enviado y guardado.',{exact:true}).waitFor();assert.equal(h.state.chat.messages.size,1);assert.equal([...h.state.chat.messages.keys()][0],id);
+  const png=await h.page.evaluate(()=>{const c=document.createElement('canvas');c.width=800;c.height=600;const x=c.getContext('2d');x.fillStyle='#3a9e77';x.fillRect(0,0,800,600);return c.toDataURL('image/png').split(',')[1];});await h.page.locator('#chat-file').setInputFiles({name:'Producto ficticio.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await h.page.locator('#chat-send').click();await h.page.getByRole('button',{name:'Ver foto del producto',exact:true}).waitFor();const image=[...h.state.chat.messages.values()].find(m=>m.kind==='image');assert.ok(image);const key=WORKSPACE+'/'+OWNER+'/'+image.id+'/image.bin';assert.ok(h.state.storage.get(key).length<163904);assert.notDeepEqual(h.state.storage.get(key).subarray(0,8),Buffer.from(png,'base64').subarray(0,8));
+  const reads=h.state.requests.filter(r=>r.method==='GET'&&r.pathname.includes('mega-chat-images')).length;assert.equal(reads,0);await h.page.getByRole('button',{name:'Ver foto del producto',exact:true}).click();await h.page.locator('.chat-photo').waitFor();assert.equal(h.state.requests.filter(r=>r.method==='GET'&&r.pathname.includes('mega-chat-images')).length,1);
+  h.state.noMembership=true;await h.page.evaluate(()=>dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_chat_messages'}})));await h.page.waitForFunction(()=>!AuditCloud.status().authenticated);assert.equal(await h.page.locator('#chat-view .chat-message').count(),0);assert.equal(await h.page.locator('#chat-view .chat-photo').count(),0);
+ }finally{await h.close();}
+});
+
+test('product chat: mobile entry keeps the same session, camera denial supports manual input and administrative association follows existing prices',async()=>{
+ const h=await harness({mobile:true});try{
+  h.state.records=h.state.records.slice(0,1);await mobileLogin(h);await h.page.locator('.bottom [data-mobile-section=chat]').click();const engine=h.page.frameLocator('#engine');await engine.locator('#chat-composer').waitFor();assert.equal(await engine.locator('#app-profile').getByText('@administrador',{exact:true}).count(),1);
+  await engine.locator('#chat-scan').click();await engine.getByRole('button',{name:'Abrir cámara',exact:true}).click();await engine.getByText('No se pudo abrir la cámara. Escribe el código o usa un lector USB.',{exact:true}).waitFor();await engine.locator('#chat-lookup-code').fill('0099991111888');await engine.locator('.chat-lookup-form').getByRole('button',{name:'Consultar',exact:true}).click();await engine.locator('#chat-lookup-result .chat-product').waitFor();await engine.getByRole('button',{name:'Registrar o asociar este código',exact:true}).click();const form=engine.locator('.chat-register-form');await form.getByLabel('Descripción',{exact:true}).fill('Etiqueta de prueba para asociación');await form.getByLabel('Asociar al código existente (opcional)',{exact:true}).fill('0001234567890');await form.getByLabel('Motivo obligatorio',{exact:true}).fill('Mismo producto, etiqueta alternativa comprobada');await form.getByRole('button',{name:'Guardar producto o asociación',exact:true}).click();await engine.locator('.chat-dialog').waitFor({state:'hidden'});
+  await h.page.locator('.bottom [data-mobile-section=scanner]').click();await mobileLookup(h,'0099991111888');assert.match(await h.page.locator('#result').innerText(),/Producto ficticio/);assert.match(await h.page.locator('.price').innerText(),/12\.00/);assert.equal(h.state.recordCalls,0);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+
+test('product chat: history is paged and XSS text stays inert',async()=>{
+ const h=await harness();try{
+  await chatOpen(h);const forged='<img src=x onerror="window.__chatXSS=true">';await h.page.evaluate(async text=>{for(let i=0;i<45;i++){const t=await AuditCloud.chat.ticket({version:1,text:i===0?text:'Mensaje histórico '+i});await AuditCloud.chat.send(t);}},forged);await h.page.reload();await h.page.locator('#chat-view').getByRole('button',{name:'Iniciar sesión',exact:true}).click();await h.page.locator('#audit-cloud-login-username').fill('administrador');await h.page.locator('#audit-cloud-login-password').fill(PASSWORD);await h.page.locator('#audit-bar').getByRole('button',{name:'Iniciar sesión',exact:true}).click();await h.page.waitForFunction(()=>AuditCloud.status().authenticated);await h.page.evaluate(()=>TrazaUI.navigate('chat'));await h.page.locator('#chat-older').waitFor({state:'visible'});assert.equal(await h.page.locator('#chat-messages .chat-message').count(),40);await h.page.locator('#chat-older').click();await h.page.locator('#chat-messages').getByText(forged,{exact:true}).waitFor();assert.equal(await h.page.locator('#chat-messages .chat-message').count(),45);assert.equal(await h.page.evaluate(()=>Boolean(window.__chatXSS)),false);assert.equal(await h.page.locator('#chat-messages img').count(),0);
+ }finally{await h.close();}
+});
+
+test('product chat: registered products appear in local name and reference search without losing barcodes',async()=>{
+ const h=await harness();try{
+  await chatOpen(h);
+  const registered={version:1,result:'found',identifier:'barcode',code:'0099887766554',description:'Prueba catálogo nombre especial',ref:'REF-CHAT-001',cents:599,source:'Registro administrativo',salida:'',invoiceDate:'',checkedAt:new Date().toISOString(),note:'Etiqueta física verificada'};
+  await h.page.evaluate(async p=>{const t=await AuditCloud.chat.productTicket(p,0);await AuditCloud.chat.putProduct(t);},registered);
+  await h.page.locator('#chat-scan').click();await h.page.locator('#chat-lookup-mode').selectOption('name');await h.page.locator('#chat-lookup-code').fill('catálogo nombre especial');await h.page.locator('.chat-lookup-form').getByRole('button',{name:'Consultar',exact:true}).click();await h.page.locator('.chat-candidate').waitFor();assert.equal(await h.page.locator('.chat-candidate').count(),1);await h.page.locator('.chat-candidate').click();await h.page.locator('#chat-lookup-result .chat-product').waitFor();assert.match(await h.page.locator('#chat-lookup-result').innerText(),/5\.99/);
+  await h.page.locator('.chat-dialog').getByRole('button',{name:'Cerrar',exact:true}).click();await h.page.locator('#chat-scan').click();await h.page.locator('#chat-lookup-mode').selectOption('reference');await h.page.locator('#chat-lookup-code').fill('REF-CHAT-001');await h.page.locator('.chat-lookup-form').getByRole('button',{name:'Consultar',exact:true}).click();await h.page.locator('#chat-lookup-result .chat-product').waitFor();assert.match(await h.page.locator('#chat-lookup-result').innerText(),/0099887766554/);assert.match(await h.page.locator('#chat-lookup-result').innerText(),/5\.99/);
+ }finally{await h.close();}
+});
+
+test('product chat: invoice with reference but no barcode keeps that distinction in previews and shared cards',async()=>{
+ const h=await harness();try{
+  await chatOpen(h);const rows=await importFixture(h,'nevada');await rows.nth(0).locator('[data-field=codigo]').fill('');await rows.nth(0).locator('[data-field=ref]').fill('REF ONLY 001');await confirmImport(h);await h.page.evaluate(()=>TrazaUI.navigate('chat'));await h.page.locator('#chat-scan').click();await h.page.locator('#chat-lookup-mode').selectOption('reference');await h.page.locator('#chat-lookup-code').fill('REF ONLY 001');await h.page.locator('.chat-lookup-form').getByRole('button',{name:'Consultar',exact:true}).click();await h.page.locator('#chat-lookup-result .chat-product').waitFor();assert.match(await h.page.locator('#chat-lookup-result').innerText(),/Referencia consultada: REF ONLY 001/);assert.doesNotMatch(await h.page.locator('#chat-lookup-result').innerText(),/Código: REF/);assert.equal(await h.page.getByRole('button',{name:'Registrar o asociar este código',exact:true}).count(),0);
+  await h.page.getByRole('button',{name:'Compartir en el chat',exact:true}).click();await h.page.locator('#chat-messages .chat-product').waitFor();assert.match(await h.page.locator('#chat-messages .chat-product').innerText(),/Referencia consultada: REF ONLY 001/);assert.equal(h.state.chat.messages.size,1);
  }finally{await h.close();}
 });

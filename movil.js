@@ -104,10 +104,10 @@
   function showProduct(match, failed, price, unidentified=0) {
     const { product, doc, history: sources, unverifiedDates, conflictingPrices,ambiguousReference } = match;
     const result = $('result'); result.className = failed || unverifiedDates || conflictingPrices ? 'card warning' : 'card'; result.replaceChildren(); result.hidden = false;
-    result.append(element('p', 'PRODUCTO ENCONTRADO EN EL ARCHIVO', 'result-label'), element('h2', product.descripcion || 'Sin descripción en el PDF', 'product-name'));
+    result.append(element('p', doc.kind==='registered'?'PRODUCTO REGISTRADO POR ADMINISTRACIÓN':'PRODUCTO ENCONTRADO EN EL ARCHIVO', 'result-label'), element('h2', product.descripcion || 'Sin descripción en el PDF', 'product-name'));
     result.append(element('div', money(product.pventa), 'price'));
     const imported=doc.reviewed&&doc.kind!=='salida';
-    const sourceLabel = element('p', product.priceOrigin==='manual'?'Precio de venta confirmado por un administrador al importar.':imported?'Precio de venta confirmado en la lectura del documento.':failed || unverifiedDates || conflictingPrices ? 'Precio del PDF de la salida seleccionada.' : 'Precio del PDF de la última salida.', 'note price-source');
+    const sourceLabel = element('p', doc.kind==='registered'?'Precio registrado por un administrador. No proviene de una factura.':product.priceOrigin==='manual'?'Precio de venta confirmado por un administrador al importar.':imported?'Precio de venta confirmado en la lectura del documento.':failed || unverifiedDates || conflictingPrices ? 'Precio del PDF de la salida seleccionada.' : 'Precio del PDF de la última salida.', 'note price-source');
     sourceLabel.dataset.pdfLabel = sourceLabel.textContent; result.append(sourceLabel);
     const dl = document.createElement('dl');
     for (const [name, value] of [['Código de barras', product.codigo], ['Empaque', product.empaque], ['Referencia', product.ref], [imported?'Documento de origen':'Salida de origen', doc.salida], ['Fecha de factura', invoiceDate(doc.invoiceDate)]]) {
@@ -135,7 +135,7 @@
       if (index === 0 && !unverifiedDates && !failed && !conflictingPrices) { row.className = 'latest-salida'; number.append(element('small', imported?'Documento usado':'Última salida')); }
       row.append(number, element('td', money(source.product.pventa)), element('td', invoiceDate(source.doc.invoiceDate))); body.append(row);
     }
-    table.append(body); section.append(table); result.append(section);
+    table.append(body); section.append(table);if(doc.kind==='registered'&&!sources.length){section.replaceChildren(element('h3','Registro administrativo'),element('p','Producto confirmado por un administrador. Aún no tiene coincidencias en facturas archivadas. No indica existencias del sistema de caja.','note'));} result.append(section);
     if(!ambiguousReference)window.dispatchEvent(new CustomEvent('mobile:product', { detail: { product, price,doc } }));
   }
   async function prepareCatalog() {

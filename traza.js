@@ -11,6 +11,7 @@
     const main = document.getElementById("app-main");
     const converter = document.getElementById("converter-view");
     const archive = document.getElementById("audit-page");
+    const chat=document.getElementById('chat-view');
     const scanner = document.getElementById('scanner-view'), scannerFrame = document.getElementById('scanner-frame');
     function sharedEngine() {
       try { return Boolean(window.parent !== window && window.parent.MobileSession && window.parent.MobileSession.owns(window)); } catch (_) { return false; }
@@ -62,7 +63,7 @@
     }
     function navigate(section, options) {
       options = options || {};
-      if (!["converter", "archive", "scanner"].includes(section)) return false;
+      if (!["converter", "archive", "scanner", "chat"].includes(section)) return false;
       if (section === 'scanner' && !scanner) { window.location.assign('movil.html'); return false; }
       if (section === "converter" && !converter) {
         window.location.assign("index.html#nueva-salida");
@@ -72,20 +73,23 @@
       const changed = currentSection !== section;
       currentSection = section;
       if (changed) viewGeneration++;
+      if(section==='chat'&&!chat)return false;
+      hidden(chat,section!=='chat');
+      document.body.classList.toggle('traza-chat-open',section==='chat');
       hidden(converter, section !== "converter");
       hidden(archive, section !== "archive");
       hidden(bar, section !== "archive");
       hidden(scanner, section !== 'scanner' || sharedEngine());
       if (section === 'scanner' && !sharedEngine() && scannerFrame && !scannerFrame.getAttribute('src')) scannerFrame.src = scannerFrame.dataset.src;
       main.classList.toggle("audit-mode", section === "archive");
-      const name = section === "archive" ? "Archivo de salidas" : section === 'scanner' ? 'Escáner de productos' : "Nueva salida";
+      const name = section === "chat" ? "Chat de productos" : section === "archive" ? "Archivo de salidas" : section === 'scanner' ? 'Escáner de productos' : "Nueva salida";
       document.getElementById("traza-section-name").textContent = name;
       for (const link of document.querySelectorAll("[data-traza-section]")) {
         const active = link.dataset.trazaSection === section;
         if (active) link.setAttribute("aria-current", "page");
         else link.removeAttribute("aria-current");
       }
-      const hash = section === "archive" ? "#archivo" : section === 'scanner' ? '#escaner' : "#nueva-salida";
+      const hash = section === "chat" ? "#chat" : section === "archive" ? "#archivo" : section === 'scanner' ? '#escaner' : "#nueva-salida";
       if (!sharedEngine() && location.hash !== hash) {
         if (options.replace) history.replaceState(null, "", hash);
         else history.pushState(null, "", hash);
@@ -108,7 +112,7 @@
         navigate(link.dataset.trazaSection, { focus: true });
       });
     }
-    const fromHash = () => location.hash === '#archivo' ? 'archive' : location.hash === '#escaner' ? 'scanner' : 'converter';
+    const fromHash = () => location.hash==='#chat'?'chat':location.hash === '#archivo' ? 'archive' : location.hash === '#escaner' ? 'scanner' : 'converter';
     window.addEventListener("hashchange", function () {
       navigate(fromHash(), { replace: true });
     });

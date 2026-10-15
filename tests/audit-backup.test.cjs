@@ -86,3 +86,18 @@ test('backup: incomplete source, network loss, interrupted commit and revoked se
   await Backup.open(f.folder,PASSWORD);
  }finally{await f.close();}
 });
+
+test('backup: chat messages, product associations, case decisions and compressed photos recover offline and reuse unchanged files',async()=>{
+ const f=await fixture();try{
+  const id1=id(21),imageId=id(22),caseId=id(23),tag=await f.options.key.productIndex('chat-product|0001234567890');
+  const seal=async(value,aad)=>Buffer.from(await f.options.key.encrypt(enc.encode(JSON.stringify(value)),aad)).toString('base64');
+  f.snapshot.tables.mega_chat_messages=[{workspace_id:WS,id:id1,seq:1,created_by:OWNER,kind:'text',encrypted_body:await seal({version:1,text:'Consulta ficticia con ceros 0001234567890'},'chat-message-v1|'+id1)}];
+  f.snapshot.tables.mega_chat_cases=[{workspace_id:WS,id:caseId,revision:1,encrypted_resolution:await seal({version:1,note:'Confirmado por administrador'},'chat-case-v1|'+caseId+'|1')}];
+  f.snapshot.tables.mega_chat_case_events=[{workspace_id:WS,case_id:caseId,revision:1,encrypted_resolution:f.snapshot.tables.mega_chat_cases[0].encrypted_resolution}];
+  f.snapshot.tables.mega_chat_products=[{workspace_id:WS,product_tag:tag,version:1,encrypted_product:await seal({version:1,code:'0001234567890',cents:799},'chat-product-v1|'+tag+'|1')}];
+  const name=WS+'/'+OWNER+'/'+imageId+'/image.bin',plain=enc.encode('Fictional compressed image bytes'),cipher=await f.options.key.encrypt(plain,'chat-image-v1|'+imageId);f.storage.set(name,cipher);f.snapshot.objects.push({name,bucket:'mega-chat-images',size:cipher.length,updated_at:f.snapshot.created_at});
+  f.snapshot.tables.mega_chat_files=[{workspace_id:WS,id:imageId,uploaded_by:OWNER,path:name,size:cipher.length,attached:true}];
+  const saved=await Backup.save(f.options);assert.equal(saved.files,3);const check=await Backup.open(f.folder,PASSWORD);assert.equal(check.decoded.chat.mega_chat_messages[0].content.text,'Consulta ficticia con ceros 0001234567890');assert.equal(check.decoded.chat.mega_chat_products[0].content.cents,799);
+  const second=await Backup.save(f.options);assert.equal(second.downloaded,0);assert.equal(second.reused,3);const output=await fs.mkdtemp(path.join(os.tmpdir(),'mega-chat-restore-'));try{const result=await Backup.restore(f.folder,PASSWORD,directory(output));assert.deepEqual(new Uint8Array(await fs.readFile(path.join(output,result.folder,'archivos',imageId,'imagen.webp'))),plain);assert.deepEqual(new Uint8Array(await fs.readFile(path.join(output,result.folder,'storage/mega-chat-images',name))),cipher);}finally{await fs.rm(output,{recursive:true,force:true});}
+ }finally{await f.close();}
+});

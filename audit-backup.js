@@ -14,7 +14,7 @@
   async function hash(value) { return Array.from(new Uint8Array(await root.crypto.subtle.digest('SHA-256',value)), b=>b.toString(16).padStart(2,'0')).join(''); }
   function parts(name, workspace) {
     const p = typeof name === 'string' ? name.split('/') : [];
-    if (p.length!==4 || p[0]!==workspace || !UUID.test(p[1]) || !UUID.test(p[2]) || !['pdf.bin','excel.bin'].includes(p[3])) fail('Ruta de documento inválida en el respaldo.');
+    if (p.length!==4 || p[0]!==workspace || !UUID.test(p[1]) || !UUID.test(p[2]) || !['pdf.bin','excel.bin','image.bin'].includes(p[3])) fail('Ruta de documento inválida en el respaldo.');
     return {id:p[2], kind:p[3].split('.')[0]};
   }
   function validateSnapshot(s,workspace) {
@@ -25,10 +25,12 @@
     }
     if(s.tables.mega_salidas!==undefined){if(!Array.isArray(s.tables.mega_salidas))fail('Identidades de salidas inválidas.');for(const row of s.tables.mega_salidas)if(row.workspace_id!==workspace)fail('El respaldo contiene identidades de otro equipo.');}
     if(s.tables.mega_product_price_history!==undefined){if(!Array.isArray(s.tables.mega_product_price_history))fail('Historial de precios inválido.');for(const row of s.tables.mega_product_price_history)if(row.workspace_id!==workspace)fail('El respaldo contiene precios de otro equipo.');}
+    for(const [name,rows] of Object.entries(s.tables))if(name.startsWith('mega_chat_')){if(!Array.isArray(rows)||rows.some(row=>row.workspace_id!==workspace))fail('Datos del chat de otro equipo.');}
     const w=s.tables.mega_audit_workspace;
     if (w.length!==1 || !/^[0-9a-f]{64}$/.test(w[0].key_fingerprint)) fail('Clave del equipo inválida.');
     const paths=new Set();
-    for(const o of s.objects) { parts(o.name,workspace); if(paths.has(o.name)) fail('Documento duplicado en el respaldo.'); paths.add(o.name); }
+    for(const o of s.objects) { const part=parts(o.name,workspace);if(o.bucket&&o.bucket!==(part.kind==='image'?'mega-chat-images':'mega-audit-documents'))fail('Bucket inválido en el respaldo.'); if(paths.has(o.name)) fail('Documento duplicado en el respaldo.'); paths.add(o.name); }
+    for(const f of s.tables.mega_chat_files||[])if(f.attached&&!paths.has(f.path))fail('Falta la foto de un mensaje del chat.');
     const ids=new Set();
     for(const r of s.tables.mega_audit_records) {
       if(!UUID.test(r.id)||!UUID.test(r.created_by)||ids.has(r.id)) fail('Registro inválido en el respaldo.'); ids.add(r.id);
@@ -80,12 +82,22 @@
     }
     for(const p of snapshot.tables.mega_product_prices) decoded.prices.push({...p,price:await row(p.encrypted_price,'product-price-v1|'+p.product_tag+'|'+p.version)});
     for(const q of snapshot.tables.mega_product_queries) decoded.queries.push({...q,query:await row(q.encrypted_query,'product-query-v1|'+q.id)});
+    decoded.chat={};
+    for(const [name,items]of Object.entries(snapshot.tables))if(name.startsWith('mega_chat_')){
+      decoded.chat[name]=[];
+      for(const r of items){let value=null;
+        if(r.encrypted_body)value=await row(r.encrypted_body,'chat-message-v1|'+r.id);
+        if(r.encrypted_resolution)value=await row(r.encrypted_resolution,'chat-case-v1|'+(r.case_id||r.id)+'|'+r.revision);
+        if(r.encrypted_product)value=await row(r.encrypted_product,'chat-product-v1|'+r.product_tag+'|'+r.version);
+        decoded.chat[name].push(value?{...r,content:value}:r);
+      }
+    }
     return decoded;
   }
   async function verifyFile(data,f,key,workspace,guard=noop) {
     if(data.length!==f.size||await hash(data)!==f.sha256) fail('Documento incompleto o alterado: '+f.name);
     const p=parts(f.name,workspace);let clear;
-    try{guard();clear=await key.decrypt(data,p.id+'|'+p.kind);guard();}finally{if(clear)clear.fill(0);}
+    try{guard();clear=await key.decrypt(data,(p.kind==='image'?'chat-image-v1|'+p.id:p.id+'|'+p.kind));guard();}finally{if(clear)clear.fill(0);}
   }
   async function save(options) {
     const {folder,password,snapshot,key,recovery,guard=noop,progress=noop}=options;
@@ -104,9 +116,9 @@
       guard();let f=old.get(o.name),data=f?await optionalRead(folder,'documents/'+f.sha256+'.bin',LIMIT):null,valid=false;
       if(data)try{if(f&&f.updated_at===o.updated_at){await verifyFile(data,f,key,workspace,guard);valid=true;}}catch(e){guard();}
       if(!valid) {
-        if(data)data.fill(0);data=await options.download(o.name);guard();
+        if(data)data.fill(0);data=await options.download(o.name,o.bucket||'mega-audit-documents');guard();
         if(!(data instanceof Uint8Array)||data.length<29||data.length>LIMIT||(o.size!==null&&o.size!==undefined&&Number(o.size)!==data.length)) fail('Tamaño de documento inesperado.');
-        f={name:o.name,size:data.length,sha256:await hash(data),updated_at:o.updated_at};
+        f={name:o.name,...(o.bucket?{bucket:o.bucket}:{}),size:data.length,sha256:await hash(data),updated_at:o.updated_at};
         const local='documents/'+f.sha256+'.bin';
         await verifyFile(data,f,key,workspace,guard);await write(folder,local,data,guard);
         const saved=await read(folder,local,LIMIT);try{await verifyFile(saved,f,key,workspace,guard);}finally{saved.fill(0);} downloaded++;totalBytes+=data.length;
@@ -135,7 +147,7 @@
     const value=await open(folder,password,progress,guard,previous), prefix='MegaControl-recuperado-'+Date.now()+'-'+root.crypto.randomUUID().slice(0,8);
     const target=await output.getDirectoryHandle(prefix,{create:true});
     for(const f of value.manifest.files){let clear;const data=await read(folder,'documents/'+f.sha256+'.bin',LIMIT),p=parts(f.name,value.header.workspace);
-      try{await verifyFile(data,f,value.key,value.header.workspace,guard);clear=await value.key.decrypt(data,p.id+'|'+p.kind);guard();await write(target,'archivos/'+p.id+'/'+(p.kind==='pdf'?'original.pdf':'original.xlsx'),clear,guard);await write(target,'storage/mega-audit-documents/'+f.name,data,guard);}
+      try{await verifyFile(data,f,value.key,value.header.workspace,guard);clear=await value.key.decrypt(data,(p.kind==='image'?'chat-image-v1|'+p.id:p.id+'|'+p.kind));guard();await write(target,'archivos/'+p.id+'/'+(p.kind==='image'?'imagen.webp':p.kind==='pdf'?'original.pdf':'original.xlsx'),clear,guard);await write(target,'storage/'+(p.kind==='image'?'mega-chat-images':'mega-audit-documents')+'/'+f.name,data,guard);}
       finally{data.fill(0);if(clear)clear.fill(0);}
     }
     guard();await write(target,'datos-recuperados.json',enc.encode(JSON.stringify({snapshot:value.manifest.snapshot,...value.decoded},null,2)),guard);

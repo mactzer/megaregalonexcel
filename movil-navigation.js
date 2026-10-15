@@ -2,7 +2,7 @@
   'use strict';
   const engine = document.getElementById('engine'), scanner = document.getElementById('mobile-scanner-view'), docs = document.getElementById('mobile-document-view');
   const embedded = new URLSearchParams(location.search).get('embedded') === '1' && window.parent !== window;
-  const hashes = { scanner: '#escaner', archive: '#archivo', converter: '#nueva-salida' };
+  const hashes = { scanner: '#escaner', archive: '#archivo', converter: '#nueva-salida',chat:'#chat' };
   // Let the desktop shell scroll as one page instead of nesting a phone viewport.
   if (embedded) {
     const desktop = window.matchMedia('(min-width: 900px)'), main = document.getElementById('mobile-scanner-view');
@@ -19,7 +19,7 @@
     window.addEventListener('pagehide', () => observer.disconnect());
   }
   let section = 'scanner', owner, ready;
-  function fromHash() { return location.hash === '#archivo' ? 'archive' : location.hash === '#nueva-salida' ? 'converter' : 'scanner'; }
+  function fromHash() { return location.hash==='#chat'?'chat':location.hash === '#archivo' ? 'archive' : location.hash === '#nueva-salida' ? 'converter' : 'scanner'; }
   function present(next, options = {}) {
     if (!Object.hasOwn(hashes, next)) return false;
     const changed = section !== next; section = next;
@@ -45,6 +45,7 @@
     if (w.document.readyState === 'loading') await new Promise(resolve => w.document.addEventListener('DOMContentLoaded', resolve, { once: true }));
     if (!w.AuditCloud || !w.TrazaConverter || !w.TrazaUI) throw new Error('No se pudo cargar el acceso. Actualiza la página.');
     await w.AuditCloud.ready(); owner = w;
+    w.addEventListener('chat:unread',event=>{const label=document.getElementById('mobile-chat-label');if(label)label.textContent=event.detail.count?'Chat ('+event.detail.count+')':'Chat';});
     w.addEventListener('traza-ui:navigated', event => { if (event.detail) present(event.detail.section); });
     if (embedded) present(w.TrazaUI.currentSection, { notify: true }); else w.TrazaUI.navigate(section, { replace: true });
     return w;

@@ -107,6 +107,28 @@ class BackupRestoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'original'):
             self.run_restore()
 
+    def test_chat_image_inventory_and_missing_message_restore_keep_bucket_and_sequences_separate(self):
+        image_id = '33333333-3333-4333-8333-333333333399'
+        name = f'{W}/{A}/{image_id}/image.bin'
+        data = b'Fictional encrypted chat image for restore validation'
+        local = self.folder / 'storage/mega-chat-images' / name
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(data)
+        item = {'name': name, 'bucket': 'mega-chat-images', 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        self.snapshot['objects'].append(item)
+        self.tables['mega_chat_messages'] = [{'id': image_id, 'seq': 7, 'workspace_id': W, 'created_by': A, 'kind': 'image', 'encrypted_body': 'Fictional cipher', 'parent_id': None, 'case_id': None}]
+        self.tables['mega_chat_files'] = [{'id': image_id, 'workspace_id': W, 'uploaded_by': A, 'path': name, 'size': len(data), 'attached': True}]
+        (self.folder / 'datos-recuperados.json').write_text(json.dumps({'snapshot': self.snapshot}))
+        (self.folder / 'inventario.json').write_text(json.dumps({'workspace': W, 'files': self.snapshot['objects']}))
+        snapshot, authors, files = restore.validate(self.folder)
+        self.assertIn(name, files)
+        self.assertIn(A, authors)
+        query = restore.restore_sql(snapshot)
+        self.assertIn('insert into public.mega_chat_messages(id,workspace_id,created_by,created_at,kind,encrypted_body,parent_id,case_id)', query)
+        self.assertIn('order by seq on conflict do nothing', query)
+        self.assertIn('insert into public.mega_chat_files', query)
+        self.assertNotIn('update public.mega_chat_messages', query)
+
     def test_explicit_access_recovery_includes_only_missing_memberships(self):
         self.run_restore('--apply', '--restore-access')
         sql = self.calls[-1][1]['query']

@@ -158,6 +158,7 @@
     generation++;
     if (realtime) realtime.close(); realtime = null;
     syncMode='polling';importUpdates.clear();pendingPrices.clear();lastVerifiedAt=null;networkIssue=false;
+    if(window.AuditCloud&&window.AuditCloud.chat)window.AuditCloud.chat.invalidate();
     if (mobileCatalog) mobileCatalog.clear();
     mobileCatalog = null;
     for (const controller of requests) controller.abort();
@@ -261,7 +262,7 @@
       if (epoch !== generation) throw new Error("La sesión cambió. Inicia sesión nuevamente.");
       if (options.signal && options.signal.aborted) throw new Error("La vista cambió.");
       networkIssue=true;window.dispatchEvent(new CustomEvent('audit:sync-status',{detail:{mode:syncMode,networkIssue:true}}));
-      throw new Error("No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo nuevamente; el Excel aún no se ha descargado.");
+      throw new Error(path.includes("mega_chat_")||path.includes("mega-chat-images")?"No se pudo conectar con Supabase. El envío no se ha confirmado. Reintenta cuando vuelva la conexión.":"No se pudo conectar con Supabase. Comprueba tu conexión e inténtalo nuevamente; el Excel aún no se ha descargado.");
     }
     if (!response.ok) {
       let detail = {};
@@ -420,9 +421,10 @@
     if (!window.AuditRealtime || !status().authenticated) return;
     const epoch = generation;
     realtime = window.AuditRealtime.connect({ url: CONFIG.url, key: CONFIG.key, workspace: CONFIG.workspace,
+      tables:['mega_product_queries','mega_audit_records','mega_product_prices',...(window.ProductChatCloud?['mega_chat_messages','mega_chat_cases','mega_chat_notifications','mega_chat_products']:[])],
       isCurrent: () => generation === epoch && status().authenticated,
       async getAccessToken() { await refreshIfNeeded(); assertAccount(epoch); return session.access_token; },
-      onChange(table) { window.dispatchEvent(new CustomEvent('audit:changed', { detail: { table } })); },
+      onChange(table) { if(table==='mega_chat_products'&&chat)chat.invalidate();window.dispatchEvent(new CustomEvent('audit:changed', { detail: { table } })); },
       onStatus(mode) { if(generation!==epoch)return;syncMode=mode;window.dispatchEvent(new CustomEvent('audit:sync-status', { detail: { mode } })); }
     });
   }
@@ -2326,14 +2328,15 @@
           } else {
             feedback(notice,'Preparando la instantánea de datos…',false);
             const snapshot=await request('/rest/v1/rpc/mega_audit_backup_snapshot',{method:'POST',body:{p_workspace_id:CONFIG.workspace},signal:controller.signal});guard();
-            const sources=await Promise.all(['audit-crypto.js?v=shared-history-1','audit-backup.js?v=2'].map(async path=>{
+            const sources=await Promise.all(['audit-crypto.js?v=shared-history-1','audit-backup.js?v=chat-21'].map(async path=>{
               const response=await fetch(path,{signal:controller.signal,credentials:'omit',redirect:'error'});if(!response.ok)throw new Error('No se pudo preparar la herramienta de recuperación.');return response.text();
             }));guard();
             const result=await window.AuditBackup.save({folder,password:secret,snapshot,key,recovery:recoveryKey,guard,progress,
               authorize:()=>requireAdmin(epoch), recoveryPage:window.AuditBackup.offlinePage(...sources),
-              download:async path=>{
+              download:async (path,bucket=BUCKET)=>{
+                if(![BUCKET,'mega-chat-images'].includes(bucket))throw new Error('Bucket de respaldo inválido.');
                 guard();await requireAdmin(epoch);guard();
-                const response=await request('/storage/v1/object/authenticated/'+BUCKET+'/'+path,{raw:true,signal:controller.signal});guard();
+                const response=await request('/storage/v1/object/authenticated/'+bucket+'/'+path,{raw:true,signal:controller.signal});guard();
                 if(Number(response.headers.get('Content-Length'))>FILE_LIMIT+64)throw new Error('El documento excede el tamaño permitido.');
                 const value=new Uint8Array(await response.arrayBuffer());guard();return value;
               }
@@ -2638,8 +2641,24 @@
   }
   async function mobileLookup(code, signal, mode = 'barcode') {
     const result = await getMobileCatalog().lookup(code, signal, mode);
+    if(chat&&mode==='name'){
+      const extra=await chat.searchProducts(code,mode,signal),seen=new Set((result.candidates||[]).map(m=>m.product.codigo+'|'+m.product.ref));
+      const added=extra.filter(m=>!seen.has(m.product.codigo+'|'+m.product.ref));result.candidates=[...(result.candidates||[]),...added].slice(0,50);result.candidateCount=(result.candidateCount||0)+added.length;return result;
+    }
+    if(chat&&mode==='reference'&&!result.match){const extra=await chat.searchProducts(code,mode,signal);if(extra.length===1)result.match=extra[0];else if(extra.length>1)result.match={...extra[0],ambiguousReference:true};}
     if(result.match&&result.match.ambiguousReference)return result;
-    if (result.match){const lookupCode=result.match.product.codigo||result.match.product.ref;result.match={...result.match,product:{...result.match.product,lookupCode}};result.price = await mobilePrice(lookupCode, signal);
+    if(chat&&mode==='barcode'){
+      const linked=await chat.catalogProduct(code,signal);
+      if(linked){
+        const saved=linked.product;let source=null;
+        if(saved.sourceCode&&saved.sourceCode!==window.MobileCatalog.canonical(code))source=await getMobileCatalog().lookup(saved.sourceCode,signal,'barcode');
+        if(source&&source.match&&!source.match.ambiguousReference){result.match={...source.match,product:{...source.match.product,codigo:window.MobileCatalog.canonical(code),lookupCode:saved.sourceCode}};}
+        else if(result.match&&!saved.sourceCode)result.match={...result.match,product:{...result.match.product,descripcion:saved.description,ref:saved.ref}};
+        else if(!result.match)result.match={product:{codigo:saved.code,descripcion:saved.description,ref:saved.ref,pventa:saved.cents===null?null:saved.cents/100,lookupCode:saved.sourceCode||saved.code},doc:{salida:saved.salida,invoiceDate:saved.invoiceDate||'',kind:'registered',reviewed:true},history:[]};
+        if(result.match)result.match={...result.match,registration:{updatedAt:linked.updated_at,updatedBy:linked.updated_by,version:linked.version},product:{...result.match.product,lookupCode:result.match.product.lookupCode||saved.sourceCode||saved.code}};
+      }
+    }
+    if (result.match){const lookupCode=result.match.product.lookupCode||result.match.product.codigo||result.match.product.ref;result.match={...result.match,product:{...result.match.product,lookupCode}};result.price = await mobilePrice(lookupCode, signal);
       if(result.match.doc.reviewed&&result.match.product.codigo&&result.match.product.ref&&!result.match.product.referenceAmbiguous&&!result.price.override){const byRef=await mobilePrice(result.match.product.ref,signal);if(byRef.override){result.price=byRef;result.match.product.lookupCode=result.match.product.ref;}}
     }
     return result;
@@ -2653,9 +2672,10 @@
   }
   async function approvedMember(epoch, key, signal) {
     priceGuard(epoch, key, signal);
-    const rows = await request(ownQuery('mega_audit_members','role'), { signal });
+    let rows;try{rows=await request(ownQuery('mega_audit_members','role'), { signal });}catch(error){if(epoch===generation&&[401,403].includes(error.status))clearSession();throw error;}
     priceGuard(epoch, key, signal);
     if (!Array.isArray(rows) || rows.length !== 1 || !['user','admin'].includes(rows[0].role)) { clearSession(); throw new Error('Tu cuenta ya no tiene acceso al equipo.'); }
+    if(member.role!==rows[0].role){member={...member,role:rows[0].role};renderAccountBar();}
   }
   async function decodeQuery(row, key) {
     if (!row || row.workspace_id !== CONFIG.workspace || !UUID.test(row.id) || !UUID.test(row.created_by) || !Number.isFinite(Date.parse(row.created_at))) throw new Error('Consulta compartida inválida.');
@@ -2704,7 +2724,19 @@
     // Tickets contain ciphertext and official IDs only; no products, keys or tokens.
     return window.MobileCatalog.cache('query-pending|'+CONFIG.workspace+'|'+session.user.id+'|'+master.fingerprint);
   }
-  window.AuditCloud = Object.freeze({ ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,openRecordedSalida,
+  const chat = window.ProductChatCloud ? window.ProductChatCloud.create({workspace:CONFIG.workspace,request,
+    context(){
+      const epoch=generation,key=master;priceGuard(epoch,key);
+      return {scope:epoch,access:signal=>approvedMember(epoch,key,signal),user:status().user,guard:()=>priceGuard(epoch,key),
+        index:async value=>{const tag=await key.productIndex(value);priceGuard(epoch,key);return tag;},
+        async seal(value,aad){const clear=new TextEncoder().encode(JSON.stringify(value));try{const encrypted=base64(await key.encrypt(clear,aad));priceGuard(epoch,key);return encrypted;}finally{clear.fill(0);}},
+        async open(value,aad){let clear;try{clear=await key.decrypt(unbase64(value),aad);priceGuard(epoch,key);return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(clear));}finally{if(clear)clear.fill(0);}},
+        async encryptBytes(value,aad){const result=await key.encrypt(value,aad);priceGuard(epoch,key);return result;},
+        async decryptBytes(value,aad){const result=await key.decrypt(value,aad);try{priceGuard(epoch,key);return result;}catch(error){result.fill(0);throw error;}}
+      };
+    }
+  }) : null;
+  window.AuditCloud = Object.freeze({ chat, ready, status, record, confirmArchivedRecord, newIdempotencyKey,updateImport,openRecordedSalida,
     queries: Object.freeze({ticket:queryTicket,add:queryAdd,list:queryList,queue:queryQueue}),
     mobile: Object.freeze({ login, logout: clearSession, prepare: (progress, signal) => getMobileCatalog().prepare(progress, signal), lookup: mobileLookup, hasUpdates: signal => getMobileCatalog().hasUpdates(signal), price: mobilePrice, setPrice: mobileSetPrice,priceHistory:mobilePriceHistory,restorePrice:mobileRestorePrice }) });
   window.addEventListener("audit:recorded", function () { if (document.getElementById("audit-page")) renderAuditPage(); });
