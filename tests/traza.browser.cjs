@@ -2774,3 +2774,11 @@ test('product chat: acknowledging an own send cannot skip a preceding message fr
   await a.page.evaluate(()=>dispatchEvent(new CustomEvent('audit:changed',{detail:{table:'mega_chat_messages'}})));await a.page.getByText('Mensaje intermedio del compañero que no debe omitirse',{exact:true}).waitFor();assert.equal(await a.page.locator('#chat-messages .chat-message').count(),3);
  }finally{await a.close();await b.close();}
 });
+
+test('product chat: changing cases never shows an earlier case form under the new reply target',async()=>{
+ const h=await harness();try{
+  await chatOpen(h);await chatLookup(h,'0011112222333');await h.page.getByRole('button',{name:'Solicitar solución',exact:true}).click();await h.page.locator('.chat-resolution-form').waitFor();await h.page.getByLabel('Motivo y solución',{exact:true}).fill('Borrador de la primera solicitud');
+  await chatLookup(h,'0044445555666');await h.page.getByRole('button',{name:'Solicitar solución',exact:true}).click();await h.page.waitForFunction(()=>document.querySelector('#chat-side .chat-code')?.textContent==='Código: 0044445555666');assert.equal(await h.page.getByLabel('Motivo y solución',{exact:true}).inputValue(),'');assert.equal(h.state.chat.cases.size,2);
+  const second=[...h.state.chat.cases.values()].find(c=>c.id!==[...h.state.chat.cases.values()][0].id);assert.equal(await h.page.locator('.chat-resolution-form').getAttribute('data-case-id'),second.id);
+ }finally{await h.close();}
+});

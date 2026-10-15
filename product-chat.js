@@ -133,7 +133,7 @@
   if(turn!==threadTurn||!active)return;panel='thread';thread=id;selectReply(id);await refreshThread();guard(s);
  });}
  async function refreshThread(before=0){
-  if(!thread)return;if(!before&&$('chat-side')?.querySelector('form[data-dirty]'))return;const s=sequence,id=thread,m=messages.get(id);const r=await api.chat.list({parent:id,before});guard(s);if(thread!==id||panel!=='thread')return;
+  if(!thread)return;if(!before&&$('chat-side')?.querySelector('form[data-dirty][data-case-id="'+thread+'"]'))return;const s=sequence,id=thread,m=messages.get(id);const r=await api.chat.list({parent:id,before});guard(s);if(thread!==id||panel!=='thread')return;
   if(m.kind==='case'){const c=await api.chat.cases({ids:[id]});guard(s);if(thread!==id||panel!=='thread')return;if(c.cases[0])caseMap.set(id,c.cases[0]);}
   const side=sideTitle('Conversación del producto');side.append(messageCard(m,true));
   if(r.more)side.append(b('Respuestas anteriores',()=>run(()=>refreshThread(r.messages[0]?.seq))));for(const reply of r.messages)side.append(messageCard(reply,true));if(!r.messages.length)side.append(n('p','Escribe abajo para comentar sobre esta consulta.','chat-empty'));
@@ -143,7 +143,7 @@
  function label(text,input){const l=n('label',text,'chat-field');l.append(input);return l;}
  function caseForm(side,c,m){
   let pendingChange=null;
-  const form=n('form',undefined,'chat-resolution-form'),state=n('select'),assignee=n('select'),note=n('textarea');state.setAttribute('aria-label','Estado de la solicitud');assignee.setAttribute('aria-label','Asignar solicitud');note.setAttribute('aria-label','Motivo y solución');note.required=true;note.maxLength=1000;
+  const form=n('form',undefined,'chat-resolution-form'),state=n('select'),assignee=n('select'),note=n('textarea');state.setAttribute('aria-label','Estado de la solicitud');assignee.setAttribute('aria-label','Asignar solicitud');note.setAttribute('aria-label','Motivo y solución');note.required=true;note.maxLength=1000;form.dataset.caseId=c.id;
   for(const [id,value]of Object.entries(S)){const o=n('option',value);o.value=id;o.selected=id===c.status;state.append(o);}const nobody=n('option','Sin asignar');nobody.value='';assignee.append(nobody);for(const mem of members.filter(m=>m.role==='admin')){const o=n('option',name(mem.id));o.value=mem.id;o.selected=mem.id===c.assigned_to;assignee.append(o);}
   form.addEventListener('input',()=>{form.dataset.dirty='true';});form.addEventListener('change',()=>{form.dataset.dirty='true';});
   const save=b('Guardar seguimiento');save.type='submit';form.append(n('h3','Gestionar solicitud'),label('Estado',state),label('Responsable',assignee),label('Motivo o solución',note),save);
