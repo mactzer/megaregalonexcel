@@ -39,6 +39,7 @@ function fakePdf(options = {}) {
   if(options.quantity!==undefined)product[8]=options.quantity;
   const exempt = ['0000000000012', 'Producto ficticio exento completo', 'Unidad', 'Estilo B', 'REF-002 COMPLETA', '0%', '5.00', '6.00', '3', '15.00', '0', '0.00'];
   if(options.cost!==undefined)exempt[6]=options.cost;
+  if(options.emptyTotals){product[9]='';exempt[9]='';}
   const fractional = ['0000000000025', 'Producto fraccionario ficticio', 'Unidad', 'Estilo C', 'REF-003', '0%', '0.40', '0.50', '2.5', '1.00', '0', '0.00'];
   const bulkQuantity = options.bulkUnits || '1,800.00';
   const bulk = ['0000000001800', 'Producto a granel ficticio', 'Unidad', 'Estilo D', 'REF-004', '0%', '0.35', '0.40', options.missingUnits ? '' : bulkQuantity, '630.00', '0', '0.00'];
@@ -1139,10 +1140,25 @@ test('converter wide amounts: totals beginning before their headings keep every 
   const saved=await downloadAction(h,()=>h.page.locator('#export-button').click());const wb=XLSX.read(saved.bytes,{type:'buffer'}),data=XLSX.utils.sheet_to_json(wb.Sheets.Datos,{header:1}),units=data[0].indexOf('Salidas - Unidades'),total=data[0].indexOf('Salidas - Total');assert.equal(data[1][units],96);assert.equal(data[2][units],192);assert.equal(data[1][total],1487.81);assert.equal(data[2][total],2975.61);assert.equal(XLSX.utils.sheet_to_json(wb.Sheets.Resumen,{header:1})[2][1],312.44);
  }finally{await h.close();}
 });
-test('converter incomplete quantities: prevents recording or downloading a partial Salida',async()=>{
+for(const width of [1440,390])test('converter incomplete data '+width+'px: explicit checkbox exports missing quantities, costs and totals as blanks and preserves identifiers',async()=>{
+ const h=await harness({viewport:{width,height:1000}});try{
+  h.state.records=[];h.state.storage.clear();await login(h.page,'index.html',{empty:true});await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida ficticia incompleta.pdf',mimeType:'application/pdf',buffer:fakePdf({emptyQuantity:true,cost:'',emptyTotals:true})});await waitNotBusy(h.page);
+  await h.page.locator('#manual-tax').check();await h.page.locator('#tax-amount').fill('');
+  await h.page.locator('[data-column="costo"]').check();await h.page.locator('[data-column="salidas_total"]').check();
+  await h.page.locator('#export-button').click();await h.page.getByText(/confirma las advertencias antes de guardar/).waitFor();assert.equal(h.state.recordCalls,0);assert.equal(h.state.downloads.length,0);
+  assert.equal(await h.page.locator('#missing-identifiers-warning').count(),0);await h.page.getByLabel(/Generar Excel aunque falten datos/).check();
+  const file=await downloadAction(h,()=>h.page.locator('#export-button').click());assert.equal(h.state.recordCalls,1);const workbook=XLSX.read(file.bytes,{type:'buffer'}),data=XLSX.utils.sheet_to_json(workbook.Sheets.Datos,{header:1,defval:null}),column=label=>data[0].indexOf(label);
+  assert.equal(data[1][column('Código de barras')],'0001234567890');assert.equal(data[1][column('Salidas - Unidades')],null);assert.equal(data[2][column('Salidas - Unidades')],3);assert.equal(data[1][column('Costo')],null);assert.equal(data[2][column('Costo')],null);assert.equal(data[1][column('Salidas - Total')],null);assert.equal(data[2][column('Salidas - Total')],null);
+  const info=JSON.stringify(XLSX.utils.sheet_to_json(workbook.Sheets['Información'],{header:1}));assert.match(info,/ADVERTENCIAS REVISADAS/);assert.match(info,/Cantidad/);assert.match(info,/Costo/);assert.match(info,/Importe/);await checkNoOverflow(h.page);
+ }finally{await h.close();}
+});
+
+test('converter identification warning: absent barcode and reference are highlighted; data changes reset export consent',async()=>{
  const h=await harness();try{
-  await login(h.page);await h.page.evaluate(()=>TrazaUI.navigate('converter'));await h.page.locator('#file-input').setInputFiles({name:'Salida ficticia incompleta.pdf',mimeType:'application/pdf',buffer:fakePdf({emptyQuantity:true})});await waitNotBusy(h.page);
-  await h.page.locator('#export-button').click();await h.page.getByText(/Faltan cantidades en 1 filas/).waitFor();assert.equal(h.state.recordCalls,0);assert.equal(h.state.downloads.length,0);
+  await login(h.page);await convert(h.page);await h.page.evaluate(()=>{state.rows[0].costo='';renderPreview();});await h.page.locator('#approve-validation').check();
+  await h.page.evaluate(()=>{state.rows[0].codigo='';state.rows[0].ref='';renderPreview();});assert.equal(await h.page.locator('#approve-validation').isChecked(),false);assert.match(await h.page.locator('#missing-identifiers-warning').innerText(),/sin código de barras ni referencia.*filas 1/s);
+  await h.page.evaluate(()=>{state.rows[0].ref='REF-001';renderPreview();});assert.equal(await h.page.locator('#missing-identifiers-warning').count(),0);
+  await h.page.locator('#file-input').setInputFiles({name:'Otro PDF ficticio.pdf',mimeType:'application/pdf',buffer:fakePdf({cost:''})});await waitNotBusy(h.page);assert.equal(await h.page.locator('#approve-validation').isChecked(),false);
  }finally{await h.close();}
 });
 async function profile(page) { while(await page.locator('.traza-detail-dialog[open]').count())await page.keyboard.press('Escape');await page.locator('#app-profile button').first().click(); }

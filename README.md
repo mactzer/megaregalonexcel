@@ -178,7 +178,7 @@ Consulta `README.txt` para los detalles de extracción y cálculo de totales. Re
 
 ## Controles de integridad y eficiencia
 
-La vista previa compara unidades (si aparecen con una etiqueta explícita), subtotal, impuesto y total neto impresos con los valores calculados. Las cantidades sin detectar bloquean el registro. Diferencias financieras o costos sin detectar requieren revisar y aceptar una advertencia, conservada en la hoja Información del Excel. Un total que no aparece en el PDF se indica como no disponible; nunca se supone cero.
+La vista previa compara unidades (si aparecen con una etiqueta explícita), subtotal, impuesto y total neto impresos con los valores calculados. Si faltan costos, importes, impuestos o cantidades, puedes marcar **Generar Excel aunque falten datos** y descargarlo. Los campos ausentes quedan vacíos y las advertencias se conservan en la hoja Información. Si un producto no tiene ni código de barras ni referencia, aparece un aviso con las filas afectadas; nunca se inventan identificadores. Un total que no aparece en el PDF se indica como no disponible; nunca se supone cero.
 
 El escáner permite buscar por nombre o referencia parcial dentro del índice del navegador; se elige el producto exacto antes de recuperar su precio compartido. Las búsquedas por código y referencia exacta siguen separadas. El historial de precios conserva importe anterior, nuevo, autor, fecha y motivo cifrado; restaurar un valor registra otra modificación, con el mismo control de concurrencia y permisos de administrador. Los precios anteriores a instalar el historial solo conservan la última modificación conocida.
 
