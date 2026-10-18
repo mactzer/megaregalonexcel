@@ -92,12 +92,15 @@ public final class ScannerActivity extends Activity {
             v.setPadding(x.left, x.top, x.right, x.bottom);
             return insets;
           });
-      getWindow()
-          .getInsetsController()
-          .setSystemBarsAppearance(
-              0,
-              android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                  | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+      root.post(
+          () -> {
+            android.view.WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null)
+              controller.setSystemBarsAppearance(
+                  0,
+                  android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                      | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+          });
     }
     LinearLayout top = new LinearLayout(this);
     top.setGravity(Gravity.CENTER_VERTICAL);

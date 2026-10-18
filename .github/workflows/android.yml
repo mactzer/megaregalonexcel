@@ -68,6 +68,7 @@ jobs:
             adb install "android/build/MegaControl-${NATIVE_APK_VERSION}.test.apk"
             adb shell pm grant io.github.mactzer.megacontrol android.permission.CAMERA
             adb shell am instrument -w io.github.mactzer.megacontrol.tests/io.github.mactzer.megacontrol.NativeSmoke | tee android/build/instrumentation.txt
+            adb logcat -d -b crash > android/build/crash-log.txt
             adb pull /sdcard/Pictures/MegaControl-tests/ android/build/screenshots || true
             python3 -c "from pathlib import Path; s=Path('android/build/instrumentation.txt').read_text(); assert 'OK: cifrado Android real' in s and 'FALLO:' not in s, s"
             adb shell screencap -p /sdcard/megacontrol-native.png
@@ -79,6 +80,7 @@ jobs:
           name: android-native-verificacion
           path: |
             android/build/instrumentation.txt
+            android/build/crash-log.txt
             android/build/megacontrol-native.png
             android/build/screenshots/
           if-no-files-found: ignore

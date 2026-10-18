@@ -36,6 +36,14 @@ public final class NativeSmoke extends Instrumentation {
     if (!v) throw new Exception(text);
   }
 
+  @Override
+  public boolean onException(Object object, Throwable problem) {
+    Bundle failure = new Bundle();
+    failure.putString("stream", "FALLO: " + android.util.Log.getStackTraceString(problem));
+    finish(Activity.RESULT_CANCELED, failure);
+    return true;
+  }
+
   boolean text(View v, String expected) {
     if (v instanceof TextView && ((TextView) v).getText().toString().contains(expected))
       return true;
@@ -224,6 +232,7 @@ public final class NativeSmoke extends Instrumentation {
       check(
           app.codeInput.getText().toString().equals("0012345678905"),
           "Foto Code 128 conserva ceros iniciales");
+      sendStatus(1, NativeApiStatus("FASE: visor PDF nativo"));
       PdfDocument pdf = new PdfDocument();
       PdfDocument.Page page = pdf.startPage(new PdfDocument.PageInfo.Builder(400, 600, 1).create());
       page.getCanvas().drawText("PDF FICTICIO MEGACONTROL", 25, 50, new Paint());
@@ -242,6 +251,7 @@ public final class NativeSmoke extends Instrumentation {
       waitForIdleSync();
       sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);
       check(Updater.compare("1.0.1", "1.0.0") > 0, "Semántica de actualización");
+      sendStatus(1, NativeApiStatus("FASE: cámara en vivo"));
       ScannerActivity camera =
           (ScannerActivity)
               startActivitySync(
@@ -302,5 +312,11 @@ public final class NativeSmoke extends Instrumentation {
         runOnMainSync(() -> close.finish());
       }
     }
+  }
+
+  static Bundle NativeApiStatus(String text) {
+    Bundle status = new Bundle();
+    status.putString("stream", text + "\n");
+    return status;
   }
 }
