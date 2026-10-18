@@ -9,3 +9,7 @@ auditoria-datos/
 _site/
 respaldo*.megacontrol.json
 MegaControl-recuperado-*/
+android/build/
+android/local.properties
+*.keystore
+*.jks

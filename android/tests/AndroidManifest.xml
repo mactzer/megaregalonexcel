@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.mactzer.megacontrol.tests">
+    <application android:label="MegaControl — pruebas ficticias" android:debuggable="true" />
+    <instrumentation android:name="io.github.mactzer.megacontrol.NativeSmoke"
+        android:targetPackage="io.github.mactzer.megacontrol" android:functionalTest="true" />
+</manifest>

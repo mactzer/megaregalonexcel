@@ -1,0 +1,67 @@
+name: Verificar Android nativo
+on:
+  push:
+    paths: ['android/**', '.github/workflows/android.yml', 'supabase-config.js', 'audit-crypto.js']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MEGACONTROL_ANDROID_STORE_PASSWORD: megacontrol-ci-fixtures-only
+      ANDROID_JSON_TEST_JAR: ${{ github.workspace }}/android/build/json-tests.jar
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Verificar dependencia de contratos con datos ficticios
+        run: |
+          mkdir -p android/build
+          curl --fail --location --retry 2 https://repo.maven.apache.org/maven2/org/json/json/20250517/json-20250517.jar -o "$ANDROID_JSON_TEST_JAR"
+          python3 - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          assert hashlib.sha256(Path(os.environ['ANDROID_JSON_TEST_JAR']).read_bytes()).hexdigest()=='3ea61b2a06e31edf1c91134fe9106b0ebb16628be169f3db75bc7a2b06b45796'
+          PY
+          node android/tests/run-contract.cjs
+      - name: Preparar SDK y firma exclusiva de pruebas
+        run: |
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          keytool -genkeypair -keystore "$RUNNER_TEMP/native-test.p12" -alias megacontrol -storepass:env MEGACONTROL_ANDROID_STORE_PASSWORD -keypass:env MEGACONTROL_ANDROID_STORE_PASSWORD -keyalg RSA -keysize 2048 -validity 3 -dname 'CN=Fictional Android Tests' -noprompt
+          python3 android/build-apk.py --sdk "$ANDROID_HOME" --keystore "$RUNNER_TEMP/native-test.p12" --with-tests
+      - name: Permitir aceleración del emulador
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Probar vistas, cifrado y archivos en Android real emulado
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: |
+            adb install android/build/MegaControl-1.0.0.apk
+            adb install android/build/MegaControl-1.0.0.test.apk
+            adb shell am instrument -w io.github.mactzer.megacontrol.tests/io.github.mactzer.megacontrol.NativeSmoke | tee android/build/instrumentation.txt
+            python3 -c "from pathlib import Path; s=Path('android/build/instrumentation.txt').read_text(); assert 'OK: cifrado Android real' in s and 'FALLO:' not in s, s"
+            adb shell screencap -p /sdcard/megacontrol-native.png
+            adb pull /sdcard/megacontrol-native.png android/build/megacontrol-native.png
+      - name: Conservar evidencia de prueba
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-native-verificacion
+          path: |
+            android/build/instrumentation.txt
+            android/build/megacontrol-native.png
+          if-no-files-found: ignore
