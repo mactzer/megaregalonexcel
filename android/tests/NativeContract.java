@@ -183,7 +183,35 @@ public final class NativeContract {
     }
   }
 
+  static void cameraGeometry() throws Exception {
+    for (int sensor : new int[] {0, 90, 270})
+      for (int display : new int[] {0, 90, 180, 270})
+        for (int[] view : new int[][] {{360, 800}, {800, 360}, {320, 600}}) {
+          float w = view[0], h = view[1];
+          float[] m = CameraGeometry.textureTransform(view[0], view[1], 1280, 720, sensor, display);
+          float nativeWidth = sensor % 180 == 0 ? 1280 : 720,
+              nativeHeight = sensor % 180 == 0 ? 720 : 1280;
+          double horizontal = Math.hypot(m[0] * w / nativeWidth, m[3] * w / nativeWidth),
+              vertical = Math.hypot(m[1] * h / nativeHeight, m[4] * h / nativeHeight);
+          check(
+              Math.abs(horizontal - vertical) < .0001,
+              "La cámara conserva las proporciones físicas, sensor "
+                  + sensor
+                  + " y pantalla "
+                  + display);
+          check(
+              Math.abs(m[0] * w / 2 + m[1] * h / 2 + m[2] - w / 2) < .001
+                  && Math.abs(m[3] * w / 2 + m[4] * h / 2 + m[5] - h / 2) < .001,
+              "La imagen permanece centrada");
+          if (display == 0)
+            check(
+                m[0] > 0 && m[4] > 0 && m[1] == 0 && m[3] == 0,
+                "No se vuelve a girar el sensor en vertical");
+        }
+  }
+
   public static void main(String[] args) throws Exception {
+    cameraGeometry();
     fixture =
         new JSONObject(
             new String(

@@ -18,8 +18,8 @@ import re
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent
-VERSION = '1.0.0'
-VERSION_CODE = 1
+VERSION = '1.1.0'
+VERSION_CODE = 2
 
 def run(args, **kwargs):
     subprocess.run([str(a) for a in args], check=True, **kwargs)

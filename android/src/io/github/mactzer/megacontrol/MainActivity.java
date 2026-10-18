@@ -52,7 +52,7 @@ import org.json.JSONObject;
 
 /** Native Android Views. There is deliberately no HTML or android.webkit dependency. */
 public final class MainActivity extends Activity {
-  static final int GREEN = 0xff126853, INK = 0xff172b29, MUTED = 0xff60736d, SOFT = 0xfff2f6f3;
+  static final int GREEN = Ui.BRAND, INK = Ui.INK, MUTED = Ui.MUTED, SOFT = Ui.BG;
   static final int SCAN = 10, PHOTO = 11, SAVE = 12;
   final Handler main = new Handler(Looper.getMainLooper());
   final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -148,11 +148,9 @@ public final class MainActivity extends Activity {
   }
 
   TextView text(String value, int size, int color) {
-    TextView v = new TextView(this);
-    v.setText(value);
-    v.setTextSize(size);
-    v.setTextColor(color);
-    v.setPadding(0, dp(5), 0, dp(5));
+    TextView v = Ui.label(this, value, size, color);
+    v.setPadding(0, dp(4), 0, dp(4));
+    if (size >= 18) Ui.bold(v);
     v.setTextIsSelectable(true);
     return v;
   }
@@ -165,25 +163,31 @@ public final class MainActivity extends Activity {
 
   LinearLayout card(LinearLayout parent) {
     LinearLayout c = column();
-    c.setPadding(dp(16), dp(14), dp(16), dp(14));
+    c.setPadding(dp(20), dp(18), dp(20), dp(18));
     GradientDrawable bg = new GradientDrawable();
     bg.setColor(Color.WHITE);
-    bg.setCornerRadius(dp(14));
-    bg.setStroke(dp(1), 0xffd9e4dd);
+    bg.setCornerRadius(dp(24));
+    bg.setStroke(dp(1), Ui.BORDER);
     c.setBackground(bg);
+    c.setElevation(dp(1));
     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-    lp.setMargins(0, dp(8), 0, dp(8));
+    lp.setMargins(0, dp(10), 0, dp(6));
     parent.addView(c, lp);
     return c;
   }
 
   Button button(String title, Runnable action) {
-    Button b = new Button(this);
-    b.setText(title);
-    b.setAllCaps(false);
-    b.setTextColor(GREEN);
-    b.setOnClickListener(v -> action.run());
-    return b;
+    String icon =
+        title.contains("PDF") || title.contains("Excel")
+            ? "document"
+            : title.contains("Historial") || title.contains("anteriores")
+                ? "history"
+                : title.contains("Reintentar") || title.contains("Actualizar")
+                    ? "history"
+                    : title.startsWith("Enviar")
+                        ? "send"
+                        : title.startsWith("Editar") ? "edit" : null;
+    return Ui.action(this, title, icon, false, action);
   }
 
   EditText input(String hint, boolean password) {
@@ -192,12 +196,37 @@ public final class MainActivity extends Activity {
     e.setSingleLine(true);
     e.setTextSize(16);
     e.setTextColor(INK);
+    e.setHintTextColor(MUTED);
     e.setInputType(
         password
             ? InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD
             : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-    e.setPadding(dp(10), dp(10), dp(10), dp(10));
+    e.setPadding(dp(16), dp(14), dp(16), dp(14));
+    e.setMinHeight(dp(54));
+    e.setBackgroundTintList(null);
+    android.graphics.drawable.StateListDrawable states =
+        new android.graphics.drawable.StateListDrawable();
+    GradientDrawable focused = Ui.shape(this, Color.WHITE, 14);
+    focused.setStroke(dp(2), GREEN);
+    GradientDrawable normal = Ui.shape(this, 0xfff8faf8, 14);
+    normal.setStroke(dp(1), Ui.BORDER);
+    states.addState(new int[] {android.R.attr.state_focused}, focused);
+    states.addState(new int[] {}, normal);
+    e.setBackground(states);
+    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+    lp.setMargins(0, dp(5), 0, dp(8));
+    e.setLayoutParams(lp);
     return e;
+  }
+
+  void pageTitle(String eyebrow, String title, String subtitle) {
+    TextView kicker = text(eyebrow.toUpperCase(new Locale("es")), 11, GREEN);
+    kicker.setLetterSpacing(.12f);
+    Ui.bold(kicker);
+    page.addView(kicker);
+    page.addView(text(title, 28, INK));
+    if (!subtitle.isEmpty()) page.addView(text(subtitle, 14, MUTED));
+    Ui.space(page, 8);
   }
 
   void notify(String s) {
@@ -278,31 +307,47 @@ public final class MainActivity extends Activity {
     screen = -1;
     root.removeAllViews();
     LinearLayout c = column();
-    c.setPadding(dp(26), dp(38), dp(26), dp(26));
+    c.setPadding(dp(24), dp(34), dp(24), dp(26));
     ScrollView scroll = new ScrollView(this);
     scroll.setFillViewport(true);
     scroll.addView(c);
     root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+    LinearLayout brand = column();
+    brand.setPadding(dp(24), dp(26), dp(24), dp(24));
+    GradientDrawable brandBackground =
+        new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR, new int[] {0xff16735d, 0xff103f35});
+    brandBackground.setCornerRadius(dp(28));
+    brand.setBackground(brandBackground);
+    c.addView(brand);
     ImageView icon = new ImageView(this);
     icon.setImageResource(R.drawable.megacontrol_logo);
-    LinearLayout.LayoutParams logo = new LinearLayout.LayoutParams(dp(76), dp(76));
-    c.addView(icon, logo);
-    c.addView(text("MegaControl", 30, GREEN));
-    c.addView(text("Android · Control de salidas", 16, MUTED));
+    icon.setBackground(Ui.shape(this, Color.WHITE, 17));
+    icon.setPadding(dp(8), dp(8), dp(8), dp(8));
+    LinearLayout.LayoutParams logo = new LinearLayout.LayoutParams(dp(56), dp(56));
+    brand.addView(icon, logo);
+    Ui.space(brand, 16);
+    brand.addView(text("MegaControl", 30, Color.WHITE));
+    brand.addView(text("Tu equipo. Tus salidas.\nTodo bajo control.", 16, 0xffc9e6d7));
+    Ui.space(c, 12);
     LinearLayout box = card(c);
     box.addView(text("Entra con tu cuenta", 22, INK));
-    box.addView(text("Usa el mismo usuario y contraseña de MegaControl.", 15, MUTED));
+    box.addView(text("Bienvenido de nuevo. Usa tu cuenta habitual.", 14, MUTED));
+    Ui.space(box, 12);
     EditText user = input("Usuario", false), password = input("Contraseña", true);
     user.setAutofillHints(View.AUTOFILL_HINT_USERNAME);
     password.setAutofillHints(View.AUTOFILL_HINT_PASSWORD);
+    box.addView(text("Usuario", 12, MUTED));
     box.addView(user);
+    box.addView(text("Contraseña", 12, MUTED));
     box.addView(password);
     progress = new ProgressBar(this);
     progress.setVisibility(View.GONE);
     box.addView(progress);
-    stateText = text("Conectado al proyecto de MegaControl.", 13, MUTED);
+    stateText = text("", 12, MUTED);
     box.addView(stateText);
     Button sign = button("Iniciar sesión", () -> {});
+    Ui.styleButton(sign, true, "arrow");
     sign.setOnClickListener(
         v -> {
           if (user.getText().toString().trim().isEmpty() || password.getText().length() == 0) {
@@ -349,24 +394,45 @@ public final class MainActivity extends Activity {
               });
         });
     box.addView(sign);
-    c.addView(
-        text(
-            "La información se descifra en el teléfono. La app no guarda tu contraseña.",
-            13,
-            MUTED));
+    Ui.space(c, 18);
+    TextView secure = text("Acceso seguro · Información cifrada", 12, MUTED);
+    secure.setGravity(Gravity.CENTER);
+    secure.setCompoundDrawablesRelativeWithIntrinsicBounds(
+        new Ui.Icon(this, "shield", GREEN, 17), null, null, null);
+    secure.setCompoundDrawablePadding(dp(8));
+    c.addView(secure);
   }
 
   void shell() {
     root.removeAllViews();
     header = new LinearLayout(this);
     header.setGravity(Gravity.CENTER_VERTICAL);
-    header.setPadding(dp(18), dp(8), dp(10), dp(8));
+    header.setPadding(dp(20), dp(12), dp(14), dp(10));
     header.setBackgroundColor(Color.WHITE);
-    TextView name = text("MegaControl", 23, GREEN);
-    header.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
+    ImageView logo = new ImageView(this);
+    logo.setImageResource(R.drawable.megacontrol_logo);
+    LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(33), dp(33));
+    logoLp.rightMargin = dp(10);
+    header.addView(logo, logoLp);
+    LinearLayout identity = column();
+    identity.addView(text("MegaControl", 20, INK));
+    identity.addView(Ui.label(this, "Control de salidas", 11, MUTED));
+    header.addView(identity, new LinearLayout.LayoutParams(0, -2, 1));
+    TextView avatar =
+        Ui.label(this, api.username.substring(0, 1).toUpperCase(Locale.ROOT), 14, GREEN);
+    Ui.bold(avatar);
+    avatar.setGravity(Gravity.CENTER);
+    avatar.setBackground(Ui.shape(this, Ui.PALE, 24));
+    LinearLayout.LayoutParams avatarLp = new LinearLayout.LayoutParams(dp(34), dp(34));
+    avatarLp.rightMargin = dp(6);
+    header.addView(avatar, avatarLp);
     header.addView(
-        button(
-            "⋮",
+        Ui.iconButton(
+            this,
+            "more",
+            "Opciones de cuenta",
+            INK,
+            Color.WHITE,
             () ->
                 new AlertDialog.Builder(this)
                     .setTitle(
@@ -403,8 +469,8 @@ public final class MainActivity extends Activity {
                         })
                     .show()));
     root.addView(header);
-    stateText = text("@" + api.username, 12, MUTED);
-    stateText.setPadding(dp(18), 0, dp(18), 0);
+    stateText = text("@" + api.username, 11, MUTED);
+    stateText.setPadding(dp(20), dp(6), dp(20), dp(6));
     root.addView(stateText);
     progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
     progress.setIndeterminate(true);
@@ -413,12 +479,15 @@ public final class MainActivity extends Activity {
     content = new FrameLayout(this);
     root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1));
     bottom = new LinearLayout(this);
-    bottom.setPadding(dp(4), dp(2), dp(4), dp(2));
+    bottom.setPadding(dp(10), dp(3), dp(10), dp(4));
     bottom.setBackgroundColor(Color.WHITE);
     String[] labels = {"Escanear", "Archivo", "Consultas", "Chat"};
+    String[] icons = {"scan", "archive", "history", "chat"};
     for (int i = 0; i < labels.length; i++) {
       final int n = i;
-      bottom.addView(button(labels[i], () -> show(n)), new LinearLayout.LayoutParams(0, dp(58), 1));
+      bottom.addView(
+          Ui.nav(this, labels[i], icons[i], () -> show(n)),
+          new LinearLayout.LayoutParams(0, dp(70), 1));
     }
     root.addView(bottom);
   }
@@ -430,13 +499,14 @@ public final class MainActivity extends Activity {
     screen = target;
     content.removeAllViews();
     page = column();
-    page.setPadding(dp(16), dp(10), dp(16), dp(20));
+    page.setPadding(dp(20), dp(18), dp(20), dp(26));
     ScrollView scroll = new ScrollView(this);
     scroll.setFillViewport(true);
     scroll.addView(page);
     content.addView(scroll);
+    String[] icons = {"scan", "archive", "history", "chat"};
     for (int i = 0; i < bottom.getChildCount(); i++)
-      bottom.getChildAt(i).setBackgroundColor(i == target ? 0xffdceee3 : Color.WHITE);
+      Ui.selectNav((LinearLayout) bottom.getChildAt(i), i == target, icons[i]);
     status("@" + api.username + " · " + (api.role.equals("admin") ? "Administrador" : "Usuario"));
     if (target == 0) scannerView();
     else if (target == 1) archiveView();
@@ -445,30 +515,62 @@ public final class MainActivity extends Activity {
   }
 
   void scannerView() {
-    page.addView(text("Consultar producto", 25, INK));
-    page.addView(text(api.summary(), 13, MUTED));
-    LinearLayout box = card(page);
-    box.addView(
-        button(
-            "▥  ESCANEAR PRODUCTO",
-            () -> startActivityForResult(new Intent(this, ScannerActivity.class), SCAN)));
-    box.addView(
-        button(
-            "Leer foto de una etiqueta",
+    pageTitle(
+        "Escáner de productos",
+        "Consulta precios",
+        "Encuentra el precio y las salidas de cada producto.");
+    LinearLayout hero = column();
+    hero.setPadding(dp(22), dp(22), dp(22), dp(22));
+    GradientDrawable gradient =
+        new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR, new int[] {0xff14745c, 0xff103f35});
+    gradient.setCornerRadius(dp(26));
+    hero.setBackground(
+        new android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(0x28ffffff), gradient, null));
+    LinearLayout heroTop = new LinearLayout(this);
+    heroTop.setGravity(Gravity.CENTER_VERTICAL);
+    ImageView scanIcon = Ui.image(this, "scan", Color.WHITE, 32);
+    scanIcon.setPadding(dp(11), dp(11), dp(11), dp(11));
+    scanIcon.setBackground(Ui.shape(this, 0x22ffffff, 17));
+    heroTop.addView(scanIcon, new LinearLayout.LayoutParams(dp(56), dp(56)));
+    TextView ready = Ui.badge(this, "CÓDIGO DE BARRAS", 0xffdaf0e2, 0x20ffffff);
+    LinearLayout.LayoutParams readyLp = new LinearLayout.LayoutParams(-2, -2);
+    readyLp.leftMargin = dp(14);
+    heroTop.addView(ready, readyLp);
+    hero.addView(heroTop);
+    Ui.space(hero, 16);
+    hero.addView(text("Escanear producto", 24, Color.WHITE));
+    hero.addView(text("Apunta al código de barras para consultar.", 13, 0xffc5e5d5));
+    hero.setContentDescription("Escanear producto con la cámara");
+    hero.setFocusable(true);
+    hero.setOnClickListener(
+        v -> startActivityForResult(new Intent(this, ScannerActivity.class), SCAN));
+    page.addView(hero, new LinearLayout.LayoutParams(-1, -2));
+    page.addView(
+        Ui.action(
+            this,
+            "Leer etiqueta desde una foto",
+            "photo",
+            false,
             () ->
                 startActivityForResult(
                     new Intent(Intent.ACTION_OPEN_DOCUMENT)
                         .addCategory(Intent.CATEGORY_OPENABLE)
                         .setType("image/*"),
                     PHOTO)));
+    LinearLayout box = card(page);
+    box.addView(text("Buscar sin cámara", 18, INK));
+    box.addView(text("Código, referencia o nombre del producto", 12, MUTED));
     searchMode = new Spinner(this);
     searchMode.setAdapter(
         new ArrayAdapter<>(
             this,
             android.R.layout.simple_spinner_dropdown_item,
-            new String[] {"Código de barras", "Referencia", "Nombre o referencia parcial"}));
-    box.addView(searchMode);
-    codeInput = input("Escribe el código", false);
+            new String[] {"Código de barras", "Referencia", "Nombre del producto"}));
+    searchMode.setBackgroundTintList(android.content.res.ColorStateList.valueOf(GREEN));
+    box.addView(searchMode, new LinearLayout.LayoutParams(-1, dp(46)));
+    codeInput = input("Ej. 7501022104217", false);
     codeInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
     codeInput.setOnEditorActionListener(
         (v, id, event) -> {
@@ -478,10 +580,34 @@ public final class MainActivity extends Activity {
           }
           return false;
         });
-    box.addView(codeInput);
-    box.addView(button("Buscar", () -> lookup()));
+    searchMode.setOnItemSelectedListener(
+        new android.widget.AdapterView.OnItemSelectedListener() {
+          public void onNothingSelected(android.widget.AdapterView<?> p) {}
+
+          public void onItemSelected(
+              android.widget.AdapterView<?> p, View v, int position, long id) {
+            codeInput.setHint(
+                position == 0
+                    ? "Ej. 7501022104217"
+                    : position == 1 ? "Ej. DM141-5" : "Nombre o parte de la referencia");
+          }
+        });
+    LinearLayout searchRow = new LinearLayout(this);
+    searchRow.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, dp(54), 1);
+    inputLp.rightMargin = dp(8);
+    searchRow.addView(codeInput, inputLp);
+    Button search =
+        Ui.iconButton(this, "search", "Buscar producto", Color.WHITE, GREEN, () -> lookup());
+    searchRow.addView(search, new LinearLayout.LayoutParams(dp(54), dp(54)));
+    Ui.space(box, 6);
+    box.addView(searchRow);
+    Ui.space(box, 10);
     box.addView(
-        text("Los ceros iniciales se conservan. EAN, UPC, Code 128, Code 39 e ITF.", 12, MUTED));
+        text("Los códigos se conservan completos, incluidos los ceros iniciales.", 11, MUTED));
+    TextView index = text(api.summary(), 11, MUTED);
+    index.setGravity(Gravity.CENTER);
+    page.addView(index);
     scanResult = column();
     page.addView(scanResult);
   }
@@ -531,14 +657,15 @@ public final class MainActivity extends Activity {
     LinearLayout c = card(scanResult);
     boolean found = r.match != null && !r.ambiguous;
     c.addView(
-        text(
+        Ui.badge(
+            this,
             found
                 ? "Producto encontrado"
                 : r.ambiguous
                     ? "Referencia ambigua"
                     : r.incomplete ? "Consulta incompleta" : "Sin coincidencia en el índice",
-            20,
-            found ? GREEN : 0xff8a5b14));
+            found ? GREEN : 0xff8a5b14,
+            found ? Ui.PALE : 0xfffff2d9));
     if (r.incomplete)
       c.addView(
           text(
@@ -561,20 +688,27 @@ public final class MainActivity extends Activity {
       return;
     }
     JSONObject product = r.match.product, doc = r.match.doc;
-    c.addView(text(NativeApi.text(product, "descripcion"), 23, INK));
+    Ui.space(c, 12);
+    c.addView(text(NativeApi.text(product, "descripcion"), 21, INK));
     Double original = NativeApi.value(product, "pventa");
     Long cents =
         r.override != null
             ? r.override.getLong("cents")
             : original == null || r.conflicting ? null : Math.round(original * 100);
-    c.addView(
+    LinearLayout pricePanel = column();
+    pricePanel.setPadding(dp(16), dp(12), dp(16), dp(12));
+    pricePanel.setBackground(Ui.shape(this, 0xffeff7f1, 18));
+    LinearLayout.LayoutParams priceLp = new LinearLayout.LayoutParams(-1, -2);
+    priceLp.setMargins(0, dp(12), 0, dp(14));
+    c.addView(pricePanel, priceLp);
+    pricePanel.addView(
         text(
             cents == null
                 ? "Precio de venta no disponible"
                 : String.format(Locale.US, "USD %.2f", cents / 100.0),
-            35,
+            36,
             GREEN));
-    c.addView(
+    pricePanel.addView(
         text(
             r.override != null
                 ? "Precio modificado por un administrador · "
@@ -582,7 +716,7 @@ public final class MainActivity extends Activity {
                 : "registered".equals(doc.optString("kind"))
                     ? "Precio del registro administrativo"
                     : "Precio de la última factura encontrada",
-            14,
+            12,
             MUTED));
     if (r.conflicting && r.override == null)
       c.addView(
@@ -618,8 +752,21 @@ public final class MainActivity extends Activity {
   }
 
   void detail(LinearLayout p, String label, String value) {
-    p.addView(text(label, 12, MUTED));
-    p.addView(text(value.isEmpty() ? "No disponible en el documento" : value, 16, INK));
+    LinearLayout row = new LinearLayout(this);
+    row.setGravity(Gravity.CENTER_VERTICAL);
+    row.setPadding(0, dp(9), 0, dp(9));
+    TextView key = text(label, 12, MUTED),
+        data = text(value.isEmpty() ? "No disponible" : value, 14, INK);
+    data.setGravity(Gravity.END);
+    if (label.contains("Código") || label.equals("Referencia"))
+      data.setTypeface(
+          android.graphics.Typeface.create("monospace", android.graphics.Typeface.NORMAL));
+    row.addView(key, new LinearLayout.LayoutParams(0, -2, 1));
+    row.addView(data, new LinearLayout.LayoutParams(0, -2, 1.4f));
+    p.addView(row);
+    View divider = new View(this);
+    divider.setBackgroundColor(Ui.BORDER);
+    p.addView(divider, new LinearLayout.LayoutParams(-1, dp(1)));
   }
 
   void editPrice(NativeApi.Result result, Long initial, Long restoredVersion) {
@@ -784,8 +931,10 @@ public final class MainActivity extends Activity {
   }
 
   void queriesView() {
-    page.addView(text("Consultas compartidas", 25, INK));
-    page.addView(text("Historial del equipo · Fechas y horas de Panamá", 14, MUTED));
+    pageTitle(
+        "Actividad del equipo",
+        "Consultas compartidas",
+        "Las búsquedas del equipo, en un solo lugar.");
     page.addView(button("Actualizar", () -> show(2)));
     page.addView(button("Reintentar consultas pendientes", () -> retryQueries()));
     work(
@@ -815,7 +964,8 @@ public final class MainActivity extends Activity {
   }
 
   void archiveView() {
-    page.addView(text("Archivo de salidas", 25, INK));
+    pageTitle(
+        "Tus documentos", "Archivo de salidas", "Consulta documentos, productos y versiones.");
     EditText number = input("Número exacto de salida", false);
     number.setInputType(InputType.TYPE_CLASS_NUMBER);
     number.setText(exactArchive);
@@ -834,7 +984,18 @@ public final class MainActivity extends Activity {
           for (int i = 0; i < rows.length(); i++) {
             JSONObject m = rows.getJSONObject(i), record = m.getJSONObject("record");
             LinearLayout c = card(page);
-            c.addView(text("Salida " + m.getString("salida_numero"), 21, INK));
+            LinearLayout titleRow = new LinearLayout(this);
+            titleRow.setGravity(Gravity.CENTER_VERTICAL);
+            ImageView docIcon = Ui.image(this, "archive", GREEN, 21);
+            docIcon.setPadding(dp(10), dp(10), dp(10), dp(10));
+            docIcon.setBackground(Ui.shape(this, Ui.PALE, 13));
+            titleRow.addView(docIcon, new LinearLayout.LayoutParams(dp(42), dp(42)));
+            TextView docTitle = text("Salida " + m.getString("salida_numero"), 20, INK);
+            LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, -2, 1);
+            titleLp.leftMargin = dp(12);
+            titleRow.addView(docTitle, titleLp);
+            c.addView(titleRow);
+            Ui.space(c, 10);
             c.addView(
                 text(
                     "@" + m.getString("username") + " · " + when(record.getString("created_at")),
@@ -991,17 +1152,38 @@ public final class MainActivity extends Activity {
   }
 
   void chatView() {
-    page.addView(text("Chat del equipo", 25, INK));
-    page.addView(text("Mensajes cifrados · Misma cuenta y base de datos", 14, MUTED));
+    content.removeAllViews();
+    LinearLayout chatRoot = column();
+    content.addView(chatRoot, new FrameLayout.LayoutParams(-1, -1));
+    LinearLayout toolbar = new LinearLayout(this);
+    toolbar.setPadding(dp(20), dp(14), dp(12), dp(14));
+    toolbar.setGravity(Gravity.CENTER_VERTICAL);
+    LinearLayout heading = column();
+    heading.addView(text("Chat del equipo", 24, INK));
+    heading.addView(text("Mensajes compartidos · Cifrado", 12, MUTED));
+    toolbar.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+    chatRoot.addView(toolbar);
     LinearLayout messages = column();
-    page.addView(messages);
+    messages.setPadding(dp(18), dp(4), dp(18), dp(14));
+    ScrollView conversation = new ScrollView(this);
+    conversation.setFillViewport(true);
+    conversation.addView(messages);
+    chatRoot.addView(conversation, new LinearLayout.LayoutParams(-1, 0, 1));
+    LinearLayout composer = new LinearLayout(this);
+    composer.setGravity(Gravity.BOTTOM);
+    composer.setBackgroundColor(Color.WHITE);
+    composer.setPadding(dp(16), dp(12), dp(16), dp(12));
+    chatRoot.addView(composer);
     EditText message = input("Escribe un mensaje…", false);
     chatInput = message;
     message.setText(chatDraft);
     message.setSingleLine(false);
     message.setMaxLines(5);
-    page.addView(message);
-    Button send = button("Enviar", () -> {});
+    LinearLayout.LayoutParams messageLp = new LinearLayout.LayoutParams(0, -2, 1);
+    messageLp.rightMargin = dp(10);
+    composer.addView(message, messageLp);
+    Button send = Ui.iconButton(this, "send", "Enviar mensaje", Color.WHITE, GREEN, () -> {});
+    composer.addView(send, new LinearLayout.LayoutParams(dp(52), dp(52)));
     send.setOnClickListener(
         v -> {
           String value = message.getText().toString().trim();
@@ -1035,11 +1217,16 @@ public final class MainActivity extends Activity {
               },
               () -> send.setEnabled(true));
         });
-    page.addView(send);
-    page.addView(button("Actualizar conversación", () -> show(3)));
-    page.addView(
-        button(
+    toolbar.addView(
+        Ui.iconButton(
+            this, "history", "Actualizar conversación", GREEN, Color.TRANSPARENT, () -> show(3)));
+    toolbar.addView(
+        Ui.iconButton(
+            this,
+            "shield",
             "Reintentar mensajes pendientes",
+            GREEN,
+            Color.TRANSPARENT,
             () ->
                 work(
                     () -> {
@@ -1090,14 +1277,23 @@ public final class MainActivity extends Activity {
           }
           for (int i = 0; i < rows.length(); i++) {
             JSONObject m = rows.getJSONObject(i), body = m.getJSONObject("body");
-            LinearLayout c = card(target);
+            LinearLayout c = column();
+            boolean own = api.userId.equals(m.getString("created_by"));
+            c.setPadding(dp(16), dp(12), dp(16), dp(12));
+            c.setBackground(Ui.shape(this, own ? 0xffe0f0e6 : Color.WHITE, 20));
+            LinearLayout.LayoutParams bubbleLp =
+                new LinearLayout.LayoutParams(
+                    (int) ((getResources().getDisplayMetrics().widthPixels - dp(36)) * .91), -2);
+            bubbleLp.gravity = own ? Gravity.END : Gravity.START;
+            bubbleLp.topMargin = dp(9);
+            target.addView(c, bubbleLp);
             c.addView(
                 text(
                     "@"
                         + names.optString(m.getString("created_by"), "Equipo")
                         + " · "
                         + when(m.getString("created_at")),
-                    13,
+                    11,
                     MUTED));
             String kind = m.getString("kind");
             if (kind.equals("text") || kind.equals("image"))
@@ -1136,8 +1332,18 @@ public final class MainActivity extends Activity {
                                     .show();
                               })));
           }
-          if (rows.length() == 0)
-            target.addView(text("No hay mensajes en esta página.", 16, MUTED));
+          if (rows.length() == 0) {
+            TextView empty =
+                text(
+                    "La conversación empieza aquí.\nComparte una consulta con tu equipo.",
+                    15,
+                    MUTED);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(10), dp(60), dp(10), dp(30));
+            target.addView(empty);
+          }
+          if (before == 0 && target.getParent() instanceof ScrollView)
+            target.post(() -> ((ScrollView) target.getParent()).fullScroll(View.FOCUS_DOWN));
         });
   }
 
@@ -1239,6 +1445,14 @@ public final class MainActivity extends Activity {
       return;
     }
     if (request == SCAN && result == RESULT_OK && data != null) {
+      if (data.getBooleanExtra("choosePhoto", false)) {
+        startActivityForResult(
+            new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("image/*"),
+            PHOTO);
+        return;
+      }
       if (screen != 0) show(0);
       codeInput.setText(data.getStringExtra("code"));
       searchMode.setSelection(0);

@@ -63,6 +63,27 @@ public final class NativeSmoke extends Instrumentation {
     throw new Exception("No apareció la vista nativa: " + value);
   }
 
+  void capture(String name) throws Exception {
+    waitForIdleSync();
+    SystemClock.sleep(350);
+    Bitmap screenshot = getUiAutomation().takeScreenshot();
+    check(screenshot != null, "Captura de interfaz nativa");
+    ContentValues values = new ContentValues();
+    values.put(MediaStore.Images.Media.DISPLAY_NAME, name + ".png");
+    values.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
+    values.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MegaControl-tests");
+    Uri destination =
+        getTargetContext()
+            .getContentResolver()
+            .insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+    try (java.io.OutputStream out =
+        getTargetContext().getContentResolver().openOutputStream(destination)) {
+      screenshot.compress(Bitmap.CompressFormat.PNG, 100, out);
+    } finally {
+      screenshot.recycle();
+    }
+  }
+
   @Override
   public void onStart() {
     Bundle result = new Bundle();
@@ -88,6 +109,7 @@ public final class NativeSmoke extends Instrumentation {
       waitForIdleSync();
       check(!web(app.root), "La app no debe contener WebView");
       check(text(app.root, "Entra con tu cuenta"), "Inicio de sesión Android nativo");
+      capture("01-acceso");
       NativeContract.Fake backend = new NativeContract.Fake();
       NativeApi client =
           new NativeApi(
@@ -104,13 +126,30 @@ public final class NativeSmoke extends Instrumentation {
             app.api = client;
             app.shell();
             app.show(0);
+          });
+      capture("02-escaner");
+      runOnMainSync(
+          () -> {
             app.codeInput.setText("0012345678905");
             app.lookup();
           });
       waitText(app, "USD 8.99");
       check(!web(app.root), "Resultado usa TextView nativo");
+      runOnMainSync(
+          () ->
+              ((android.widget.ScrollView) app.page.getParent())
+                  .scrollTo(0, app.scanResult.getTop() - Ui.dp(app, 10)));
+      capture("03-precio");
+      runOnMainSync(() -> app.show(1));
+      waitText(app, "Salida 29317");
+      capture("04-archivo");
       runOnMainSync(() -> app.show(2));
       waitText(app, "Consultas compartidas");
+      waitText(app, "Encontrado");
+      capture("05-consultas");
+      runOnMainSync(() -> app.show(3));
+      waitText(app, "Sí, el precio ya está comprobado");
+      capture("06-chat");
       runOnMainSync(() -> app.show(0));
       check(app.api.authenticated(), "Cambiar sección no cierra sesión");
       ContentValues values = new ContentValues();
@@ -207,7 +246,44 @@ public final class NativeSmoke extends Instrumentation {
       waitForIdleSync();
       sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);
       check(Updater.compare("1.0.1", "1.0.0") > 0, "Semántica de actualización");
-      runOnMainSync(() -> app.logout());
+      ScannerActivity camera =
+          (ScannerActivity)
+              startActivitySync(
+                  new Intent()
+                      .setClassName(getTargetContext(), ScannerActivity.class.getName())
+                      .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+      boolean ready = false;
+      for (int i = 0; i < 200; i++) {
+        AtomicReference<Boolean> frames = new AtomicReference<>(false);
+        runOnMainSync(() -> frames.set(camera.previewFrames > 2 && camera.session != null));
+        if (frames.get()) {
+          ready = true;
+          break;
+        }
+        SystemClock.sleep(100);
+      }
+      check(ready, "La cámara real del emulador entrega imágenes");
+      runOnMainSync(
+          () -> {
+            if (camera.getRequestedOrientation()
+                != android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT)
+              throw new AssertionError("El escáner debe abrir vertical");
+            android.graphics.Matrix transform = new android.graphics.Matrix();
+            camera.preview.getTransform(transform);
+            float[] matrixValues = new float[9];
+            transform.getValues(matrixValues);
+            if (Math.abs(matrixValues[1]) > .001
+                || Math.abs(matrixValues[3]) > .001
+                || matrixValues[0] <= 0
+                || matrixValues[4] <= 0)
+              throw new AssertionError("No debe haber un segundo giro de 90 grados");
+          });
+      capture("07-camara-vertical");
+      runOnMainSync(
+          () -> {
+            app.logout();
+            camera.finish();
+          });
       waitText(app, "Entra con tu cuenta");
       check(!app.api.authenticated(), "Logout elimina claves y cuenta");
       fixture.delete();
@@ -215,7 +291,8 @@ public final class NativeSmoke extends Instrumentation {
       result.putString(
           "stream",
           "OK: cifrado Android real, login y producto nativos, precio por fecha, navegación sin"
-              + " logout, Code 128 en foto, PDF nativo y descarga byte a byte.\n");
+              + " logout, Code 128 en foto, PDF nativo y descarga byte a byte; cámara en vivo"
+              + " vertical sin doble giro y capturas de todas las pantallas.\n");
       finish(Activity.RESULT_OK, result);
     } catch (Throwable e) {
       result.putString(

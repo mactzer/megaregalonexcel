@@ -40,6 +40,10 @@ jobs:
           sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
           keytool -genkeypair -keystore "$RUNNER_TEMP/native-test.p12" -alias megacontrol -storepass:env MEGACONTROL_ANDROID_STORE_PASSWORD -keypass:env MEGACONTROL_ANDROID_STORE_PASSWORD -keyalg RSA -keysize 2048 -validity 3 -dname 'CN=Fictional Android Tests' -noprompt
           python3 android/build-apk.py --sdk "$ANDROID_HOME" --keystore "$RUNNER_TEMP/native-test.p12" --with-tests
+          python3 - <<'PY_VERSION'
+          import os,runpy
+          with open(os.environ['GITHUB_ENV'],'a') as output: output.write('NATIVE_APK_VERSION='+runpy.run_path('android/build-apk.py')['VERSION']+'\n')
+          PY_VERSION
           if test -d android/distribution; then python3 android/publish-release.py --verify; fi
       - name: Permitir aceleración del emulador
         run: |
@@ -52,12 +56,19 @@ jobs:
           api-level: 35
           arch: x86_64
           target: google_apis
+          profile: pixel_4
           disable-animations: true
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -camera-front none
           script: |
-            adb install android/build/MegaControl-1.0.0.apk
-            adb install android/build/MegaControl-1.0.0.test.apk
+            curl --fail --location --retry 2 https://github.com/mactzer/megaregalonexcel/releases/download/android-v1.0.0/MegaControl-1.0.0.apk -o android/build/previous-signed.apk
+            adb install android/build/previous-signed.apk
+            adb install -r "android/distribution/MegaControl-${NATIVE_APK_VERSION}.apk"
+            adb uninstall io.github.mactzer.megacontrol
+            adb install "android/build/MegaControl-${NATIVE_APK_VERSION}.apk"
+            adb install "android/build/MegaControl-${NATIVE_APK_VERSION}.test.apk"
+            adb shell pm grant io.github.mactzer.megacontrol android.permission.CAMERA
             adb shell am instrument -w io.github.mactzer.megacontrol.tests/io.github.mactzer.megacontrol.NativeSmoke | tee android/build/instrumentation.txt
+            adb pull /sdcard/Pictures/MegaControl-tests/ android/build/screenshots || true
             python3 -c "from pathlib import Path; s=Path('android/build/instrumentation.txt').read_text(); assert 'OK: cifrado Android real' in s and 'FALLO:' not in s, s"
             adb shell screencap -p /sdcard/megacontrol-native.png
             adb pull /sdcard/megacontrol-native.png android/build/megacontrol-native.png
@@ -69,6 +80,7 @@ jobs:
           path: |
             android/build/instrumentation.txt
             android/build/megacontrol-native.png
+            android/build/screenshots/
           if-no-files-found: ignore
   publish:
     needs: native

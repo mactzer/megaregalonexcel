@@ -35,25 +35,39 @@ final class PdfView {
       file.delete();
       throw e;
     }
-    Dialog dialog = new Dialog(activity, android.R.style.Theme_Material_Light_NoActionBar);
+    Dialog dialog = new Dialog(activity, R.style.AppTheme);
     LinearLayout root = new LinearLayout(activity);
     root.setOrientation(LinearLayout.VERTICAL);
     root.setFitsSystemWindows(true);
+    root.setBackgroundColor(Ui.BG);
+    LinearLayout top = new LinearLayout(activity);
+    top.setGravity(android.view.Gravity.CENTER_VERTICAL);
+    top.setPadding(
+        Ui.dp(activity, 16), Ui.dp(activity, 10), Ui.dp(activity, 12), Ui.dp(activity, 10));
+    top.setBackgroundColor(Color.WHITE);
+    TextView title = Ui.label(activity, "Documento PDF", 19, Ui.INK);
+    Ui.bold(title);
+    top.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+    top.addView(
+        Ui.iconButton(
+            activity, "close", "Cerrar documento", Ui.INK, Ui.PALE, () -> dialog.dismiss()));
+    root.addView(top);
     ImageView image = new ImageView(activity);
     image.setScaleType(ImageView.ScaleType.MATRIX);
     root.addView(image, new LinearLayout.LayoutParams(-1, 0, 1));
     LinearLayout controls = new LinearLayout(activity);
-    Button previous = new Button(activity),
-        next = new Button(activity),
-        close = new Button(activity);
-    previous.setText("Anterior");
-    next.setText("Siguiente");
-    close.setText("Cerrar");
-    TextView label = new TextView(activity);
+    controls.setGravity(android.view.Gravity.CENTER_VERTICAL);
+    controls.setPadding(
+        Ui.dp(activity, 18), Ui.dp(activity, 10), Ui.dp(activity, 18), Ui.dp(activity, 12));
+    controls.setBackgroundColor(Color.WHITE);
+    Button
+        previous = Ui.iconButton(activity, "back", "Página anterior", Ui.BRAND, Ui.PALE, () -> {}),
+        next = Ui.iconButton(activity, "arrow", "Página siguiente", Ui.BRAND, Ui.PALE, () -> {});
+    TextView label = Ui.label(activity, "", 13, Ui.MUTED);
+    label.setGravity(android.view.Gravity.CENTER);
     controls.addView(previous);
     controls.addView(label, new LinearLayout.LayoutParams(0, -2, 1));
     controls.addView(next);
-    controls.addView(close);
     root.addView(controls);
     int[] page = {0};
     Bitmap[] bitmap = {null};
@@ -119,7 +133,6 @@ final class PdfView {
           page[0]++;
           render.run();
         });
-    close.setOnClickListener(v -> dialog.dismiss());
     dialog.setOnDismissListener(
         d -> {
           image.setImageDrawable(null);

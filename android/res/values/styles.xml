@@ -1,13 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#126853</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#102e2a</item>
-        <item name="android:navigationBarColor">#102e2a</item>
-        <item name="android:windowBackground">#f3f6f4</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#116b57</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:statusBarColor">#f3f7f4</item>
+        <item name="android:navigationBarColor">#ffffff</item>
+        <item name="android:windowBackground">#f3f7f4</item>
+        <item name="android:alertDialogTheme">@style/MegaDialog</item>
         <item name="android:windowActionModeOverlay">true</item>
+    </style>
+    <style name="MegaDialog" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">#116b57</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:windowBackground">@drawable/dialog_background</item>
+        <item name="android:windowMinWidthMajor">92%</item>
+        <item name="android:windowMinWidthMinor">92%</item>
     </style>
     <color name="launcher_background">#ffffff</color>
 </resources>

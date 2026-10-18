@@ -46,8 +46,8 @@ Los contratos usan cuentas, claves y productos ficticios. No inician sesión ni 
 ```sh
 ANDROID_JSON_TEST_JAR=/ruta/org-json-tests.jar node android/tests/run-contract.cjs
 python3 android/build-apk.py --sdk "$ANDROID_HOME" --keystore /ruta/firma-pruebas.p12 --with-tests
-adb install android/build/MegaControl-1.0.0.apk
-adb install android/build/MegaControl-1.0.0.test.apk
+adb install android/build/MegaControl-1.1.0.apk
+adb install android/build/MegaControl-1.1.0.test.apk
 adb shell am instrument -w io.github.mactzer.megacontrol.tests/io.github.mactzer.megacontrol.NativeSmoke
 ```
 
@@ -60,3 +60,7 @@ Los datos se sincronizan con la misma base. El código nativo se entrega en APK 
 Cada actualización aumenta `VERSION_CODE` y `VERSION` en `build-apk.py`, se prueba y se firma con la misma clave. Se publica en una release `android-vX.Y.Z` del repositorio, con un archivo `MegaControl-X.Y.Z.apk`. El menú de la app permite comprobarla y descargarla; Android pide confirmar la instalación. No se promete una instalación silenciosa.
 
 Para publicar, se conserva únicamente el APK firmado y su `.sha256` en `android/distribution/`. El workflow verifica la firma pública, versión y contenido de esa distribución, además de ejecutar las pruebas nativas. Solo tras pasar las pruebas en `main`, publica esos mismos bytes en Releases con el token temporal de GitHub Actions. El APK de pruebas y las claves privadas nunca se publican. No requiere guardar la clave privada de firma ni una credencial de Supabase en GitHub Actions.
+
+## Diseño y cámara (1.1.0)
+
+Navegación inferior con iconos vectoriales, controles con superficies y estados propios, tarjetas redondeadas, precio destacado y chat con compositor fijo. La vista previa conserva las proporciones y compensa solo la rotación de la pantalla: TextureView ya orienta el sensor. No se añade un segundo giro de 90°. Se verifica con invariantes de geometría y una cámara en vivo del emulador, además de las pruebas de cifrado y documentos. El workflow conserva capturas de acceso, escáner, precio, archivo, consultas, chat y cámara para revisión visual.
