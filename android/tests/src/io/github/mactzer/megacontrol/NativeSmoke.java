@@ -135,10 +135,6 @@ public final class NativeSmoke extends Instrumentation {
           });
       waitText(app, "USD 8.99");
       check(!web(app.root), "Resultado usa TextView nativo");
-      runOnMainSync(
-          () ->
-              ((android.widget.ScrollView) app.page.getParent())
-                  .scrollTo(0, app.scanResult.getTop() - Ui.dp(app, 10)));
       capture("03-precio");
       runOnMainSync(() -> app.show(1));
       waitText(app, "Salida 29317");

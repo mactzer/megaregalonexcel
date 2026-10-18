@@ -652,9 +652,23 @@ public final class MainActivity extends Activity {
   }
 
   void renderResult(NativeApi.Result r) throws Exception {
+    renderResult(r, true);
+  }
+
+  void revealResult() {
+    if (scanResult != null)
+      scanResult.post(
+          () -> {
+            if (screen == 0 && page.getParent() instanceof ScrollView)
+              ((ScrollView) page.getParent()).scrollTo(0, scanResult.getTop());
+          });
+  }
+
+  void renderResult(NativeApi.Result r, boolean reveal) throws Exception {
     lastResult = r;
     scanResult.removeAllViews();
     LinearLayout c = card(scanResult);
+    if (reveal) revealResult();
     boolean found = r.match != null && !r.ambiguous;
     c.addView(
         Ui.badge(
@@ -1668,7 +1682,7 @@ public final class MainActivity extends Activity {
             return null;
           },
           r -> {
-            if (r != null) renderResult(r);
+            if (r != null) renderResult(r, false);
             else status(api.summary());
           });
     else if (screen == 2) show(2);

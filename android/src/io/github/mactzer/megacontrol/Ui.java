@@ -68,6 +68,8 @@ final class Ui {
 
   static void styleButton(Button b, boolean primary, String icon) {
     Context c = b.getContext();
+    b.setStateListAnimator(null);
+    b.setElevation(primary ? dp(c, 1) : 0);
     b.setAllCaps(false);
     b.setTextSize(14);
     bold(b);
@@ -110,6 +112,8 @@ final class Ui {
   static Button iconButton(
       Context c, String icon, String description, int color, int background, Runnable action) {
     Button b = new Button(c);
+    b.setStateListAnimator(null);
+    b.setElevation(0);
     b.setAllCaps(false);
     b.setText("");
     b.setPadding(dp(c, 13), dp(c, 13), dp(c, 13), dp(c, 13));

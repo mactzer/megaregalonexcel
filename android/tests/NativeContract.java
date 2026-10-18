@@ -154,7 +154,10 @@ public final class NativeContract {
                         "encrypted_query",
                         e.getValue()));
               data = rows;
-            } else if (path.endsWith("/mega_audit_authors"))
+            } else if (path.endsWith("/mega_audit_records"))
+              data = fixture.getJSONArray("archives");
+            else if (path.endsWith("/mega_chat_messages")) data = fixture.getJSONArray("chat");
+            else if (path.endsWith("/mega_audit_authors"))
               data = new JSONArray().put(NativeApi.obj("user_id", user, "username", "ficticio"));
             else if (path.contains("/storage/v1/object/authenticated/")) {
               response = Crypto.decode(fixture.getString("pdfCipher"));
@@ -251,6 +254,8 @@ public final class NativeContract {
     check(client.authenticated(), "Login directo y clave cifrada compatible");
     check(client.role.equals("admin"), "Permisos del servidor");
     client.prepare(null);
+    check(client.archive(0, "").length() == 2, "Archivo cifrado compatible con la interfaz nativa");
+    check(client.messages(0).length() == 2, "Mensajes cifrados compatibles con la interfaz nativa");
     NativeApi.Result r = client.lookup("0012345678905", false);
     check(r.match != null, "Producto encontrado");
     eq(r.match.doc.getString("salida"), "29345", "Prioridad por fecha de factura, no ingreso");
