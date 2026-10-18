@@ -124,12 +124,16 @@ public final class NativeSmoke extends Instrumentation {
       byte[] bytes = new byte[180123];
       for (int i = 0; i < bytes.length; i++) bytes[i] = (byte) (i % 256);
       byte[] expected = bytes.clone();
+      IntentFilter saveFilter = new IntentFilter(Intent.ACTION_CREATE_DOCUMENT);
+      saveFilter.addCategory(Intent.CATEGORY_OPENABLE);
       ActivityMonitor save =
           addMonitor(
-              new IntentFilter(Intent.ACTION_CREATE_DOCUMENT),
+              saveFilter,
               new ActivityResult(Activity.RESULT_OK, new Intent().setData(saved)),
               true);
       runOnMainSync(() -> app.save(bytes, "Prueba nativa 00123.bin", "application/octet-stream"));
+      waitForIdleSync();
+      check(save.getHits() == 1, "El selector de archivos debe recibir el destino ficticio");
       for (int i = 0; i < 100; i++) {
         byte[] actual;
         try (InputStream in = getTargetContext().getContentResolver().openInputStream(saved)) {
