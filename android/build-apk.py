@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build with official Android SDK/JDK tools; no Gradle or third-party libraries.
+"""Build with official Android SDK/JDK tools and checksum-pinned dependencies, without Gradle.
 
 SDK platform android-35 and build-tools 35.0.0 are required. Keep the signing
 keystore outside the checkout. Its password is read from the named environment
