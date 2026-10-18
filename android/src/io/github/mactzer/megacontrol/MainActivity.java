@@ -376,7 +376,10 @@ public final class MainActivity extends Activity {
                             + (api.role.equals("admin") ? "Administrador" : "Usuario"))
                     .setItems(
                         new String[] {
-                          "Actualizar catálogo", "Buscar actualización de la app", "Cerrar sesión"
+                          "Actualizar catálogo",
+                          "Buscar actualización de la app",
+                          "Bibliotecas y licencias",
+                          "Cerrar sesión"
                         },
                         (d, n) -> {
                           if (n == 0)
@@ -387,7 +390,16 @@ public final class MainActivity extends Activity {
                                   notify("Catálogo comprobado.");
                                 });
                           else if (n == 1) checkUpdate();
-                          else logout();
+                          else if (n == 2) {
+                            try (java.util.Scanner notice =
+                                new java.util.Scanner(
+                                    getResources().openRawResource(R.raw.third_party_notices),
+                                    "UTF-8")) {
+                              showDialog(
+                                  "Bibliotecas y licencias",
+                                  text(notice.useDelimiter("\\A").next(), 12, MUTED));
+                            }
+                          } else logout();
                         })
                     .show()));
     root.addView(header);
