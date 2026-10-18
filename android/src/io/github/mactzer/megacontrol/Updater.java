@@ -29,9 +29,18 @@ final class Updater {
   private static boolean busy;
 
   static void check(Activity activity, ExecutorService io, Handler main) {
+    check(activity, io, main, false);
+  }
+
+  static void checkDaily(Activity activity, ExecutorService io, Handler main) {
+    long last = activity.getSharedPreferences("native-updates", 0).getLong("checked", 0);
+    if (System.currentTimeMillis() - last >= 24L * 60 * 60 * 1000) check(activity, io, main, true);
+  }
+
+  private static void check(Activity activity, ExecutorService io, Handler main, boolean quiet) {
     if (busy) return;
     busy = true;
-    Toast.makeText(activity, "Buscando actualización…", Toast.LENGTH_SHORT).show();
+    if (!quiet) Toast.makeText(activity, "Buscando actualización…", Toast.LENGTH_SHORT).show();
     io.execute(
         () -> {
           try {
@@ -41,13 +50,14 @@ final class Updater {
                         read(API, 2 * 1024 * 1024), java.nio.charset.StandardCharsets.UTF_8));
             JSONObject asset = null;
             String version = "";
-            for (int i = 0; i < releases.length() && asset == null; i++) {
+            for (int i = 0; i < releases.length(); i++) {
               JSONObject release = releases.getJSONObject(i);
               String tag = release.optString("tag_name");
               if (release.optBoolean("draft")
                   || release.optBoolean("prerelease")
                   || !tag.matches("android-v[0-9]+\\.[0-9]+\\.[0-9]+")) continue;
-              version = tag.substring(9);
+              String candidate = tag.substring(9);
+              if (asset != null && compare(candidate, version) <= 0) continue;
               JSONArray assets = release.getJSONArray("assets");
               for (int j = 0; j < assets.length(); j++)
                 if (assets
@@ -55,6 +65,7 @@ final class Updater {
                     .optString("name")
                     .matches("MegaControl-[0-9.]+\\.apk")) {
                   asset = assets.getJSONObject(j);
+                  version = candidate;
                   break;
                 }
             }
@@ -64,7 +75,13 @@ final class Updater {
                 () -> {
                   busy = false;
                   if (activity.isFinishing()) return;
+                  activity
+                      .getSharedPreferences("native-updates", 0)
+                      .edit()
+                      .putLong("checked", System.currentTimeMillis())
+                      .apply();
                   if (download == null || compare(target, BuildConfig.VERSION_NAME) <= 0) {
+                    if (quiet) return;
                     new AlertDialog.Builder(activity)
                         .setTitle("MegaControl " + BuildConfig.VERSION_NAME)
                         .setMessage("Ya tienes la versión nativa más reciente publicada.")
@@ -87,7 +104,7 @@ final class Updater {
             main.post(
                 () -> {
                   busy = false;
-                  if (!activity.isFinishing())
+                  if (!quiet && !activity.isFinishing())
                     new AlertDialog.Builder(activity)
                         .setTitle("No se pudo comprobar la actualización")
                         .setMessage(

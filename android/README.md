@@ -14,7 +14,7 @@ Aplicación Android **nativa**, con Views de Android, Camera2, ZXing, PdfRendere
 - Consultas compartidas y reintentos con el mismo UUID y contenido cifrado.
 - Lectura del chat, tarjetas de producto, fotos bajo demanda y envío de texto y productos.
 - Una conexión Realtime autenticada, con comprobaciones de respaldo y pausa al salir de la aplicación.
-- Actualizador de APK firmado. Verifica SHA-256, nombre del paquete, versión y certificado antes de solicitar al sistema la instalación.
+- Actualizador de APK firmado. Comprueba nuevas versiones una vez al día al entrar, con opción manual en el menú. Verifica SHA-256, nombre del paquete, versión y certificado antes de solicitar al sistema la instalación.
 
 Esta primera implementación nativa no convierte ni registra PDF nuevos, no genera versiones nuevas del Excel y no incluye la administración completa de incidencias, usuarios, respaldos o fotos nuevas del chat. Esas funciones continúan disponibles en la web; la app no las presenta como implementadas ni las abre en un navegador oculto. No se ha cambiado el funcionamiento de la página existente.
 

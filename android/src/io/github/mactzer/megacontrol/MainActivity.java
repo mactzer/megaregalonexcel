@@ -1259,19 +1259,32 @@ public final class MainActivity extends Activity {
               Map<com.google.zxing.DecodeHintType, Object> hints =
                   new java.util.EnumMap<>(com.google.zxing.DecodeHintType.class);
               hints.put(com.google.zxing.DecodeHintType.TRY_HARDER, true);
-              try {
-                return reader.decode(new BinaryBitmap(new HybridBinarizer(image)), hints).getText();
-              } catch (Exception e) {
-                try {
-                  return reader
-                      .decode(new BinaryBitmap(new HybridBinarizer(image.invert())), hints)
-                      .getText();
-                } catch (Exception none) {
-                  throw new Exception(
-                      "No se distinguieron las barras. Prueba una foto más cercana o escribe el"
-                          + " código.");
+              com.google.zxing.LuminanceSource source = image;
+              for (int turn = 0; turn < 2; turn++) {
+                for (int inverted = 0; inverted < 2; inverted++) {
+                  try {
+                    return reader
+                        .decode(
+                            new BinaryBitmap(
+                                new HybridBinarizer(inverted == 0 ? source : source.invert())),
+                            hints)
+                        .getText();
+                  } catch (com.google.zxing.ReaderException unreadable) {
+                    reader.reset();
+                  }
+                }
+                if (turn == 0) {
+                  byte[] original = image.getMatrix(), rotated = new byte[w * h];
+                  for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++) rotated[x * h + h - y - 1] = original[y * w + x];
+                  source =
+                      new com.google.zxing.PlanarYUVLuminanceSource(
+                          rotated, h, w, 0, 0, h, w, false);
                 }
               }
+              throw new Exception(
+                  "No se distinguieron las barras. Prueba una foto más cercana o escribe el"
+                      + " código.");
             } finally {
               bitmap.recycle();
             }
@@ -1364,6 +1377,7 @@ public final class MainActivity extends Activity {
 
   void startLive() {
     if (destroyed || paused || !api.authenticated() || realtime != null) return;
+    Updater.checkDaily(this, io, main);
     int e = api.epoch;
     realtime =
         new Realtime(

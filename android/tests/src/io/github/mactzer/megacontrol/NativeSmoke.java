@@ -138,6 +138,10 @@ public final class NativeSmoke extends Instrumentation {
           int n;
           while ((n = in.read(block)) != -1) out.write(block, 0, n);
           actual = out.toByteArray();
+        } catch (java.io.FileNotFoundException pending) {
+          if (i == 99) throw pending;
+          SystemClock.sleep(100);
+          continue;
         }
         if (Arrays.equals(actual, expected)) break;
         SystemClock.sleep(100);
@@ -150,6 +154,12 @@ public final class NativeSmoke extends Instrumentation {
       for (int y = 0; y < 350; y++)
         for (int x = 0; x < 1100; x++)
           bitmap.setPixel(x, y, bars.get(x, y) ? 0xff000000 : 0xffffffff);
+      android.graphics.Matrix rotation = new android.graphics.Matrix();
+      rotation.postRotate(90);
+      Bitmap vertical =
+          Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), rotation, true);
+      bitmap.recycle();
+      bitmap = vertical;
       ContentValues imageValues = new ContentValues();
       imageValues.put(MediaStore.Images.Media.DISPLAY_NAME, "Etiqueta-ficticia.png");
       imageValues.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
