@@ -58,3 +58,5 @@ Los contratos comprueban la interoperabilidad web ↔ Java, datos alterados, fec
 Los datos se sincronizan con la misma base. El código nativo se entrega en APK nuevos: modificar un HTML de la web no convierte automáticamente ese cambio en una pantalla Android. Mantener ambas interfaces exige actualizar su implementación correspondiente.
 
 Cada actualización aumenta `VERSION_CODE` y `VERSION` en `build-apk.py`, se prueba y se firma con la misma clave. Se publica en una release `android-vX.Y.Z` del repositorio, con un archivo `MegaControl-X.Y.Z.apk`. El menú de la app permite comprobarla y descargarla; Android pide confirmar la instalación. No se promete una instalación silenciosa.
+
+Para publicar, se conserva únicamente el APK firmado y su `.sha256` en `android/distribution/`. El workflow verifica la firma pública, versión y contenido de esa distribución, además de ejecutar las pruebas nativas. Solo tras pasar las pruebas en `main`, publica esos mismos bytes en Releases con el token temporal de GitHub Actions. El APK de pruebas y las claves privadas nunca se publican. No requiere guardar la clave privada de firma ni una credencial de Supabase en GitHub Actions.
