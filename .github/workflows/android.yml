@@ -21,6 +21,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Instalar herramientas oficiales de Android
+        uses: android-actions/setup-android@v3
       - name: Verificar dependencia de contratos con datos ficticios
         run: |
           mkdir -p android/build
