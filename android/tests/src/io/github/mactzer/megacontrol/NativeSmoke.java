@@ -126,6 +126,7 @@ public final class NativeSmoke extends Instrumentation {
       byte[] expected = bytes.clone();
       IntentFilter saveFilter = new IntentFilter(Intent.ACTION_CREATE_DOCUMENT);
       saveFilter.addCategory(Intent.CATEGORY_OPENABLE);
+      saveFilter.addDataType("*/*");
       ActivityMonitor save =
           addMonitor(
               saveFilter,
